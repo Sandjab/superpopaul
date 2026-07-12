@@ -1,3 +1,4 @@
+pub mod config;
 pub mod pid;
 
 pub fn run() {
