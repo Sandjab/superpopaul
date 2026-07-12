@@ -74,7 +74,7 @@
         <p><label for="proxy-url">Proxy (optionnel)</label> <input id="proxy-url" size="30" placeholder="http://proxy:3128">
            <span class="muted">identifiants demandés au lancement, jamais enregistrés</span></p>
         <p><label for="api-conc" title="Nombre de requêtes simultanées vers l'API. « Calibrer » trouve la valeur optimale.">Concurrence</label> <input id="api-conc" type="number" value="8" min="1" max="256" title="Nombre de requêtes simultanées vers l'API. « Calibrer » trouve la valeur optimale.">
-           <label for="api-batch" title="Nombre d'adressages envoyés par requête API (50 max).">Taille de paquet</label> <input id="api-batch" type="number" value="50" min="1" max="50" title="Nombre d'adressages envoyés par requête API (50 max).">
+           <label for="api-batch" title="Nombre d'adressages envoyés par requête API (500 max).">Taille de paquet</label> <input id="api-batch" type="number" value="50" min="1" max="500" title="Nombre d'adressages envoyés par requête API (500 max).">
            <label for="api-refresh" title="Âge au-delà duquel un résultat en base est considéré périmé (utilisé par le mode Refresh).">Ancienneté refresh (jours)</label> <input id="api-refresh" type="number" value="30" min="1" title="Âge au-delà duquel un résultat en base est considéré périmé (utilisé par le mode Refresh).">
            <button id="btn-calibrate" title="Mesure le débit à plusieurs niveaux de concurrence et applique le meilleur.">Calibrer</button> <span id="calibrate-result"></span></p>
       </fieldset>

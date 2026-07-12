@@ -120,8 +120,8 @@ pub enum PeppolField {
 
 impl Config {
     pub fn validate(&self) -> Result<(), String> {
-        if !(1..=50).contains(&self.api.batch_size) {
-            return Err("batch_size doit être entre 1 et 50".into());
+        if !(1..=500).contains(&self.api.batch_size) {
+            return Err("batch_size doit être entre 1 et 500".into());
         }
         if self.api.concurrency < 1 {
             return Err("concurrency doit être ≥ 1".into());
@@ -234,11 +234,14 @@ mod tests {
     #[test]
     fn validate_rejette_batch_size_hors_bornes() {
         let mut cfg = config_exemple();
-        cfg.api.batch_size = 51;
+        cfg.api.batch_size = 501;
         assert!(cfg.validate().is_err());
         cfg.api.batch_size = 0;
         assert!(cfg.validate().is_err());
         cfg.api.batch_size = 1;
+        assert!(cfg.validate().is_ok());
+        // Le plafond suit celui du serveur (/resolve/batch : 500 max).
+        cfg.api.batch_size = 500;
         assert!(cfg.validate().is_ok());
     }
 
