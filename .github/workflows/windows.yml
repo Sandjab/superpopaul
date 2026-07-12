@@ -3,6 +3,8 @@ on:
   workflow_dispatch:
   push:
     tags: ["superpopaul-v*"]
+permissions:
+  contents: read
 jobs:
   build:
     runs-on: windows-latest
@@ -14,16 +16,19 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with: { workspaces: "superpopaul/src-tauri" }
       - name: Install tauri-cli
-        run: cargo install tauri-cli --locked
+        uses: taiki-e/install-action@v2
+        with: { tool: tauri-cli }
       - name: Build
         run: cargo tauri build
       - name: Check size (< 20 Mo)
         shell: bash
         run: |
-          EXE="src-tauri/target/release/superpopaul.exe"
-          SIZE=$(stat -c%s "$EXE")
-          echo "Taille : $((SIZE / 1024 / 1024)) Mo"
-          test "$SIZE" -lt 20971520
+          for EXE in src-tauri/target/release/superpopaul.exe \
+                     src-tauri/target/release/bundle/nsis/*.exe; do
+            SIZE=$(stat -c%s "$EXE")
+            echo "Taille : $((SIZE / 1024 / 1024)) Mo — $EXE"
+            test "$SIZE" -lt 20971520
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: SuperPopaul-windows

@@ -2,11 +2,18 @@
 
 ## macOS
 1. Dézippe `SuperPopaul-macos.zip`.
-2. **Clic droit** sur `Super Popaul.app` → **Ouvrir** → bouton **Ouvrir**.
-   (Un double-clic direct est bloqué par Gatekeeper : c'est normal, l'app
-   n'est pas signée. Le clic droit > Ouvrir n'est nécessaire qu'une fois.)
-   Si macOS refuse quand même : Réglages Système → Confidentialité et
-   sécurité → « Ouvrir quand même ».
+2. Double-clique sur `Super Popaul.app`. macOS refuse de l'ouvrir :
+   c'est normal, l'app n'est pas signée. Ferme le message.
+3. Ouvre **Réglages Système** → **Confidentialité et sécurité**.
+4. Fais défiler jusqu'en bas : un message indique que « Super Popaul »
+   a été bloqué.
+5. Clique sur **Ouvrir quand même**, puis confirme.
+   (Cette manipulation n'est nécessaire qu'une seule fois.)
+
+Sur macOS 14 (Sonoma) et antérieurs, plus rapide : **clic droit** sur
+`Super Popaul.app` → **Ouvrir** → bouton **Ouvrir**. (Depuis macOS 15
+Sequoia, ce raccourci ne contourne plus le blocage : passe par les
+Réglages comme ci-dessus.)
 
 ## Windows
 1. Lance `Super Popaul.exe`.

@@ -12,5 +12,6 @@ png = (b"\x89PNG\r\n\x1a\n"
        + chunk(b"IHDR", struct.pack(">IIBBBBB", W, H, 8, 6, 0, 0, 0))
        + chunk(b"IDAT", zlib.compress(row * H))
        + chunk(b"IEND", b""))
-open("app-icon.png", "wb").write(png)
+with open("app-icon.png", "wb") as f:
+    f.write(png)
 print("app-icon.png écrit")
