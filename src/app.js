@@ -359,7 +359,14 @@ $("btn-load-cfg").addEventListener("click", async () => {
     renderFilePanel();
     hideBanner();
     // Directement à l'étape Run (spec) — analyze_input y détecte la reprise.
-    showStep(STEPS.indexOf("run"));
+    // showStep() a un early-return si on est déjà sur l'étape courante (cas du
+    // clic sur l'onglet actif) : quand on charge un YAML depuis l'étape Run,
+    // ce serait un no-op et enterRunStep() (donc analyze_input et la bannière
+    // de reprise) ne serait jamais rappelé. On force donc l'entrée dans
+    // l'étape Run dans ce cas précis, plutôt que de passer par showStep().
+    const runIdx = STEPS.indexOf("run");
+    if (current === runIdx) enterRunStep();
+    else showStep(runIdx);
   } catch {
     // Config chargée mais CSV introuvable/illisible : la config reste en
     // place (l'utilisateur ne re-choisit que le fichier), l'état d'entrée

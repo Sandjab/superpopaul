@@ -9,6 +9,12 @@ async function enterRunStep() {
   // analyze_input : le scan CSV + load_map disputerait le Mutex<Store> aux
   // workers, pour re-suggérer un mode qu'on ne peut pas changer.
   if (running) return;
+  // Pas de run en cours : on repart d'un écran propre. Sans ça, le cockpit
+  // (ring/tuiles/latences) et run-result garderaient les valeurs du run
+  // précédent après un rechargement de config ou un changement de fichier,
+  // ce qui est trompeur avant que startRun() ne les réaffiche à jour.
+  $("cockpit").classList.add("hidden");
+  $("run-result").classList.add("hidden");
   try {
     await invoke("set_config", { cfg: state.config });
     const s = await invoke("analyze_input");
