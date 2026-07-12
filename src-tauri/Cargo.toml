@@ -33,4 +33,3 @@ tempfile = "3"
 strip = true
 lto = true
 codegen-units = 1
-panic = "abort"
