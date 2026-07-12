@@ -5,6 +5,10 @@ let running = false;
 
 async function enterRunStep() {
   $("run-title").textContent = state.inputPath ?? "";
+  // Pendant un run, revenir sur cet onglet ne relance ni set_config ni
+  // analyze_input : le scan CSV + load_map disputerait le Mutex<Store> aux
+  // workers, pour re-suggérer un mode qu'on ne peut pas changer.
+  if (running) return;
   try {
     await invoke("set_config", { cfg: state.config });
     const s = await invoke("analyze_input");
@@ -23,7 +27,11 @@ function suggestMode(s) {
     $("run-mode").value = "reprise";
     banner("warn",
       `Run incomplet détecté : ${fmt(known)}/${fmt(s.unique)} adressages déjà en base. `,
-      h("button", { onclick: () => { hideBanner(); startRun(); } }, "Reprendre maintenant"));
+      h("button", { onclick: (e) => {
+        e.currentTarget.disabled = true; // pas de double départ pendant les awaits
+        hideBanner();
+        startRun();
+      } }, "Reprendre maintenant"));
   } else if (s.missing === 0 && s.unique > 0) {
     $("run-mode").value = "refresh";
     banner("warn", `Tous les adressages sont déjà en base (${fmt(s.stale)} périmés, ` +
@@ -41,6 +49,11 @@ function modeFromSelect() {
 }
 
 async function startRun() {
+  // Garde de ré-entrance pendant les awaits (double clic, bouton de la
+  // bannière « Reprendre maintenant ») — convention btn-browse d'app.js.
+  const btn = $("btn-start");
+  if (btn.disabled) return;
+  btn.disabled = true;
   try {
     await invoke("set_config", { cfg: state.config });
     await ensureProxyCreds();
@@ -55,16 +68,23 @@ async function startRun() {
     if (total === 0) banner("warn", "Rien à résoudre dans ce mode — fichier généré directement.");
   } catch (e) {
     banner("error", `${e}`);
+  } finally {
+    btn.disabled = false;
   }
 }
 $("btn-start").addEventListener("click", startRun);
 
 $("btn-pause").addEventListener("click", async () => {
   const pausing = $("btn-pause").textContent.includes("Pause");
-  await invoke("pause_run", { paused: pausing });
-  $("btn-pause").textContent = pausing ? "▶ Reprendre" : "⏸ Pause";
+  try {
+    await invoke("pause_run", { paused: pausing });
+    $("btn-pause").textContent = pausing ? "▶ Reprendre" : "⏸ Pause";
+  } catch (e) {
+    banner("error", `${e}`);
+  }
 });
-$("btn-stop").addEventListener("click", () => invoke("stop_run"));
+$("btn-stop").addEventListener("click", () =>
+  invoke("stop_run").catch((e) => banner("error", `${e}`)));
 
 // --- Télémétrie -----------------------------------------------------------------
 function httpColor(code) {
@@ -136,7 +156,9 @@ listen("run-suspended", (e) => {
         await ensureProxyCreds(true);
         hideBanner();
       } catch (err) {
-        if (!err.proxyCancelled) throw err;
+        // Annulation : la bannière reste affichée pour un nouvel essai ;
+        // toute autre erreur est montrée plutôt que rejetée en silence.
+        if (!err.proxyCancelled) banner("error", `${err}`);
       }
     } }, "Ressaisir les identifiants"));
   } else { // server_down
