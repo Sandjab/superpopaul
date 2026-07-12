@@ -1,3 +1,4 @@
+pub mod api;
 pub mod config;
 pub mod csv_io;
 pub mod modes;
