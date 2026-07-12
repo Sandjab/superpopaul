@@ -216,7 +216,7 @@ $("btn-out-browse").addEventListener("click", async () => {
 // --- Splash --------------------------------------------------------------------------
 window.addEventListener("DOMContentLoaded", () => {
   fillOutputForm();
-  setTimeout(() => $("splash").classList.add("fade"), 1500);
+  setTimeout(() => $("splash").classList.add("fade"), 2000);
 });
 
 // --- Étape 3 : test API et calibrage -----------------------------------------
