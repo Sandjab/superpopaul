@@ -43,7 +43,9 @@ impl Aimd {
 }
 
 /// Circuit breaker : ouvre après `threshold` échecs consécutifs (5xx/réseau),
-/// avec un backoff 30 s doublé à chaque ouverture (plafond 300 s).
+/// avec un backoff 30 s doublé à chaque ouverture. Le décalage est plafonné
+/// à 3 (30, 60, 120, 240 s), donc le plafond effectif est 240 s : le
+/// `.min(300)` du calcul n'est qu'une ceinture qui ne joue jamais.
 pub struct Breaker {
     threshold: u32,
     consecutive: u32,
@@ -196,6 +198,9 @@ impl RunHandle {
     /// Nouvelle clé API : lève aussi la suspension système — ressaisir la
     /// clé relance le run (les workers adoptent la clé via le watch avant
     /// de reprendre la file).
+    /// NB : la prod (commands::update_api_key) passe par update_client pour
+    /// porter l'état complet ; update_key reste l'API légère (testée par
+    /// cle_invalide_suspend_puis_nouvelle_cle_reprend).
     pub fn update_key(&self, key: &str) {
         let _ = self
             .update_tx
@@ -698,24 +703,42 @@ mod tests_engine {
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
+    /// Corps d'écho commun à EchoResolver et sa variante lente : chaque
+    /// participant reçu existe dans Peppol.
+    fn echo_body(req: &Request) -> serde_json::Value {
+        let body: serde_json::Value = serde_json::from_slice(&req.body).unwrap();
+        let results: Vec<serde_json::Value> = body["participants"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| {
+                serde_json::json!({
+                    "participant_id": p, "exists": true,
+                    "pa": {"code": "PA1", "name": "PA UN", "country": "FR"},
+                    "supports_extended_ctc_fr": true
+                })
+            })
+            .collect();
+        serde_json::json!({"results": results})
+    }
+
     /// Répond 200 en faisant écho : chaque participant reçu existe dans Peppol.
     struct EchoResolver;
     impl Respond for EchoResolver {
         fn respond(&self, req: &Request) -> ResponseTemplate {
-            let body: serde_json::Value = serde_json::from_slice(&req.body).unwrap();
-            let results: Vec<serde_json::Value> = body["participants"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|p| {
-                    serde_json::json!({
-                        "participant_id": p, "exists": true,
-                        "pa": {"code": "PA1", "name": "PA UN", "country": "FR"},
-                        "supports_extended_ctc_fr": true
-                    })
-                })
-                .collect();
-            ResponseTemplate::new(200).set_body_json(serde_json::json!({"results": results}))
+            ResponseTemplate::new(200).set_body_json(echo_body(req))
+        }
+    }
+
+    /// Comme EchoResolver, avec un délai artificiel avant la réponse — pour
+    /// observer un run en cours (ex. pause utilisateur) sans qu'il se
+    /// termine avant l'assertion.
+    struct SlowEchoResolver(Duration);
+    impl Respond for SlowEchoResolver {
+        fn respond(&self, req: &Request) -> ResponseTemplate {
+            ResponseTemplate::new(200)
+                .set_body_json(echo_body(req))
+                .set_delay(self.0)
         }
     }
 
@@ -1045,6 +1068,58 @@ mod tests_engine {
                 other => panic!("Finished attendu, obtenu {other:?}"),
             }
         }
+    }
+
+    /// Pause utilisateur (set_paused) : les paquets déjà en vol se
+    /// terminent, mais aucun nouveau paquet n'est pris tant que la pause
+    /// est active — la progression doit se stabiliser. La reprise
+    /// (set_paused(false)) doit amener le run à son terme.
+    #[tokio::test]
+    async fn pause_utilisateur_suspend_puis_reprend() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/resolve/batch"))
+            .respond_with(SlowEchoResolver(Duration::from_millis(50)))
+            .mount(&server)
+            .await;
+
+        let store = Arc::new(Mutex::new(Store::open_in_memory().unwrap()));
+        let client = ApiClient::new(&server.uri(), "K", None, None).unwrap();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        let handle = Engine::start(
+            client,
+            EngineParams {
+                batch_size: 1,
+                concurrency: 2,
+            },
+            pids(20),
+            store,
+            tx,
+        );
+
+        // Laisse le run démarrer : chaque worker part sur un paquet.
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        handle.set_paused(true);
+
+        // Le paquet déjà en vol par worker (au plus 2) se termine malgré la
+        // pause ; ensuite, plus aucun nouveau paquet n'est pris. Deux
+        // snapshots espacés doivent donc afficher la même progression.
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        let snap1 = handle.telemetry.snapshot();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let snap2 = handle.telemetry.snapshot();
+        assert_eq!(
+            snap1.done, snap2.done,
+            "aucune progression attendue pendant la pause utilisateur"
+        );
+        assert!(
+            snap2.done < 20,
+            "le run ne doit pas déjà être fini avant la reprise (pause inefficace ?)"
+        );
+
+        handle.set_paused(false);
+        let (done, _) = wait_finished(&mut rx).await;
+        assert_eq!(done, 20);
     }
 }
 

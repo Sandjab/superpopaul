@@ -138,7 +138,8 @@ listen("run-suspended", (e) => {
   const { reason, message, retry_in_s } = e.payload;
   if (reason === "auth_api") {
     // update_api_key lève elle-même la suspension système côté moteur (voir
-    // resolver.rs::RunHandle::update_key) — pas de pause_run ici.
+    // resolver.rs::RunHandle::update_client, appelé via
+    // commands::update_api_key) — pas de pause_run ici.
     const key = h("input", { type: "password", placeholder: "nouvelle clé API" });
     banner("error", `⛔ ${message} Le traitement est en pause. `, key,
       h("button", { onclick: async () => {
