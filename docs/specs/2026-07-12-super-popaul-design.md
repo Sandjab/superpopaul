@@ -112,8 +112,9 @@ Définis sur les **adressages uniques** du fichier d'entrée :
 
 - **full** : tout résoudre (re-résolution même si présent en base) ;
 - **reprise** : résoudre les absents de la base + option « re-tenter les échecs » ;
-- **refresh** : résoudre les absents + ceux dont `resolved_at` est plus ancien que
-  `refresh_days` jours.
+- **refresh** : résoudre les absents + les échecs (toujours re-tentés, quel que soit
+  leur âge : un échec n'est pas une donnée fraîche) + ceux dont `resolved_at` est
+  plus ancien que `refresh_days` jours.
 
 ## Moteur, erreurs, pause/reprise
 
