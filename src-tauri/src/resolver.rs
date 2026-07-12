@@ -158,6 +158,16 @@ pub struct EngineParams {
     pub concurrency: u32,
 }
 
+/// Mise à jour poussée aux workers via un `watch`, pour reprendre un run
+/// suspendu sans le relancer. `Key` couvre le 401 (seule la clé API
+/// change) ; `Client` couvre le 407 (les creds proxy vivent dans le
+/// builder reqwest, il faut donc un client entier neuf).
+#[derive(Clone)]
+pub enum ClientUpdate {
+    Key(String),
+    Client(ApiClient),
+}
+
 pub struct RunHandle {
     /// Pause demandée par l'utilisateur (bouton Pause) — indépendante des
     /// suspensions système, pour qu'une reprise automatique (timer du
@@ -167,7 +177,7 @@ pub struct RunHandle {
     sys_paused: Arc<AtomicBool>,
     suspended: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
-    key_tx: watch::Sender<String>,
+    update_tx: watch::Sender<Option<ClientUpdate>>,
     pub telemetry: Arc<Telemetry>,
 }
 
@@ -182,7 +192,18 @@ impl RunHandle {
     /// clé relance le run (les workers adoptent la clé via le watch avant
     /// de reprendre la file).
     pub fn update_key(&self, key: &str) {
-        let _ = self.key_tx.send(key.to_string());
+        let _ = self
+            .update_tx
+            .send(Some(ClientUpdate::Key(key.to_string())));
+        self.sys_paused.store(false, Ordering::Relaxed);
+        self.suspended.store(false, Ordering::Relaxed);
+    }
+    /// Nouveau client API complet (reconstruit avec les creds proxy après
+    /// un 407) : même mécanique que `update_key`, mais remplace tout le
+    /// client — les creds proxy vivent dans le builder reqwest, pas dans un
+    /// champ modifiable après coup.
+    pub fn update_client(&self, client: ApiClient) {
+        let _ = self.update_tx.send(Some(ClientUpdate::Client(client)));
         self.sys_paused.store(false, Ordering::Relaxed);
         self.suspended.store(false, Ordering::Relaxed);
     }
@@ -266,8 +287,10 @@ impl Engine {
         let aimd = Arc::new(Aimd::new(params.concurrency));
         let breaker = Arc::new(Mutex::new(Breaker::new(5)));
         let suspended = Arc::new(AtomicBool::new(false));
-        let (key_tx, key_rx) = watch::channel(String::new());
-        // La clé initiale vit dans le client ; le canal ne sert qu'aux MAJ.
+        let (update_tx, update_rx) = watch::channel(None::<ClientUpdate>);
+        // La clé/le client initial vit dans `client` ; le canal ne sert
+        // qu'aux mises à jour en cours de run (401 → nouvelle clé, 407 →
+        // nouveau client).
 
         let queue: Arc<Mutex<VecDeque<Vec<String>>>> = Arc::new(Mutex::new(
             todo.chunks(params.batch_size.max(1))
@@ -290,7 +313,7 @@ impl Engine {
                 breaker,
                 suspended,
                 tx,
-                mut key_rx,
+                mut update_rx,
             ) = (
                 client.clone(),
                 queue.clone(),
@@ -303,7 +326,7 @@ impl Engine {
                 breaker.clone(),
                 suspended.clone(),
                 tx.clone(),
-                key_rx.clone(),
+                update_rx.clone(),
             );
             let in_flight = in_flight.clone();
             workers.push(tokio::spawn(async move {
@@ -344,12 +367,19 @@ impl Engine {
                         tokio::time::sleep(Duration::from_millis(150)).await;
                         continue;
                     }
-                    // Nouvelle clé disponible ? (reprise après 401)
-                    if key_rx.has_changed().unwrap_or(false) {
-                        let k = key_rx.borrow_and_update().clone();
-                        if !k.is_empty() {
-                            client = client.with_key(&k);
-                            suspended.store(false, Ordering::Relaxed);
+                    // Mise à jour disponible ? (reprise après 401 ou 407)
+                    if update_rx.has_changed().unwrap_or(false) {
+                        let update = update_rx.borrow_and_update().clone();
+                        match update {
+                            Some(ClientUpdate::Key(k)) => {
+                                client = client.with_key(&k);
+                                suspended.store(false, Ordering::Relaxed);
+                            }
+                            Some(ClientUpdate::Client(c)) => {
+                                client = c;
+                                suspended.store(false, Ordering::Relaxed);
+                            }
+                            None => {}
                         }
                     }
                     let chunk = { queue.lock().unwrap().pop_front() };
@@ -422,19 +452,26 @@ impl Engine {
                                     .await;
                                 }
                                 ApiError::Auth(_) | ApiError::ProxyAuth => {
-                                    // Si une nouvelle clé est arrivée pendant
-                                    // que cette requête (partie avec l'ancienne
-                                    // clé) était en vol, ce 401 est périmé :
-                                    // on adopte la clé et on retente, sans
+                                    // Si une mise à jour (clé ou client) est
+                                    // arrivée pendant que cette requête
+                                    // (partie avec l'ancien client) était en
+                                    // vol, ce 401/407 est périmé : on adopte
+                                    // la mise à jour et on retente, sans
                                     // re-suspendre un run déjà repris.
-                                    let stale = key_rx.has_changed().unwrap_or(false) && {
-                                        let k = key_rx.borrow_and_update().clone();
-                                        if k.is_empty() {
-                                            false
-                                        } else {
-                                            client = client.with_key(&k);
-                                            suspended.store(false, Ordering::Relaxed);
-                                            true
+                                    let stale = update_rx.has_changed().unwrap_or(false) && {
+                                        let update = update_rx.borrow_and_update().clone();
+                                        match update {
+                                            Some(ClientUpdate::Key(k)) => {
+                                                client = client.with_key(&k);
+                                                suspended.store(false, Ordering::Relaxed);
+                                                true
+                                            }
+                                            Some(ClientUpdate::Client(c)) => {
+                                                client = c;
+                                                suspended.store(false, Ordering::Relaxed);
+                                                true
+                                            }
+                                            None => false,
                                         }
                                     };
                                     if !stale {
@@ -549,7 +586,7 @@ impl Engine {
             sys_paused,
             suspended,
             stop,
-            key_tx,
+            update_tx,
             telemetry,
         }
     }
@@ -754,6 +791,42 @@ mod tests_engine {
             }
         }
         handle.update_key("BONNE");
+        handle.set_paused(false);
+        let (done, _) = wait_finished(&mut rx).await;
+        assert_eq!(done, 20);
+    }
+
+    /// Le 407 (proxy) exige un client entier neuf (les creds proxy vivent
+    /// dans le builder reqwest) — on simule le proxy via le header X-API-Key
+    /// pour isoler le mécanisme de swap de client, sans dépendre de reqwest.
+    #[tokio::test]
+    async fn proxy_407_suspend_puis_nouveau_client_reprend() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/resolve/batch"))
+            .and(header("X-API-Key", "AVEC_PROXY_OK"))
+            .respond_with(EchoResolver)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/resolve/batch"))
+            .respond_with(ResponseTemplate::new(407))
+            .mount(&server)
+            .await;
+
+        let (handle, mut rx, _store) = run_engine(&server, "SANS_CREDS", pids(20)).await;
+        loop {
+            match tokio::time::timeout(std::time::Duration::from_secs(10), rx.recv()).await {
+                Ok(Some(EngineEvent::Suspended { reason, .. })) => {
+                    assert_eq!(reason, "auth_proxy");
+                    break;
+                }
+                Ok(Some(_)) => continue,
+                other => panic!("Suspended attendu, obtenu {other:?}"),
+            }
+        }
+        let client_ok = ApiClient::new(&server.uri(), "AVEC_PROXY_OK", None, None).unwrap();
+        handle.update_client(client_ok);
         handle.set_paused(false);
         let (done, _) = wait_finished(&mut rx).await;
         assert_eq!(done, 20);

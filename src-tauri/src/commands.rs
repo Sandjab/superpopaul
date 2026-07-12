@@ -116,8 +116,20 @@ pub fn save_config(state: State<'_, AppState>, path: String, cfg: Config) -> Res
 }
 
 #[tauri::command]
-pub fn set_proxy_creds(state: State<'_, AppState>, username: String, password: String) {
+pub fn set_proxy_creds(
+    state: State<'_, AppState>,
+    username: String,
+    password: String,
+) -> Result<(), String> {
     *state.proxy_creds.lock().unwrap() = Some(ProxyCreds { username, password });
+    // Un run actif suspendu pour auth_proxy (407) ne peut pas juste changer
+    // de clé : les creds proxy vivent dans le builder reqwest, il faut donc
+    // un client entier neuf pour reprendre.
+    if let Some(h) = state.run.lock().unwrap().as_ref() {
+        let client = state.client()?;
+        h.update_client(client);
+    }
+    Ok(())
 }
 
 #[tauri::command]
