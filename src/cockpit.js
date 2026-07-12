@@ -144,8 +144,12 @@ listen("run-suspended", (e) => {
       h("button", { onclick: async () => {
         state.config.api.key = key.value;
         $("api-key").value = key.value;
-        await invoke("update_api_key", { key: key.value });
-        hideBanner();
+        try {
+          await invoke("update_api_key", { key: key.value });
+          hideBanner();
+        } catch (err) {
+          banner("error", `${err}`);
+        }
       } }, "Reprendre avec cette clé"));
   } else if (reason === "auth_proxy") {
     // set_proxy_creds injecte un nouveau client dans le moteur, qui lève lui-même
@@ -167,7 +171,8 @@ listen("run-suspended", (e) => {
     // timer de reprise automatique du moteur).
     banner("warn",
       `🛑 Serveur indisponible (${message}). Nouvel essai automatique dans ${retry_in_s} s. `,
-      h("button", { onclick: () => invoke("resume_run").then(hideBanner) },
+      h("button", { onclick: () => invoke("resume_run").then(hideBanner)
+        .catch((e) => banner("error", `${e}`)) },
         "Réessayer maintenant"));
   }
 });
