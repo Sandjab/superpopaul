@@ -209,9 +209,12 @@ window.addEventListener("DOMContentLoaded", () => {
 });
 
 // --- Étape 3 : test API et calibrage -----------------------------------------
-$("btn-test-api").addEventListener("click", async (e) => {
-  const btn = e.currentTarget;
-  btn.disabled = true; // garde de ré-entrance pendant l'await
+// Les deux flux partagent la config et la modale proxy : chaque flux désactive
+// les DEUX boutons (exclusion mutuelle), pas seulement celui cliqué.
+const apiButtons = () => [$("btn-test-api"), $("btn-calibrate")];
+
+$("btn-test-api").addEventListener("click", async () => {
+  apiButtons().forEach((b) => { b.disabled = true; });
   syncOutputForm();
   const out = $("api-test-result");
   out.textContent = "test en cours…";
@@ -220,16 +223,20 @@ $("btn-test-api").addEventListener("click", async (e) => {
     await ensureProxyCreds();
     const stats = await invoke("test_api");
     out.textContent = `✅ clé valide (${stats.latency_ms} ms)`;
-  } catch (e) {
-    out.textContent = `❌ ${e}`;
+  } catch (err) {
+    if (err && err.proxyCancelled) out.textContent = "Test annulé.";
+    else {
+      // Échec d'auth proxy probable : re-demander les identifiants au prochain clic.
+      if (/407|proxy/i.test(String(err))) proxyCredsGiven = false;
+      out.textContent = `❌ ${err}`;
+    }
   } finally {
-    btn.disabled = false;
+    apiButtons().forEach((b) => { b.disabled = false; });
   }
 });
 
-$("btn-calibrate").addEventListener("click", async (e) => {
-  const btn = e.currentTarget;
-  btn.disabled = true; // garde de ré-entrance pendant l'await
+$("btn-calibrate").addEventListener("click", async () => {
+  apiButtons().forEach((b) => { b.disabled = true; });
   syncOutputForm();
   const out = $("calibrate-result");
   out.textContent = "calibrage en cours…";
@@ -241,33 +248,70 @@ $("btn-calibrate").addEventListener("click", async (e) => {
     state.config.api.concurrency = r.best_concurrency;
     out.textContent = `→ ${r.best_concurrency} sessions, ~${Math.round(r.addr_per_s)} adr/s` +
       (r.rate_limited ? " (clé rate-limitée)" : "");
-  } catch (e) {
-    out.textContent = `❌ ${e}`;
+  } catch (err) {
+    if (err && err.proxyCancelled) out.textContent = "Calibrage annulé.";
+    else {
+      // Échec d'auth proxy probable : re-demander les identifiants au prochain clic.
+      if (/407|proxy/i.test(String(err))) proxyCredsGiven = false;
+      out.textContent = `❌ ${err}`;
+    }
   } finally {
-    btn.disabled = false;
+    apiButtons().forEach((b) => { b.disabled = false; });
   }
 });
 
 /** Si un proxy est configuré et les identifiants pas encore saisis dans cette
- *  session, les demander (mémoire seulement — jamais persistés). */
+ *  session — ou saisis pour une autre URL de proxy —, les demander (mémoire
+ *  seulement — jamais persistés). Single-flight : si la modale est déjà
+ *  ouverte, retourne la Promise en cours. L'annulation (bouton, Échap, clic
+ *  sur le fond) rejette avec une erreur marquée `proxyCancelled`. */
 let proxyCredsGiven = false;
-async function ensureProxyCreds(force = false) {
-  if (!state.config.api.proxy || (proxyCredsGiven && !force)) return;
-  return new Promise((resolve) => {
+let proxyCredsUrl = null; // URL proxy pour laquelle les identifiants ont été saisis
+let pendingCreds = null; // Promise de la modale en cours (single-flight)
+function ensureProxyCreds(force = false) {
+  const proxy = state.config.api.proxy;
+  if (!proxy) return Promise.resolve();
+  if (proxyCredsGiven && proxyCredsUrl === proxy.url && !force) return Promise.resolve();
+  if (pendingCreds) return pendingCreds;
+  pendingCreds = new Promise((resolve, reject) => {
     const user = h("input", { placeholder: "login" });
     const pass = h("input", { type: "password", placeholder: "mot de passe" });
+    const msg = h("p", { class: "muted" });
+    const backdrop = $("modal-backdrop");
+    // Tout chemin de sortie retire les listeners globaux (la modale est
+    // partagée avec d'autres usages) et libère le single-flight avant de
+    // régler la Promise.
+    const settle = (fn, value) => {
+      backdrop.removeEventListener("click", onBackdrop);
+      document.removeEventListener("keydown", onKeydown);
+      closeModal();
+      pendingCreds = null;
+      fn(value);
+    };
+    const cancel = () => {
+      const err = new Error("Saisie des identifiants proxy annulée.");
+      err.proxyCancelled = true;
+      settle(reject, err);
+    };
+    const onBackdrop = (e) => { if (e.target === backdrop) cancel(); };
+    const onKeydown = (e) => { if (e.key === "Escape") cancel(); };
+    backdrop.addEventListener("click", onBackdrop);
+    document.addEventListener("keydown", onKeydown);
     modal(
       h("h3", {}, "Identifiants proxy"),
       h("p", { class: "muted" }, "Conservés en mémoire uniquement, jamais enregistrés."),
-      user, pass,
+      user, pass, msg,
       h("button", {
         onclick: async () => {
+          if (!user.value.trim()) { msg.textContent = "Le login est obligatoire."; return; }
           await invoke("set_proxy_creds", { username: user.value, password: pass.value });
           proxyCredsGiven = true;
-          closeModal();
-          resolve();
+          proxyCredsUrl = proxy.url;
+          settle(resolve);
         },
       }, "Valider"),
+      h("button", { onclick: cancel }, "Annuler"),
     );
   });
+  return pendingCreds;
 }
