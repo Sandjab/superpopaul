@@ -82,9 +82,16 @@ impl Telemetry {
         i.calls.push_back((Instant::now(), addr));
     }
 
-    /// Un appel HTTP en erreur (0 = réseau) : compté, aucune progression.
-    pub fn record_error(&self, http_status: u16) {
+    /// Un appel HTTP en erreur (0 = réseau) : compté. `addr_failed` vaut 0
+    /// pour une erreur retentable (aucune progression : le retry s'en
+    /// chargera) et la taille du paquet pour un échec définitif
+    /// (ApiError::Client) — ces adressages sont alors "done" (en échec) même
+    /// si aucune requête ne les re-tentera, pour que la progression/ETA
+    /// restent cohérents.
+    pub fn record_error(&self, http_status: u16, addr_failed: u32) {
         let mut i = self.inner.lock().unwrap();
+        i.done += addr_failed as u64;
+        i.failed += addr_failed as u64;
         *i.http.entry(http_status).or_insert(0) += 1;
         i.calls.push_back((Instant::now(), 0));
     }
@@ -184,8 +191,8 @@ mod tests {
     #[test]
     fn erreurs_comptees_sans_progression() {
         let t = Telemetry::new(100);
-        t.record_error(429);
-        t.record_error(0); // réseau
+        t.record_error(429, 0);
+        t.record_error(0, 0); // réseau
         let s = t.snapshot();
         assert_eq!(s.done, 0);
         assert_eq!(s.http.get(&429), Some(&1));
