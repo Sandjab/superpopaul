@@ -31,6 +31,17 @@ CREATE TABLE IF NOT EXISTS resolutions (
 );
 ";
 
+const UPSERT_SQL: &str = "INSERT INTO resolutions
+ (participant, exists_in_peppol, pa_code, pa_name, pa_country,
+  extended_ctc_fr, api_status, resolved_at)
+ VALUES (?1,?2,?3,?4,?5,?6,?7,?8)
+ ON CONFLICT(participant) DO UPDATE SET
+   exists_in_peppol=excluded.exists_in_peppol,
+   pa_code=excluded.pa_code, pa_name=excluded.pa_name,
+   pa_country=excluded.pa_country,
+   extended_ctc_fr=excluded.extended_ctc_fr,
+   api_status=excluded.api_status, resolved_at=excluded.resolved_at";
+
 impl Store {
     pub fn open(path: &Path) -> Result<Self, String> {
         if let Some(dir) = path.parent() {
@@ -38,6 +49,10 @@ impl Store {
         }
         let conn = Connection::open(path).map_err(|e| e.to_string())?;
         conn.pragma_update(None, "journal_mode", "WAL")
+            .map_err(|e| e.to_string())?;
+        // WAL + synchronous=FULL forcerait un fsync à chaque commit ;
+        // NORMAL est le pairing standard sûr avec le WAL.
+        conn.pragma_update(None, "synchronous", "NORMAL")
             .map_err(|e| e.to_string())?;
         Self::init(conn)
     }
@@ -53,30 +68,40 @@ impl Store {
 
     pub fn upsert(&self, r: &Resolution) -> Result<(), String> {
         self.conn
-            .execute(
-                "INSERT INTO resolutions
-                 (participant, exists_in_peppol, pa_code, pa_name, pa_country,
-                  extended_ctc_fr, api_status, resolved_at)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8)
-                 ON CONFLICT(participant) DO UPDATE SET
-                   exists_in_peppol=excluded.exists_in_peppol,
-                   pa_code=excluded.pa_code, pa_name=excluded.pa_name,
-                   pa_country=excluded.pa_country,
-                   extended_ctc_fr=excluded.extended_ctc_fr,
-                   api_status=excluded.api_status, resolved_at=excluded.resolved_at",
-                params![
-                    r.participant,
-                    r.exists_in_peppol,
-                    r.pa_code,
-                    r.pa_name,
-                    r.pa_country,
-                    r.extended_ctc_fr,
-                    r.api_status,
-                    r.resolved_at
-                ],
-            )
+            .execute(UPSERT_SQL, Self::upsert_params(r))
             .map(|_| ())
             .map_err(|e| e.to_string())
+    }
+
+    /// Écrit un paquet de résolutions dans une seule transaction, avec un
+    /// prepared statement réutilisé. Le resolver écrit ~50 résultats par
+    /// paquet : un autocommit (+fsync) par ligne serait le goulot.
+    pub fn upsert_batch(&self, items: &[Resolution]) -> Result<(), String> {
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| e.to_string())?;
+        {
+            let mut stmt = tx.prepare_cached(UPSERT_SQL).map_err(|e| e.to_string())?;
+            for r in items {
+                stmt.execute(Self::upsert_params(r))
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+        tx.commit().map_err(|e| e.to_string())
+    }
+
+    fn upsert_params(r: &Resolution) -> impl rusqlite::Params + '_ {
+        (
+            &r.participant,
+            &r.exists_in_peppol,
+            &r.pa_code,
+            &r.pa_name,
+            &r.pa_country,
+            &r.extended_ctc_fr,
+            &r.api_status,
+            &r.resolved_at,
+        )
     }
 
     pub fn get(&self, pid: &str) -> Result<Option<Resolution>, String> {
@@ -104,7 +129,7 @@ impl Store {
                         extended_ctc_fr, api_status, resolved_at
                  FROM resolutions WHERE participant IN ({placeholders})"
             );
-            let mut stmt = self.conn.prepare(&sql).map_err(|e| e.to_string())?;
+            let mut stmt = self.conn.prepare_cached(&sql).map_err(|e| e.to_string())?;
             let rows = stmt
                 .query_map(rusqlite::params_from_iter(chunk), Self::row_to_resolution)
                 .map_err(|e| e.to_string())?;
@@ -185,5 +210,30 @@ mod tests {
     fn get_absent_renvoie_none() {
         let s = Store::open_in_memory().unwrap();
         assert!(s.get("a::zzz").unwrap().is_none());
+    }
+
+    #[test]
+    fn upsert_batch_ecrit_tout_et_reste_relisible() {
+        let s = Store::open_in_memory().unwrap();
+        let items: Vec<Resolution> = (0..50).map(|i| res(&format!("b::{i}"), true, i)).collect();
+        s.upsert_batch(&items).unwrap();
+        let pids: Vec<String> = (0..50).map(|i| format!("b::{i}")).collect();
+        let m = s.load_map(&pids).unwrap();
+        assert_eq!(m.len(), 50);
+        assert_eq!(m["b::49"].resolved_at, 49);
+        // un batch vide ne plante pas
+        s.upsert_batch(&[]).unwrap();
+    }
+
+    #[test]
+    fn load_map_traverse_plusieurs_chunks() {
+        let s = Store::open_in_memory().unwrap();
+        let items: Vec<Resolution> = (0..600).map(|i| res(&format!("c::{i}"), true, i)).collect();
+        s.upsert_batch(&items).unwrap();
+        let pids: Vec<String> = (0..600).map(|i| format!("c::{i}")).collect();
+        let m = s.load_map(&pids).unwrap();
+        assert_eq!(m.len(), 600);
+        assert!(m.contains_key("c::0"));
+        assert!(m.contains_key("c::599"));
     }
 }
