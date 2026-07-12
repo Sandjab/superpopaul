@@ -3,6 +3,7 @@ pub mod config;
 pub mod csv_io;
 pub mod modes;
 pub mod pid;
+pub mod resolver;
 pub mod store;
 pub mod telemetry;
 
