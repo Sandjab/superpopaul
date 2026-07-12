@@ -159,7 +159,13 @@ pub struct EngineParams {
 }
 
 pub struct RunHandle {
-    paused: Arc<AtomicBool>,
+    /// Pause demandée par l'utilisateur (bouton Pause) — indépendante des
+    /// suspensions système, pour qu'une reprise automatique (timer du
+    /// breaker) ne puisse pas annuler une pause utilisateur.
+    user_paused: Arc<AtomicBool>,
+    /// Pause système (suspension auth ou breaker ouvert).
+    sys_paused: Arc<AtomicBool>,
+    suspended: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
     key_tx: watch::Sender<String>,
     pub telemetry: Arc<Telemetry>,
@@ -167,16 +173,21 @@ pub struct RunHandle {
 
 impl RunHandle {
     pub fn set_paused(&self, p: bool) {
-        self.paused.store(p, Ordering::Relaxed);
+        self.user_paused.store(p, Ordering::Relaxed);
     }
     pub fn request_stop(&self) {
         self.stop.store(true, Ordering::Relaxed);
     }
+    /// Nouvelle clé API : lève aussi la suspension système — ressaisir la
+    /// clé relance le run (les workers adoptent la clé via le watch avant
+    /// de reprendre la file).
     pub fn update_key(&self, key: &str) {
         let _ = self.key_tx.send(key.to_string());
+        self.sys_paused.store(false, Ordering::Relaxed);
+        self.suspended.store(false, Ordering::Relaxed);
     }
     pub fn is_paused(&self) -> bool {
-        self.paused.load(Ordering::Relaxed)
+        self.user_paused.load(Ordering::Relaxed)
     }
 }
 
@@ -249,7 +260,8 @@ impl Engine {
     ) -> RunHandle {
         let total = todo.len() as u64;
         let telemetry = Arc::new(Telemetry::new(total));
-        let paused = Arc::new(AtomicBool::new(false));
+        let user_paused = Arc::new(AtomicBool::new(false));
+        let sys_paused = Arc::new(AtomicBool::new(false));
         let stop = Arc::new(AtomicBool::new(false));
         let aimd = Arc::new(Aimd::new(params.concurrency));
         let breaker = Arc::new(Mutex::new(Breaker::new(5)));
@@ -271,7 +283,8 @@ impl Engine {
                 queue,
                 store,
                 telemetry,
-                paused,
+                user_paused,
+                sys_paused,
                 stop,
                 aimd,
                 breaker,
@@ -283,7 +296,8 @@ impl Engine {
                 queue.clone(),
                 store.clone(),
                 telemetry.clone(),
-                paused.clone(),
+                user_paused.clone(),
+                sys_paused.clone(),
                 stop.clone(),
                 aimd.clone(),
                 breaker.clone(),
@@ -298,23 +312,35 @@ impl Engine {
                     if stop.load(Ordering::Relaxed) {
                         break;
                     }
-                    // Sortie de boucle : file vide ET non-pausé/non-suspendu ET
-                    // aucun paquet in-flight. Le check est en tête de boucle
-                    // pour qu'un worker bridé par l'AIMD (idx >= allowed)
-                    // puisse aussi se terminer — sinon le superviseur ne
-                    // verrait jamais la fin du run après un 429.
+                    // Sortie de boucle : file vide ET non-suspendu ET aucun
+                    // paquet in-flight. Le check est en tête de boucle pour
+                    // qu'un worker bridé par l'AIMD (idx >= allowed) puisse
+                    // aussi se terminer — sinon le superviseur ne verrait
+                    // jamais la fin du run après un 429. La pause UTILISATEUR
+                    // n'empêche pas la sortie : si tout est traité, le run est
+                    // fini, pause ou pas.
                     // Ordre des lectures : in_flight (SeqCst) AVANT la file —
                     // un push_front d'erreur précède toujours le décrément
                     // d'in_flight, donc in_flight == 0 garantit qu'aucun
                     // paquet ne reviendra en tête de file.
-                    if !paused.load(Ordering::Relaxed)
+                    // NB : il reste une fenêtre bénigne entre pop_front et
+                    // fetch_add — un worker idle peut voir « file vide et
+                    // rien in-flight » et sortir alors qu'un paquet vient
+                    // d'être pris ; le worker preneur, lui, reste vivant et
+                    // traitera (et retraitera au besoin) son paquet. Aucune
+                    // perte : au pire un peu moins de parallélisme en toute
+                    // fin de run.
+                    if !sys_paused.load(Ordering::Relaxed)
                         && !suspended.load(Ordering::Relaxed)
                         && in_flight.load(Ordering::SeqCst) == 0
                         && queue.lock().unwrap().is_empty()
                     {
                         break;
                     }
-                    if paused.load(Ordering::Relaxed) || idx >= aimd.allowed() {
+                    if user_paused.load(Ordering::Relaxed)
+                        || sys_paused.load(Ordering::Relaxed)
+                        || idx >= aimd.allowed()
+                    {
                         tokio::time::sleep(Duration::from_millis(150)).await;
                         continue;
                     }
@@ -414,7 +440,7 @@ impl Engine {
                                     if !stale {
                                         // Suspension immédiate de tous les
                                         // workers ; un seul événement émis.
-                                        paused.store(true, Ordering::Relaxed);
+                                        sys_paused.store(true, Ordering::Relaxed);
                                         if !suspended.swap(true, Ordering::Relaxed) {
                                             let reason = if matches!(e, ApiError::ProxyAuth) {
                                                 "auth_proxy"
@@ -434,22 +460,41 @@ impl Engine {
                                 ApiError::Server(_) | ApiError::Network(_) => {
                                     let opened = breaker.lock().unwrap().on_failure();
                                     if let Some(d) = opened {
-                                        paused.store(true, Ordering::Relaxed);
-                                        let _ = tx
-                                            .send(EngineEvent::Suspended {
-                                                reason: "server_down".into(),
-                                                message: e.to_string(),
-                                                retry_in_s: Some(d.as_secs()),
-                                            })
-                                            .await;
-                                        // Re-test automatique après le backoff.
-                                        let paused2 = paused.clone();
-                                        let tx2 = tx.clone();
-                                        tokio::spawn(async move {
-                                            tokio::time::sleep(d).await;
-                                            paused2.store(false, Ordering::Relaxed);
-                                            let _ = tx2.send(EngineEvent::Resumed).await;
-                                        });
+                                        // Une rafale de N échecs en vol peut
+                                        // ouvrir le breaker plusieurs fois :
+                                        // seul le premier gagnant émet
+                                        // l'événement et arme LE timer de
+                                        // reprise (sinon des timers 30/60 s
+                                        // superposés se réveilleraient en
+                                        // cascade sur un serveur down).
+                                        if !suspended.swap(true, Ordering::Relaxed) {
+                                            sys_paused.store(true, Ordering::Relaxed);
+                                            // Réduit la rafale encore en vol
+                                            // à la reprise.
+                                            aimd.on_rate_limited();
+                                            let _ = tx
+                                                .send(EngineEvent::Suspended {
+                                                    reason: "server_down".into(),
+                                                    message: e.to_string(),
+                                                    retry_in_s: Some(d.as_secs()),
+                                                })
+                                                .await;
+                                            // Re-test automatique après le
+                                            // backoff.
+                                            let sys_paused2 = sys_paused.clone();
+                                            let suspended2 = suspended.clone();
+                                            let stop2 = stop.clone();
+                                            let tx2 = tx.clone();
+                                            tokio::spawn(async move {
+                                                tokio::time::sleep(d).await;
+                                                if stop2.load(Ordering::Relaxed) {
+                                                    return; // run stoppé entre-temps
+                                                }
+                                                sys_paused2.store(false, Ordering::Relaxed);
+                                                suspended2.store(false, Ordering::Relaxed);
+                                                let _ = tx2.send(EngineEvent::Resumed).await;
+                                            });
+                                        }
                                     } else {
                                         tokio::time::sleep(Duration::from_secs(1)).await;
                                     }
@@ -500,7 +545,9 @@ impl Engine {
         }
 
         RunHandle {
-            paused,
+            user_paused,
+            sys_paused,
+            suspended,
             stop,
             key_tx,
             telemetry,
@@ -727,6 +774,90 @@ mod tests_engine {
         let snap = handle.telemetry.snapshot();
         let m = store.lock().unwrap().load_map(&pids(50)).unwrap();
         assert_eq!(m.len() as u64, snap.done);
+    }
+
+    /// Une rafale d'échecs 5xx en vol (10 requêtes simultanées, seuil du
+    /// breaker à 5) ne doit ouvrir le breaker et suspendre le run qu'UNE
+    /// seule fois — pas un événement + un timer de reprise par ouverture.
+    /// Temps tokio en pause : le backoff de 30 s s'écoule virtuellement.
+    #[tokio::test(start_paused = true)]
+    async fn rafale_5xx_ouvre_le_breaker_une_seule_fois_puis_reprend() {
+        let server = MockServer::start().await;
+        // Les 10 premiers appels échouent en 503 (rafale > seuil), ensuite
+        // tout passe : les 10 paquets re-queués aboutissent après reprise.
+        Mock::given(method("POST"))
+            .and(path("/resolve/batch"))
+            .respond_with(ResponseTemplate::new(503))
+            .up_to_n_times(10)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/resolve/batch"))
+            .respond_with(EchoResolver)
+            .mount(&server)
+            .await;
+
+        let store = Arc::new(Mutex::new(Store::open_in_memory().unwrap()));
+        let client = ApiClient::new(&server.uri(), "K", None, None).unwrap();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        let _handle = Engine::start(
+            client,
+            EngineParams {
+                batch_size: 5,
+                concurrency: 10,
+            },
+            pids(50),
+            store,
+            tx,
+        );
+        let mut suspensions = 0u32;
+        let done = loop {
+            match tokio::time::timeout(std::time::Duration::from_secs(10), rx.recv()).await {
+                Ok(Some(EngineEvent::Suspended { reason, .. })) => {
+                    assert_eq!(reason, "server_down");
+                    suspensions += 1;
+                }
+                Ok(Some(EngineEvent::Finished { done, .. })) => break done,
+                Ok(Some(_)) => continue,
+                other => panic!("Finished attendu, obtenu {other:?}"),
+            }
+        };
+        assert_eq!(
+            suspensions, 1,
+            "une rafale d'échecs ne doit émettre qu'un seul Suspended{{server_down}}"
+        );
+        assert_eq!(done, 50);
+    }
+
+    /// Stopper un run suspendu (401 permanent) doit émettre Finished
+    /// {stopped: true} — les workers ne restent pas bloqués en pause.
+    #[tokio::test]
+    async fn stop_pendant_suspension_emet_finished() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/resolve/batch"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+        let (handle, mut rx, _store) = run_engine(&server, "MAUVAISE", pids(20)).await;
+        loop {
+            match tokio::time::timeout(std::time::Duration::from_secs(10), rx.recv()).await {
+                Ok(Some(EngineEvent::Suspended { .. })) => break,
+                Ok(Some(_)) => continue,
+                other => panic!("Suspended attendu, obtenu {other:?}"),
+            }
+        }
+        handle.request_stop();
+        loop {
+            match tokio::time::timeout(std::time::Duration::from_secs(10), rx.recv()).await {
+                Ok(Some(EngineEvent::Finished { stopped, .. })) => {
+                    assert!(stopped, "Finished{{stopped: true}} attendu après stop");
+                    break;
+                }
+                Ok(Some(_)) => continue,
+                other => panic!("Finished attendu, obtenu {other:?}"),
+            }
+        }
     }
 }
 

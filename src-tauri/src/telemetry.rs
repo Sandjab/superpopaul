@@ -93,7 +93,9 @@ impl Telemetry {
         i.done += addr_failed as u64;
         i.failed += addr_failed as u64;
         *i.http.entry(http_status).or_insert(0) += 1;
-        i.calls.push_back((Instant::now(), 0));
+        // La fenêtre crédite les adressages en échec définitif : ils comptent
+        // dans le débit (addr_per_s), donc dans l'ETA, comme la progression.
+        i.calls.push_back((Instant::now(), addr_failed));
     }
 
     pub fn snapshot(&self) -> Snapshot {

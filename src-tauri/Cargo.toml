@@ -27,6 +27,8 @@ thiserror = "1"
 [dev-dependencies]
 wiremock = "0.6"
 tempfile = "3"
+# start_paused pour les tests du breaker (le backoff 30 s s'écoule en virtuel)
+tokio = { version = "1", features = ["test-util"] }
 
 [profile.release]
 strip = true
