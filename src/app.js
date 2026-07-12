@@ -5,7 +5,9 @@ const { open, save } = window.__TAURI__.dialog;
 const $ = (id) => document.getElementById(id);
 
 /** Construit un élément DOM. Les enfants chaîne deviennent des nœuds texte :
- *  les données dynamiques (CSV, erreurs) ne passent JAMAIS par innerHTML. */
+ *  les données dynamiques (CSV, erreurs) ne passent JAMAIS par innerHTML.
+ *  Attention : les valeurs d'attributs passent par setAttribute sans filtrage —
+ *  ne jamais construire href/src depuis des données CSV/API. */
 function h(tag, attrs = {}, ...children) {
   const el = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
@@ -35,6 +37,9 @@ const STEPS = ["file", "columns", "output", "run"];
 let current = 0;
 
 function showStep(i) {
+  // En quittant l'étape output (Suivant, Précédent ou stepper), persister le
+  // formulaire dans l'état pour ne pas perdre clé/URL modifiées.
+  if (STEPS[current] === "output" && i !== current) syncOutputForm();
   current = i;
   STEPS.forEach((s, j) => {
     $(`step-${s}`).classList.toggle("hidden", j !== i);
@@ -46,6 +51,7 @@ function showStep(i) {
   $("btn-prev").classList.toggle("hidden", i === 0);
   $("btn-next").classList.toggle("hidden", i === STEPS.length - 1);
   if (STEPS[i] === "columns") renderOutPreview(); // columns.js
+  if (STEPS[i] === "output") fillOutputForm(); // affiche le chemin suggéré par pickInput
   if (STEPS[i] === "run") enterRunStep();          // cockpit.js
 }
 
@@ -134,9 +140,15 @@ function renderFilePanel() {
     p.suggested_pid_column != null ? "(suggestion automatique)" : "";
 }
 
-$("btn-browse").addEventListener("click", async () => {
-  const f = await open({ multiple: false, filters: [{ name: "CSV", extensions: ["csv", "txt"] }] });
-  if (f) pickInput(f);
+$("btn-browse").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  btn.disabled = true; // garde de ré-entrance pendant le dialog + preview
+  try {
+    const f = await open({ multiple: false, filters: [{ name: "CSV", extensions: ["csv", "txt"] }] });
+    if (f) await pickInput(f);
+  } finally {
+    btn.disabled = false;
+  }
 });
 $("pid-column").addEventListener("change", (e) => { state.config.input.pid_column = e.target.value; });
 const dz = $("dropzone");
