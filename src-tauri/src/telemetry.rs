@@ -90,39 +90,54 @@ impl Telemetry {
     }
 
     pub fn snapshot(&self) -> Snapshot {
-        let mut i = self.inner.lock().unwrap();
-        let now = Instant::now();
-        while let Some((t, _)) = i.calls.front() {
-            if now.duration_since(*t).as_secs_f64() > WINDOW_S {
-                i.calls.pop_front();
-            } else {
-                break;
+        // Sous le verrou : purge de la fenêtre + copies. Le tri des latences
+        // (coûteux à grand volume) se fait HORS verrou pour ne pas bloquer
+        // les record_call des workers.
+        let (done, exists, ctc, failed, http, latencies, req_per_s, addr_per_s) = {
+            let mut i = self.inner.lock().unwrap();
+            let now = Instant::now();
+            while let Some((t, _)) = i.calls.front() {
+                if now.duration_since(*t).as_secs_f64() > WINDOW_S {
+                    i.calls.pop_front();
+                } else {
+                    break;
+                }
             }
-        }
-        // Fenêtre effective : depuis le plus vieil appel conservé (évite de
-        // diviser par 10 s quand le run vient de démarrer).
-        let span = i
-            .calls
-            .front()
-            .map(|(t, _)| now.duration_since(*t).as_secs_f64().max(0.25))
-            .unwrap_or(1.0);
-        let req_per_s = i.calls.len() as f64 / span;
-        let addr_in_window: u64 = i.calls.iter().map(|(_, a)| *a as u64).sum();
-        let addr_per_s = addr_in_window as f64 / span;
-        let remaining = self.total.saturating_sub(i.done);
+            // Fenêtre effective : depuis le plus vieil appel conservé (évite de
+            // diviser par 10 s quand le run vient de démarrer).
+            let span = i
+                .calls
+                .front()
+                .map(|(t, _)| now.duration_since(*t).as_secs_f64().max(0.25))
+                .unwrap_or(1.0);
+            let req_per_s = i.calls.len() as f64 / span;
+            let addr_in_window: u64 = i.calls.iter().map(|(_, a)| *a as u64).sum();
+            let addr_per_s = addr_in_window as f64 / span;
+            (
+                i.done,
+                i.exists,
+                i.ctc,
+                i.failed,
+                i.http.clone(),
+                i.latencies_ms.clone(),
+                req_per_s,
+                addr_per_s,
+            )
+        }; // verrou relâché ici
+        let remaining = self.total.saturating_sub(done);
         let eta_s = if addr_per_s > 0.0 && remaining > 0 {
             Some((remaining as f64 / addr_per_s).round() as u64)
         } else {
             None
         };
         Snapshot {
-            done: i.done,
+            done,
             total: self.total,
-            exists: i.exists,
-            ctc: i.ctc,
-            failed: i.failed,
-            http: i.http.clone(),
-            latency: lat_stats(&i.latencies_ms),
+            exists,
+            ctc,
+            failed,
+            http,
+            latency: lat_stats(&latencies),
             req_per_s,
             addr_per_s,
             eta_s,
@@ -191,6 +206,27 @@ mod tests {
         assert_eq!(l.p50, 50);
         assert_eq!(l.p90, 90);
         assert_eq!(l.p99, 99);
+    }
+
+    #[test]
+    fn latence_none_avant_le_premier_appel() {
+        let s = Telemetry::new(10).snapshot();
+        assert!(s.latency.is_none());
+        assert_eq!(s.req_per_s, 0.0);
+        assert_eq!(s.addr_per_s, 0.0);
+        assert!(s.eta_s.is_none());
+    }
+
+    #[test]
+    fn adr_par_s_distinct_de_req_par_s() {
+        // 1 requête portant 50 adressages : addr_per_s ≈ 50 × req_per_s.
+        // Un swap des deux champs ne passerait pas ce test.
+        let t = Telemetry::new(1000);
+        t.record_call(200, 100, 50, 0, 0, 0);
+        let s = t.snapshot();
+        assert!(s.req_per_s > 0.0);
+        let ratio = s.addr_per_s / s.req_per_s;
+        assert!((49.0..=51.0).contains(&ratio), "ratio: {ratio}");
     }
 
     #[test]
