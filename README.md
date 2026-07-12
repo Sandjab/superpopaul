@@ -27,8 +27,8 @@ cargo tauri build   # binaire de distribution
 ```
 
 ## Distribution
-Binaires **non signés** : voir `NOTICE-OUVERTURE.md` (Gatekeeper : clic droit
-> Ouvrir ; SmartScreen : Informations complémentaires > Exécuter quand même).
+Binaires **non signés** : la procédure d'ouverture (Gatekeeper macOS,
+SmartScreen Windows) est détaillée dans `NOTICE-OUVERTURE.md`.
 macOS : build local. Windows : GitHub Actions (`.github/workflows/superpopaul-windows.yml`).
 
 ## Spec & plan
