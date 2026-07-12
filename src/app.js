@@ -100,6 +100,12 @@ function closeModal() { $("modal-backdrop").classList.add("hidden"); }
 
 // --- Étape 1 : fichier -----------------------------------------------------------
 async function pickInput(path) {
+  // Garde léger : le dialogue filtre déjà csv/txt, mais le drag-drop accepte
+  // n'importe quel chemin (un YAML déposé serait sniffé en séparateur « | »).
+  if (!/\.(csv|txt)$/i.test(path)) {
+    banner("warn", `Ce fichier n'est pas un CSV (.csv ou .txt attendu) : ${path}`);
+    return;
+  }
   try {
     const p = await invoke("preview_csv", { path });
     const prevHeaders = state.preview ? state.preview.headers : null;

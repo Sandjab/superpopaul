@@ -26,6 +26,13 @@ pub fn sniff(path: &Path) -> Result<CsvMeta, String> {
         .map_err(|e| format!("lecture {path:?} : {e}"))?;
     let sample = &buf[..n];
 
+    // Garde : un octet NUL signale un binaire renommé .csv (xlsx, zip…) —
+    // rejeté tôt plutôt qu'un aperçu illisible. L'UTF-16 est rejeté aussi
+    // (assumé : seuls utf-8 / windows-1252 sont supportés).
+    if sample.contains(&0u8) {
+        return Err("fichier binaire (pas un CSV texte)".into());
+    }
+
     // UTF-8 si l'échantillon est valide (l'ASCII pur en est un sous-ensemble) ;
     // une coupure au milieu d'un caractère multi-octets en toute fin de buffer
     // ne doit pas fausser la détection. Sinon : windows-1252 (cas Excel FR).
@@ -197,6 +204,17 @@ mod tests {
         let f = tmp_csv(b"id;\"tags,a,b,c,d\"\n1;x\n");
         let m = sniff(f.path()).unwrap();
         assert_eq!(m.delimiter, b';');
+    }
+
+    #[test]
+    fn sniff_rejette_un_fichier_binaire() {
+        // Garde étape 1 : un binaire renommé .csv (xlsx, zip…) contient des
+        // octets NUL — le rejeter tôt évite un aperçu illisible. Effet de
+        // bord assumé : l'UTF-16 est rejeté aussi (encodages supportés :
+        // utf-8 / windows-1252 uniquement).
+        let f = tmp_csv(b"PK\x03\x04\x00\x00binaire");
+        let err = sniff(f.path()).unwrap_err();
+        assert!(err.contains("binaire"), "message inattendu : {err}");
     }
 
     #[test]
