@@ -36,14 +36,32 @@ pub fn sniff(path: &Path) -> Result<CsvMeta, String> {
     };
 
     let first_line = sample.split(|&b| b == b'\n').next().unwrap_or(sample);
+    let counts = count_delims_outside_quotes(first_line);
     let delimiter = [b';', b',', b'\t', b'|']
         .into_iter()
-        .max_by_key(|d| first_line.iter().filter(|&&b| b == *d).count())
+        .max_by_key(|d| counts[*d as usize])
         .unwrap();
     Ok(CsvMeta {
         delimiter,
         encoding,
     })
+}
+
+/// Compte les occurrences de chaque octet hors sections quotées (`"…"`).
+/// Un simple basculement d'état suffit, y compris pour l'échappement `""` :
+/// il fait sortir puis rentrer dans la section quotée sans compter d'octet
+/// entre les deux guillemets.
+fn count_delims_outside_quotes(line: &[u8]) -> [usize; 256] {
+    let mut counts = [0usize; 256];
+    let mut in_quotes = false;
+    for &b in line {
+        if b == b'"' {
+            in_quotes = !in_quotes;
+        } else if !in_quotes {
+            counts[b as usize] += 1;
+        }
+    }
+    counts
 }
 
 fn reader(path: &Path, meta: &CsvMeta) -> Result<csv::Reader<Box<dyn Read>>, String> {
@@ -66,6 +84,8 @@ fn reader(path: &Path, meta: &CsvMeta) -> Result<csv::Reader<Box<dyn Read>>, Str
 }
 
 /// Entêtes + n premières lignes, pour l'aperçu du wizard.
+/// Suppose une ligne d'entête (choix de design du wizard) : un fichier sans
+/// entête verra sa première ligne consommée comme entête.
 pub fn preview(path: &Path, n: usize) -> Result<Preview, String> {
     let meta = sniff(path)?;
     let mut rdr = reader(path, &meta)?;
@@ -133,7 +153,7 @@ pub fn suggest_pid_column(p: &Preview) -> Option<usize> {
             continue;
         }
         let score = vals.iter().filter(|v| looks_like_pid(v)).count() as f64 / vals.len() as f64;
-        if score >= 0.6 && best.map_or(true, |(_, s)| score > s) {
+        if score >= 0.6 && best.is_none_or(|(_, s)| score > s) {
             best = Some((col, score));
         }
     }
@@ -170,6 +190,13 @@ mod tests {
         let m = sniff(f.path()).unwrap();
         assert_eq!(m.delimiter, b',');
         assert_eq!(m.encoding, "windows-1252");
+    }
+
+    #[test]
+    fn sniff_ignore_les_delimiteurs_dans_les_guillemets() {
+        let f = tmp_csv(b"id;\"tags,a,b,c,d\"\n1;x\n");
+        let m = sniff(f.path()).unwrap();
+        assert_eq!(m.delimiter, b';');
     }
 
     #[test]
