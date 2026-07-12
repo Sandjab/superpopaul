@@ -4,6 +4,7 @@ pub mod csv_io;
 pub mod modes;
 pub mod pid;
 pub mod store;
+pub mod telemetry;
 
 pub fn run() {
     tauri::Builder::default()
