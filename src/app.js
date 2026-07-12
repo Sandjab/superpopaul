@@ -37,6 +37,9 @@ const STEPS = ["file", "columns", "output", "run"];
 let current = 0;
 
 function showStep(i) {
+  // Cliquer l'onglet déjà actif ne doit rien faire (sinon ça re-affiche un
+  // état périmé par-dessus des éditions non synchronisées).
+  if (i === current) return;
   // En quittant l'étape output (Suivant, Précédent ou stepper), persister le
   // formulaire dans l'état pour ne pas perdre clé/URL modifiées.
   if (STEPS[current] === "output" && i !== current) syncOutputForm();
@@ -99,6 +102,7 @@ function closeModal() { $("modal-backdrop").classList.add("hidden"); }
 async function pickInput(path) {
   try {
     const p = await invoke("preview_csv", { path });
+    const prevHeaders = state.preview ? state.preview.headers : null;
     state.inputPath = path;
     state.preview = p;
     state.config.input = {
@@ -106,13 +110,21 @@ async function pickInput(path) {
       pid_column: p.suggested_pid_column != null ? p.headers[p.suggested_pid_column] : "",
     };
     // Mapping par défaut : toutes les colonnes d'entrée + les 4 champs Peppol.
-    state.config.output.columns = [
-      ...p.headers.map((name) => ({ source: "input", name })),
-      { source: "peppol", field: "exists" },
-      { source: "peppol", field: "pa_code" },
-      { source: "peppol", field: "pa_country" },
-      { source: "peppol", field: "extended_ctc_fr" },
-    ];
+    // Préserve un mapping personnalisé quand on re-choisit le même fichier :
+    // on ne le reconstruit que si aucune colonne n'existe encore, ou si les
+    // entêtes du nouveau fichier diffèrent de celles de l'ancien preview.
+    const headersChanged = !prevHeaders
+      || prevHeaders.length !== p.headers.length
+      || prevHeaders.some((name, i) => name !== p.headers[i]);
+    if (state.config.output.columns.length === 0 || headersChanged) {
+      state.config.output.columns = [
+        ...p.headers.map((name) => ({ source: "input", name })),
+        { source: "peppol", field: "exists" },
+        { source: "peppol", field: "pa_code" },
+        { source: "peppol", field: "pa_country" },
+        { source: "peppol", field: "extended_ctc_fr" },
+      ];
+    }
     if (!state.config.output.path)
       state.config.output.path = path.replace(/\.csv$/i, "") + "_enrichi.csv";
     renderFilePanel();
