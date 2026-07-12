@@ -320,6 +320,21 @@ pub fn pause_run(state: State<'_, AppState>, paused: bool) -> Result<(), String>
     }
 }
 
+/// Reprise anticipée d'une suspension système (bannière server_down, bouton
+/// « Réessayer maintenant ») : même effet que le timer de backoff du moteur,
+/// sans attendre son expiration. `pause_run` ne convient pas ici : il ne
+/// pilote que la pause utilisateur, pas la suspension système.
+#[tauri::command]
+pub fn resume_run(state: State<'_, AppState>) -> Result<(), String> {
+    match state.run.lock().unwrap().as_ref() {
+        Some(h) => {
+            h.resume_system();
+            Ok(())
+        }
+        None => Err("Aucun run en cours.".into()),
+    }
+}
+
 #[tauri::command]
 pub fn stop_run(state: State<'_, AppState>) -> Result<(), String> {
     // Contrat : le slot n'est PAS libéré ici — uniquement via clear_run,

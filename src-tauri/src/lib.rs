@@ -33,6 +33,7 @@ pub fn run() {
             commands::calibrate_api,
             commands::start_run,
             commands::pause_run,
+            commands::resume_run,
             commands::stop_run,
             commands::clear_run,
             commands::generate_output

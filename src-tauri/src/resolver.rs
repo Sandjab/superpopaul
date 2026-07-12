@@ -210,6 +210,14 @@ impl RunHandle {
     pub fn is_paused(&self) -> bool {
         self.user_paused.load(Ordering::Relaxed)
     }
+    /// Reprise anticipée d'une suspension système (bouton « Réessayer
+    /// maintenant » sur la bannière server_down) : lève sys_paused et
+    /// suspended, exactement comme le fait le timer de backoff automatique.
+    /// Ne touche pas à la pause utilisateur.
+    pub fn resume_system(&self) {
+        self.sys_paused.store(false, Ordering::Relaxed);
+        self.suspended.store(false, Ordering::Relaxed);
+    }
 }
 
 fn now_epoch() -> i64 {
