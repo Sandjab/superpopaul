@@ -1,4 +1,4 @@
-use crate::config::{ColumnSpec, PeppolField};
+use crate::config::{ColumnSpec, OutputConfig, OutputEncoding, OutputSeparator, PeppolField};
 use crate::csv_io::CsvMeta;
 use crate::pid::canonical;
 use crate::store::Resolution;
@@ -42,7 +42,10 @@ pub fn with_stamp(path: &Path, stamp: Option<&str>) -> PathBuf {
 }
 
 /// Écrit le CSV de sortie : une ligne par ligne d'entrée, colonnes selon le
-/// mapping, infos Peppol lues dans `resolutions` (la base). UTF-8 en sortie.
+/// mapping, infos Peppol lues dans `resolutions` (la base). Encodage et
+/// séparateur selon `output` (`Auto` = séparateur sniffé sur l'entrée) ;
+/// `output.path`/`timestamp_suffix` sont ignorés ici — l'appelant fournit
+/// `out_path` (résolu relativement au YAML) et `stamp` déjà calculés.
 ///
 /// Écriture atomique (comme `config::save`) : tout passe par `<final>.tmp`
 /// dans le même répertoire, renommé vers la cible seulement après le flush —
@@ -52,7 +55,7 @@ pub fn generate(
     input_path: &Path,
     meta: &CsvMeta,
     pid_column: &str,
-    columns: &[ColumnSpec],
+    output: &OutputConfig,
     resolutions: &HashMap<String, Resolution>,
     out_path: &Path,
     stamp: Option<&str>,
@@ -62,14 +65,7 @@ pub fn generate(
     tmp_os.push(".tmp");
     let tmp_path = PathBuf::from(tmp_os);
 
-    if let Err(e) = write_output(
-        input_path,
-        meta,
-        pid_column,
-        columns,
-        resolutions,
-        &tmp_path,
-    ) {
+    if let Err(e) = write_output(input_path, meta, pid_column, output, resolutions, &tmp_path) {
         let _ = std::fs::remove_file(&tmp_path); // nettoyage best-effort
         return Err(e);
     }
@@ -80,15 +76,61 @@ pub fn generate(
     Ok(final_path)
 }
 
+/// Ré-encode à la volée le flux UTF-8 produit par `csv::Writer` en
+/// windows-1252 ; les caractères non représentables deviennent « ? »
+/// (assumé, spec sortie). `carry` conserve une éventuelle séquence UTF-8
+/// coupée en fin de chunk pour la recoller au chunk suivant.
+struct Windows1252Writer<W: Write> {
+    inner: W,
+    carry: Vec<u8>,
+}
+
+impl<W: Write> Write for Windows1252Writer<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.carry.extend_from_slice(buf);
+        let valid = match std::str::from_utf8(&self.carry) {
+            Ok(s) => s.len(),
+            Err(e) => e.valid_up_to(),
+        };
+        let mut rest = std::str::from_utf8(&self.carry[..valid]).unwrap();
+        let mut encoder = encoding_rs::WINDOWS_1252.new_encoder();
+        let mut out = [0u8; 4096];
+        while !rest.is_empty() {
+            let (result, read, written) =
+                encoder.encode_from_utf8_without_replacement(rest, &mut out, false);
+            self.inner.write_all(&out[..written])?;
+            rest = &rest[read..];
+            if let encoding_rs::EncoderResult::Unmappable(_) = result {
+                self.inner.write_all(b"?")?;
+            }
+        }
+        self.carry.drain(..valid);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        // Au flush final, csv::Writer a produit de l'UTF-8 complet : un reste
+        // signalerait une séquence tronquée — fail loud plutôt que corrompre.
+        if !self.carry.is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "séquence UTF-8 incomplète en fin de flux",
+            ));
+        }
+        self.inner.flush()
+    }
+}
+
 /// Lit l'entrée et écrit toutes les lignes dans `tmp_path` (flush inclus).
 fn write_output(
     input_path: &Path,
     meta: &CsvMeta,
     pid_column: &str,
-    columns: &[ColumnSpec],
+    output: &OutputConfig,
     resolutions: &HashMap<String, Resolution>,
     tmp_path: &Path,
 ) -> Result<(), String> {
+    let columns = &output.columns;
     let f = File::open(input_path).map_err(|e| format!("ouverture {input_path:?} : {e}"))?;
     let enc = if meta.encoding == "utf-8" {
         encoding_rs::UTF_8
@@ -124,15 +166,31 @@ fn write_output(
         }
     }
 
+    let out_delim = match output.separator {
+        OutputSeparator::Auto => meta.delimiter,
+        OutputSeparator::Semicolon => b';',
+        OutputSeparator::Comma => b',',
+        OutputSeparator::Pipe => b'|',
+        OutputSeparator::Tab => b'\t',
+    };
     let out = File::create(tmp_path).map_err(|e| format!("écriture {tmp_path:?} : {e}"))?;
     let mut out = BufWriter::new(out);
-    // BOM UTF-8 : le public cible ouvre le CSV par double-clic dans Excel FR,
-    // qui casse les accents sans lui.
-    out.write_all(b"\xEF\xBB\xBF")
-        .map_err(|e| format!("écriture {tmp_path:?} : {e}"))?;
+    // BOM UTF-8 (défaut) : le public cible ouvre le CSV par double-clic dans
+    // Excel FR, qui casse les accents sans lui.
+    if output.encoding == OutputEncoding::Utf8Bom {
+        out.write_all(b"\xEF\xBB\xBF")
+            .map_err(|e| format!("écriture {tmp_path:?} : {e}"))?;
+    }
+    let sink: Box<dyn Write> = match output.encoding {
+        OutputEncoding::Windows1252 => Box::new(Windows1252Writer {
+            inner: out,
+            carry: Vec::new(),
+        }),
+        OutputEncoding::Utf8Bom | OutputEncoding::Utf8 => Box::new(out),
+    };
     let mut wtr = csv::WriterBuilder::new()
-        .delimiter(meta.delimiter)
-        .from_writer(out);
+        .delimiter(out_delim)
+        .from_writer(sink);
     // Entête de sortie.
     let out_headers: Vec<&str> = columns
         .iter()
@@ -170,10 +228,11 @@ fn write_output(
         wtr.write_record(&row)
             .map_err(|e| format!("écriture {tmp_path:?} ligne {line} : {e}"))?;
     }
-    // Flush complet (csv → BufWriter → fichier) avant le rename atomique.
+    // Flush complet (csv → [1252] → BufWriter → fichier) avant le rename
+    // atomique. into_inner vide le tampon csv, flush propage jusqu'au fichier.
     wtr.into_inner()
         .map_err(|e| format!("écriture {tmp_path:?} : {e}"))?
-        .into_inner()
+        .flush()
         .map_err(|e| format!("écriture {tmp_path:?} : {e}"))?;
     Ok(())
 }
@@ -181,11 +240,24 @@ fn write_output(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{ColumnSpec, PeppolField};
+    use crate::config::{ColumnSpec, OutputEncoding, OutputSeparator, PeppolField};
     use crate::csv_io::CsvMeta;
     use crate::store::Resolution;
     use std::collections::HashMap;
     use std::io::Write;
+
+    /// OutputConfig de test : défauts historiques (UTF-8+BOM, séparateur de
+    /// l'entrée). `path`/`timestamp_suffix` sont ignorés par generate (résolus
+    /// par l'appelant).
+    fn out_cfg(columns: Vec<ColumnSpec>) -> OutputConfig {
+        OutputConfig {
+            path: String::new(),
+            timestamp_suffix: false,
+            encoding: OutputEncoding::Utf8Bom,
+            separator: OutputSeparator::Auto,
+            columns,
+        }
+    }
 
     fn resolutions() -> HashMap<String, Resolution> {
         let mut m = HashMap::new();
@@ -227,7 +299,16 @@ mod tests {
             delimiter: b';',
             encoding: "utf-8",
         };
-        let written = generate(&input, &meta, "siren", &cols, &resolutions(), &out, None).unwrap();
+        let written = generate(
+            &input,
+            &meta,
+            "siren",
+            &out_cfg(cols),
+            &resolutions(),
+            &out,
+            None,
+        )
+        .unwrap();
         let content = std::fs::read_to_string(&written).unwrap();
         // BOM retiré ici, testé dédié dans generate_convertit_windows1252_en_utf8_avec_bom.
         let content = content.trim_start_matches('\u{feff}');
@@ -261,7 +342,16 @@ mod tests {
             delimiter: b';',
             encoding: "windows-1252",
         };
-        let written = generate(&input, &meta, "siren", &cols, &resolutions(), &out, None).unwrap();
+        let written = generate(
+            &input,
+            &meta,
+            "siren",
+            &out_cfg(cols),
+            &resolutions(),
+            &out,
+            None,
+        )
+        .unwrap();
         let raw = std::fs::read(&written).unwrap();
         assert!(
             raw.starts_with(b"\xEF\xBB\xBF"),
@@ -282,8 +372,86 @@ mod tests {
             delimiter: b';',
             encoding: "utf-8",
         };
-        let err = generate(&input, &meta, "zz", &cols, &resolutions(), &out, None).unwrap_err();
+        let err = generate(
+            &input,
+            &meta,
+            "zz",
+            &out_cfg(cols),
+            &resolutions(),
+            &out,
+            None,
+        )
+        .unwrap_err();
         assert!(err.contains("zz"), "message : {err}");
+    }
+
+    #[test]
+    fn sortie_utf8_sans_bom() {
+        // encoding: utf-8 (sans BOM) — pour les consommateurs non-Excel qui
+        // traitent le BOM comme des octets parasites en tête de fichier.
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("in.csv");
+        std::fs::write(&input, "siren;nom\n0009:1;Société\n").unwrap();
+        let out = dir.path().join("out.csv");
+        let mut cfg = out_cfg(vec![ColumnSpec::Input { name: "nom".into() }]);
+        cfg.encoding = OutputEncoding::Utf8;
+        let meta = CsvMeta {
+            delimiter: b';',
+            encoding: "utf-8",
+        };
+        let written = generate(&input, &meta, "siren", &cfg, &resolutions(), &out, None).unwrap();
+        let raw = std::fs::read(&written).unwrap();
+        assert!(!raw.starts_with(b"\xEF\xBB\xBF"), "pas de BOM attendu");
+        assert!(String::from_utf8(raw).unwrap().contains("Société"));
+    }
+
+    #[test]
+    fn sortie_windows1252_reencode_et_remplace_les_non_mappables() {
+        // é → 0xE9 ; « → » (U+2192, absent de 1252) → « ? » (assumé, spec).
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("in.csv");
+        std::fs::write(&input, "siren;nom\n0009:1;Société→Fin\n").unwrap();
+        let out = dir.path().join("out.csv");
+        let mut cfg = out_cfg(vec![ColumnSpec::Input { name: "nom".into() }]);
+        cfg.encoding = OutputEncoding::Windows1252;
+        let meta = CsvMeta {
+            delimiter: b';',
+            encoding: "utf-8",
+        };
+        let written = generate(&input, &meta, "siren", &cfg, &resolutions(), &out, None).unwrap();
+        let raw = std::fs::read(&written).unwrap();
+        assert!(!raw.starts_with(b"\xEF\xBB\xBF"), "pas de BOM en 1252");
+        let pos = raw.windows(5).position(|w| w == b"Soci\xE9");
+        assert!(pos.is_some(), "é doit être l'octet 0xE9 : {raw:?}");
+        assert!(
+            raw.windows(5).any(|w| w == b"\xE9?Fin"),
+            "U+2192 doit devenir ? : {raw:?}"
+        );
+    }
+
+    #[test]
+    fn separateur_force_virgule_sur_entree_point_virgule() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("in.csv");
+        std::fs::write(&input, "siren;nom\n0009:1;ACME\n").unwrap();
+        let out = dir.path().join("out.csv");
+        let mut cfg = out_cfg(vec![
+            ColumnSpec::Input { name: "nom".into() },
+            ColumnSpec::Peppol {
+                field: PeppolField::Exists,
+            },
+        ]);
+        cfg.separator = OutputSeparator::Comma;
+        let meta = CsvMeta {
+            delimiter: b';',
+            encoding: "utf-8",
+        };
+        let written = generate(&input, &meta, "siren", &cfg, &resolutions(), &out, None).unwrap();
+        let content = std::fs::read_to_string(&written).unwrap();
+        let content = content.trim_start_matches('\u{feff}');
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines[0], "nom,exists");
+        assert_eq!(lines[1], "ACME,true");
     }
 
     #[test]

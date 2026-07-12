@@ -52,6 +52,20 @@
       <fieldset><legend>Fichier de sortie</legend>
         <p><label for="out-path">Chemin</label> <input id="out-path" size="50"> <button id="btn-out-browse">…</button></p>
         <label title="Ajoute la date/heure au nom du fichier pour ne jamais écraser une sortie précédente."><input type="checkbox" id="out-stamp" checked> Suffixer avec la date/heure</label>
+        <p><label for="out-encoding" title="Le défaut garantit les accents dans Excel FR. En Windows-1252, les caractères non représentables deviennent « ? ».">Encodage</label>
+           <select id="out-encoding" title="Le défaut garantit les accents dans Excel FR. En Windows-1252, les caractères non représentables deviennent « ? ».">
+             <option value="utf-8-bom">UTF-8 avec BOM (Excel FR)</option>
+             <option value="utf-8">UTF-8 sans BOM</option>
+             <option value="windows-1252">Windows-1252</option>
+           </select>
+           <label for="out-sep" title="Séparateur du fichier de sortie. « Identique à l'entrée » reprend celui détecté à l'étape 1.">Séparateur</label>
+           <select id="out-sep" title="Séparateur du fichier de sortie. « Identique à l'entrée » reprend celui détecté à l'étape 1.">
+             <option value="auto">Identique à l'entrée</option>
+             <option value=";">Point-virgule ;</option>
+             <option value=",">Virgule ,</option>
+             <option value="|">Pipe |</option>
+             <option value="&#9;">Tabulation</option>
+           </select></p>
       </fieldset>
       <fieldset><legend>API</legend>
         <p><label for="api-url" title="URL du service de résolution Peppol.">URL</label> <input id="api-url" size="40" value="https://peppol.gavini.cloud" title="URL du service de résolution Peppol.">

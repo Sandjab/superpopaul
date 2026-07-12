@@ -397,7 +397,7 @@ pub async fn generate_output(state: State<'_, AppState>) -> Result<String, Strin
             &input,
             &meta,
             &cfg.input.pid_column,
-            &cfg.output.columns,
+            &cfg.output,
             &resolutions,
             &out,
             stamp.as_deref(),

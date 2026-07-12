@@ -49,7 +49,11 @@ impl std::fmt::Debug for ProxyConfig {
 #[serde(deny_unknown_fields)]
 pub struct InputConfig {
     pub path: String,
+    /// Décoratifs depuis la spec sortie du 2026-07-12 : l'entrée est toujours
+    /// sniffée. Tolérés en lecture (vieux YAML), plus jamais écrits.
+    #[serde(default, skip_serializing)]
     pub delimiter: String,
+    #[serde(default, skip_serializing)]
     pub encoding: String,
     pub pid_column: String,
 }
@@ -59,7 +63,42 @@ pub struct InputConfig {
 pub struct OutputConfig {
     pub path: String,
     pub timestamp_suffix: bool,
+    /// Les défauts reproduisent le comportement historique (UTF-8+BOM,
+    /// séparateur de l'entrée) : un YAML sans ces champs sort à l'identique.
+    #[serde(default)]
+    pub encoding: OutputEncoding,
+    #[serde(default)]
+    pub separator: OutputSeparator,
     pub columns: Vec<ColumnSpec>,
+}
+
+/// Encodage du fichier de sortie. Le défaut BOM cible Excel FR par
+/// double-clic (accents cassés sans lui).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
+pub enum OutputEncoding {
+    #[default]
+    #[serde(rename = "utf-8-bom")]
+    Utf8Bom,
+    #[serde(rename = "utf-8")]
+    Utf8,
+    #[serde(rename = "windows-1252")]
+    Windows1252,
+}
+
+/// Séparateur du fichier de sortie. `Auto` = celui sniffé sur l'entrée.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
+pub enum OutputSeparator {
+    #[default]
+    #[serde(rename = "auto")]
+    Auto,
+    #[serde(rename = ";")]
+    Semicolon,
+    #[serde(rename = ",")]
+    Comma,
+    #[serde(rename = "|")]
+    Pipe,
+    #[serde(rename = "\t")]
+    Tab,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -86,9 +125,6 @@ impl Config {
         }
         if self.api.concurrency < 1 {
             return Err("concurrency doit être ≥ 1".into());
-        }
-        if self.input.delimiter.len() != 1 {
-            return Err("delimiter doit être un caractère unique".into());
         }
         Ok(())
     }
@@ -156,6 +192,8 @@ mod tests {
             output: OutputConfig {
                 path: "./clients_enrichis.csv".into(),
                 timestamp_suffix: true,
+                encoding: OutputEncoding::Utf8Bom,
+                separator: OutputSeparator::Auto,
                 columns: vec![
                     ColumnSpec::Input {
                         name: "siren".into(),
@@ -227,6 +265,49 @@ mod tests {
         assert!(!dbg.contains("\"jp\""));
         assert!(dbg.contains("***"));
         assert!(dbg.contains("http://proxy:3128")); // l'URL reste visible
+    }
+
+    /// YAML « ancien format » : input.delimiter/encoding présents,
+    /// output.encoding/separator absents (avant la spec sortie du 2026-07-12).
+    fn yaml_ancien() -> &'static str {
+        "version: 1\n\
+         api:\n  url: https://x\n  key: K\n  batch_size: 50\n  concurrency: 8\n  \
+         proxy: null\n  refresh_days: 30\n\
+         input:\n  path: ./a.csv\n  delimiter: \";\"\n  encoding: utf-8\n  pid_column: siren\n\
+         output:\n  path: ./b.csv\n  timestamp_suffix: true\n  columns:\n    \
+         - source: input\n      name: siren\n"
+    }
+
+    #[test]
+    fn yaml_ancien_charge_avec_defauts_de_sortie() {
+        // Compat : les champs input.delimiter/encoding (décoratifs) restent
+        // tolérés en lecture, et l'absence d'encoding/separator de sortie
+        // donne les défauts = comportement historique (UTF-8+BOM, séparateur
+        // de l'entrée). Un vieux YAML produit donc exactement la même sortie.
+        let cfg = from_yaml(yaml_ancien()).unwrap();
+        assert_eq!(cfg.output.encoding, OutputEncoding::Utf8Bom);
+        assert_eq!(cfg.output.separator, OutputSeparator::Auto);
+    }
+
+    #[test]
+    fn delimiter_encoding_d_entree_plus_jamais_ecrits() {
+        // Les champs décoratifs ne doivent plus apparaître dans les nouveaux
+        // YAML : seul output porte désormais un encoding (et un separator).
+        let yaml = to_yaml(&config_exemple()).unwrap();
+        let v: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
+        assert!(v["input"].get("delimiter").is_none());
+        assert!(v["input"].get("encoding").is_none());
+        assert_eq!(v["output"]["encoding"].as_str(), Some("utf-8-bom"));
+        assert_eq!(v["output"]["separator"].as_str(), Some("auto"));
+    }
+
+    #[test]
+    fn encodage_de_sortie_inconnu_rejete() {
+        // utf-16 n'est pas supporté : serde doit refuser, pas avaler.
+        let bad = to_yaml(&config_exemple())
+            .unwrap()
+            .replace("encoding: utf-8-bom", "encoding: utf-16");
+        assert!(from_yaml(&bad).is_err());
     }
 
     #[test]

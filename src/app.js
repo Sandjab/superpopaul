@@ -28,7 +28,8 @@ const state = {
     api: { url: "https://peppol.gavini.cloud", key: "", batch_size: 50,
            concurrency: 8, proxy: null, refresh_days: 30 },
     input: { path: "", delimiter: ";", encoding: "utf-8", pid_column: "" },
-    output: { path: "", timestamp_suffix: true, columns: [] },
+    output: { path: "", timestamp_suffix: true, encoding: "utf-8-bom",
+              separator: "auto", columns: [] },
   },
 };
 
@@ -184,6 +185,8 @@ function syncOutputForm() {
   const c = state.config;
   c.output.path = $("out-path").value.trim();
   c.output.timestamp_suffix = $("out-stamp").checked;
+  c.output.encoding = $("out-encoding").value;
+  c.output.separator = $("out-sep").value;
   c.api.url = $("api-url").value.trim();
   c.api.key = $("api-key").value.trim();
   const proxyUrl = $("proxy-url").value.trim();
@@ -196,6 +199,8 @@ function fillOutputForm() {
   const c = state.config;
   $("out-path").value = c.output.path;
   $("out-stamp").checked = c.output.timestamp_suffix;
+  $("out-encoding").value = c.output.encoding;
+  $("out-sep").value = c.output.separator;
   $("api-url").value = c.api.url;
   $("api-key").value = c.api.key;
   $("proxy-url").value = c.api.proxy ? c.api.proxy.url : "";
