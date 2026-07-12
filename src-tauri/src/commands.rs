@@ -135,14 +135,19 @@ pub fn set_proxy_creds(
 #[tauri::command]
 pub fn update_api_key(state: State<'_, AppState>, key: String) -> Result<(), String> {
     if let Some((_, cfg)) = state.config.lock().unwrap().as_mut() {
-        cfg.api.key = key.clone();
+        cfg.api.key = key;
     }
+    // Un client entier neuf (plutôt que la seule clé) : le canal watch porte
+    // ainsi toujours l'état complet, ce qui ferme un entrelacement
+    // last-value-wins avec set_proxy_creds (même discipline de verrous : la
+    // config est libérée avant de reconstruire le client).
     if let Some(h) = state.run.lock().unwrap().as_ref() {
-        // update_key lève déjà la suspension système (auth_api/auth_proxy) et
-        // relance les workers. On ne touche PAS à set_paused ici : la pause
-        // utilisateur (bouton Pause) appartient à l'utilisateur, une nouvelle
-        // clé API ne doit pas la lever à sa place.
-        h.update_key(&key);
+        let client = state.client()?;
+        // update_client lève déjà la suspension système (auth_api/auth_proxy)
+        // et relance les workers. On ne touche PAS à set_paused ici : la
+        // pause utilisateur (bouton Pause) appartient à l'utilisateur, une
+        // nouvelle clé API ne doit pas la lever à sa place.
+        h.update_client(client);
     }
     Ok(())
 }
