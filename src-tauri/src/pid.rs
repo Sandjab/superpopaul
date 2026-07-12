@@ -37,7 +37,10 @@ mod tests {
 
     #[test]
     fn canonical_ajoute_le_scheme_par_defaut() {
-        assert_eq!(canonical("0009:552100554"), "iso6523-actorid-upis::0009:552100554");
+        assert_eq!(
+            canonical("0009:552100554"),
+            "iso6523-actorid-upis::0009:552100554"
+        );
     }
 
     #[test]
@@ -55,8 +58,14 @@ mod tests {
 
     #[test]
     fn unique_canonical_deduplique_en_gardant_l_ordre() {
-        let vals = ["0009:1", "iso6523-actorid-upis::0009:1", "", "0009:2", "0009:1"]
-            .map(String::from);
+        let vals = [
+            "0009:1",
+            "iso6523-actorid-upis::0009:1",
+            "",
+            "0009:2",
+            "0009:1",
+        ]
+        .map(String::from);
         assert_eq!(
             unique_canonical(vals),
             vec![
