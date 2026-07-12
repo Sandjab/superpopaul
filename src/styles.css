@@ -41,7 +41,8 @@ header {
   display: flex; align-items: center; gap: 16px;
   padding: 10px 16px; border-bottom: 1px solid var(--border);
 }
-.logo { font-weight: 700; }
+.logo { font-weight: 700; display: flex; align-items: center; gap: 7px; }
+.logo img { height: 22px; }
 #stepper { flex: 1; display: flex; gap: 6px; justify-content: center; }
 .step { border-radius: 14px; }
 .step.active { background: var(--blue); color: #fff; border-color: var(--blue); }
