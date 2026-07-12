@@ -508,6 +508,66 @@ impl Engine {
     }
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CalibrationReport {
+    pub best_concurrency: u32,
+    pub addr_per_s: f64,
+    pub rate_limited: bool,
+}
+
+/// Salves à concurrence croissante (1, 2, 4, … ≤ max) : mesure le débit de
+/// chaque palier, s'arrête au premier 429 ou quand le gain devient < 15 %.
+pub async fn calibrate(
+    client: &ApiClient,
+    sample: &[String],
+    batch_size: usize,
+    max_concurrency: u32,
+) -> CalibrationReport {
+    let mut best = (1u32, 0.0f64);
+    let mut rate_limited = false;
+    let mut level = 1u32;
+    while level <= max_concurrency {
+        let t0 = std::time::Instant::now();
+        let mut handles = Vec::new();
+        for i in 0..level {
+            let client = client.clone();
+            let chunk: Vec<String> = sample
+                .iter()
+                .cycle()
+                .skip((i as usize * batch_size) % sample.len().max(1))
+                .take(batch_size)
+                .cloned()
+                .collect();
+            handles.push(tokio::spawn(
+                async move { client.resolve_batch(&chunk).await },
+            ));
+        }
+        let mut ok = 0usize;
+        for h in handles {
+            match h.await {
+                Ok(Ok((items, _))) => ok += items.len(),
+                Ok(Err(ApiError::RateLimited { .. })) => rate_limited = true,
+                _ => {}
+            }
+        }
+        let throughput = ok as f64 / t0.elapsed().as_secs_f64().max(0.001);
+        if throughput > best.1 * 1.15 {
+            best = (level, throughput);
+        } else {
+            break; // le palier n'apporte plus assez : on garde le précédent
+        }
+        if rate_limited {
+            break;
+        }
+        level *= 2;
+    }
+    CalibrationReport {
+        best_concurrency: best.0,
+        addr_per_s: best.1,
+        rate_limited,
+    }
+}
+
 #[cfg(test)]
 mod tests_engine {
     use super::*;
@@ -667,5 +727,35 @@ mod tests_engine {
         let snap = handle.telemetry.snapshot();
         let m = store.lock().unwrap().load_map(&pids(50)).unwrap();
         assert_eq!(m.len() as u64, snap.done);
+    }
+}
+
+#[cfg(test)]
+mod tests_calibrate {
+    use super::*;
+    use crate::api::ApiClient;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn calibrate_renvoie_un_debit_et_une_concurrence() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/resolve/batch"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_delay(std::time::Duration::from_millis(50))
+                    .set_body_json(serde_json::json!({"results": [
+                        {"participant_id": "a::1", "exists": true}
+                    ]})),
+            )
+            .mount(&server)
+            .await;
+        let c = ApiClient::new(&server.uri(), "K", None, None).unwrap();
+        let sample: Vec<String> = (0..8).map(|i| format!("0009:{i}")).collect();
+        let rep = calibrate(&c, &sample, 1, 8).await;
+        assert!(rep.best_concurrency >= 1);
+        assert!(rep.addr_per_s > 0.0);
+        assert!(!rep.rate_limited);
     }
 }
