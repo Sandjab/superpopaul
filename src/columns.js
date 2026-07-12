@@ -24,7 +24,10 @@ function makeHeader(c, i) {
       renderOutPreview();
     },
   }, "✕");
-  const th = h("th", { class: c.source, draggable: "true" }, `⠿ ${colLabel(c)} `, rm);
+  const attrs = { class: c.source, draggable: "true" };
+  if (c.source === "peppol")
+    attrs.title = "Champ calculé par l'API Peppol — les valeurs affichées sont un exemple.";
+  const th = h("th", attrs, `⠿ ${colLabel(c)} `, rm);
   // L'index source voyage dans dataTransfer : le drop ignore ainsi les drags
   // étrangers (sélection de texte, fichier) qui ne portent pas d'index.
   th.addEventListener("dragstart", (e) =>

@@ -17,8 +17,8 @@
       <button data-step="run"     class="step" disabled>▶ Run</button>
     </nav>
     <span class="cfg-btns">
-      <button id="btn-load-cfg">Charger…</button>
-      <button id="btn-save-cfg">Sauvegarder…</button>
+      <button id="btn-load-cfg" title="Charger une configuration YAML — reprend directement à l'étape Run.">Charger…</button>
+      <button id="btn-save-cfg" title="Sauvegarder la configuration en YAML. Attention : la clé API y est stockée en clair.">Sauvegarder…</button>
     </span>
   </header>
 
@@ -32,7 +32,7 @@
       <div id="file-info" class="hidden">
         <p id="file-meta" class="muted"></p>
         <table id="preview-table"></table>
-        <p><label for="pid-column">Colonne des adressages :</label> <select id="pid-column"></select>
+        <p><label for="pid-column" title="Colonne contenant les identifiants Peppol à résoudre (ex. SIREN/SIRET).">Colonne des adressages :</label> <select id="pid-column" title="Colonne contenant les identifiants Peppol à résoudre (ex. SIREN/SIRET)."></select>
            <span id="pid-hint" class="muted"></span></p>
       </div>
     </section>
@@ -41,7 +41,7 @@
     <section id="step-columns" class="panel hidden">
       <h2>Colonnes du fichier de sortie</h2>
       <p class="muted">Glisse les en-têtes pour réordonner, ✕ pour exclure. L'aperçu montre le résultat final.</p>
-      <div><button id="btn-add-col">+ Ajouter une colonne ⚡</button>
+      <div><button id="btn-add-col" title="Ajouter un champ Peppol ou réintégrer une colonne exclue.">+ Ajouter une colonne ⚡</button>
            <span id="add-col-menu" class="hidden"></span></div>
       <table id="out-preview"></table>
     </section>
@@ -51,18 +51,18 @@
       <h2>Sortie &amp; API</h2>
       <fieldset><legend>Fichier de sortie</legend>
         <p><label for="out-path">Chemin</label> <input id="out-path" size="50"> <button id="btn-out-browse">…</button></p>
-        <label><input type="checkbox" id="out-stamp" checked> Suffixer avec la date/heure</label>
+        <label title="Ajoute la date/heure au nom du fichier pour ne jamais écraser une sortie précédente."><input type="checkbox" id="out-stamp" checked> Suffixer avec la date/heure</label>
       </fieldset>
       <fieldset><legend>API</legend>
-        <p><label for="api-url">URL</label> <input id="api-url" size="40" value="https://peppol.gavini.cloud">
-           <label for="api-key">Clé</label> <input id="api-key" type="password" size="26">
-           <button id="btn-test-api">Tester</button> <span id="api-test-result"></span></p>
+        <p><label for="api-url" title="URL du service de résolution Peppol.">URL</label> <input id="api-url" size="40" value="https://peppol.gavini.cloud" title="URL du service de résolution Peppol.">
+           <label for="api-key" title="Clé d'authentification du service — bouton Tester pour la vérifier.">Clé</label> <input id="api-key" type="password" size="26" title="Clé d'authentification du service — bouton Tester pour la vérifier.">
+           <button id="btn-test-api" title="Envoie une requête de test pour vérifier l'URL, la clé et le proxy.">Tester</button> <span id="api-test-result"></span></p>
         <p><label for="proxy-url">Proxy (optionnel)</label> <input id="proxy-url" size="30" placeholder="http://proxy:3128">
            <span class="muted">identifiants demandés au lancement, jamais enregistrés</span></p>
-        <p><label for="api-conc">Concurrence</label> <input id="api-conc" type="number" value="8" min="1" max="256">
-           <label for="api-batch">Taille de paquet</label> <input id="api-batch" type="number" value="50" min="1" max="50">
-           <label for="api-refresh">Ancienneté refresh (jours)</label> <input id="api-refresh" type="number" value="30" min="1">
-           <button id="btn-calibrate">Calibrer</button> <span id="calibrate-result"></span></p>
+        <p><label for="api-conc" title="Nombre de requêtes simultanées vers l'API. « Calibrer » trouve la valeur optimale.">Concurrence</label> <input id="api-conc" type="number" value="8" min="1" max="256" title="Nombre de requêtes simultanées vers l'API. « Calibrer » trouve la valeur optimale.">
+           <label for="api-batch" title="Nombre d'adressages envoyés par requête API (50 max).">Taille de paquet</label> <input id="api-batch" type="number" value="50" min="1" max="50" title="Nombre d'adressages envoyés par requête API (50 max).">
+           <label for="api-refresh" title="Âge au-delà duquel un résultat en base est considéré périmé (utilisé par le mode Refresh).">Ancienneté refresh (jours)</label> <input id="api-refresh" type="number" value="30" min="1" title="Âge au-delà duquel un résultat en base est considéré périmé (utilisé par le mode Refresh).">
+           <button id="btn-calibrate" title="Mesure le débit à plusieurs niveaux de concurrence et applique le meilleur.">Calibrer</button> <span id="calibrate-result"></span></p>
       </fieldset>
     </section>
 
@@ -71,7 +71,7 @@
       <div id="run-header">
         <span id="run-title" class="muted"></span>
         <span>
-          <select id="run-mode">
+          <select id="run-mode" title="Full : tout re-résoudre · Reprise : seulement les manquants · Refresh : manquants + périmés.">
             <option value="full">Full — tout résoudre</option>
             <option value="reprise">Reprise — seulement les manquants</option>
             <option value="reprise-retry">Reprise + re-tenter les échecs</option>
@@ -85,17 +85,17 @@
       <div id="cockpit" class="hidden">
         <div id="ring-block">
           <div id="ring"><div id="ring-center"><b id="ring-pct">0%</b><span id="ring-abs" class="muted"></span></div></div>
-          <p>ETA <b id="eta">—</b></p>
+          <p title="Temps restant estimé d'après le débit courant.">ETA <b id="eta">—</b></p>
         </div>
         <div id="tiles">
-          <div class="tile">🟢 Dans Peppol<br><b id="t-exists">—</b></div>
-          <div class="tile">🇫🇷 CTC-FR<br><b id="t-ctc">—</b></div>
-          <div class="tile">Débit<br><b id="t-rate">—</b></div>
+          <div class="tile" title="Part des adressages résolus présents dans l'annuaire Peppol.">🟢 Dans Peppol<br><b id="t-exists">—</b></div>
+          <div class="tile" title="Part des adressages éligibles à la facturation électronique française (extension CTC-FR).">🇫🇷 CTC-FR<br><b id="t-ctc">—</b></div>
+          <div class="tile" title="req/s : requêtes API · adr/s : adressages résolus par seconde.">Débit<br><b id="t-rate">—</b></div>
           <div class="tile">Concurrence / échecs<br><b id="t-misc">—</b></div>
         </div>
         <div class="wide">
-          <div class="tile">Codes HTTP<div id="http-bars"></div><div id="http-legend" class="hbar-legend"></div></div>
-          <div class="tile">Latence (ms)<div id="latency" class="hbar-legend"></div></div>
+          <div class="tile" title="Répartition des réponses API — 200 OK, 429 rate-limit, 0 erreur réseau.">Codes HTTP<div id="http-bars"></div><div id="http-legend" class="hbar-legend"></div></div>
+          <div class="tile" title="Temps de réponse API en millisecondes (percentiles).">Latence (ms)<div id="latency" class="hbar-legend"></div></div>
         </div>
       </div>
       <p id="run-result" class="hidden"></p>
