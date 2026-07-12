@@ -176,6 +176,11 @@ pub struct RunHandle {
     /// Pause système (suspension auth ou breaker ouvert).
     sys_paused: Arc<AtomicBool>,
     suspended: Arc<AtomicBool>,
+    /// Génération des timers de reprise : incrémentée à chaque armement de
+    /// timer et par resume_system. Un timer capture sa génération à
+    /// l'armement et reste muet au réveil si elle n'est plus la dernière
+    /// (reprise manuelle ou nouvelle suspension entre-temps).
+    resume_gen: Arc<AtomicU32>,
     stop: Arc<AtomicBool>,
     update_tx: watch::Sender<Option<ClientUpdate>>,
     pub telemetry: Arc<Telemetry>,
@@ -212,9 +217,15 @@ impl RunHandle {
     }
     /// Reprise anticipée d'une suspension système (bouton « Réessayer
     /// maintenant » sur la bannière server_down) : lève sys_paused et
-    /// suspended, exactement comme le fait le timer de backoff automatique.
+    /// suspended. Diffère du timer de backoff sur deux points : ne vérifie
+    /// pas `stop` (inutile — les workers re-testent le flag en tête de
+    /// boucle) et n'émet pas Resumed (le front masque la bannière lui-même).
+    /// Incrémente la génération pour invalider le timer encore armé, sinon
+    /// son réveil lèverait prématurément une suspension ULTÉRIEURE et
+    /// émettrait un Resumed parasite qui masquerait sa bannière.
     /// Ne touche pas à la pause utilisateur.
     pub fn resume_system(&self) {
+        self.resume_gen.fetch_add(1, Ordering::Relaxed);
         self.sys_paused.store(false, Ordering::Relaxed);
         self.suspended.store(false, Ordering::Relaxed);
     }
@@ -295,6 +306,7 @@ impl Engine {
         let aimd = Arc::new(Aimd::new(params.concurrency));
         let breaker = Arc::new(Mutex::new(Breaker::new(5)));
         let suspended = Arc::new(AtomicBool::new(false));
+        let resume_gen = Arc::new(AtomicU32::new(0));
         let (update_tx, update_rx) = watch::channel(None::<ClientUpdate>);
         // La clé/le client initial vit dans `client` ; le canal ne sert
         // qu'aux mises à jour en cours de run (401 → nouvelle clé, 407 →
@@ -320,6 +332,7 @@ impl Engine {
                 aimd,
                 breaker,
                 suspended,
+                resume_gen,
                 tx,
                 mut update_rx,
             ) = (
@@ -333,6 +346,7 @@ impl Engine {
                 aimd.clone(),
                 breaker.clone(),
                 suspended.clone(),
+                resume_gen.clone(),
                 tx.clone(),
                 update_rx.clone(),
             );
@@ -525,15 +539,30 @@ impl Engine {
                                                 })
                                                 .await;
                                             // Re-test automatique après le
-                                            // backoff.
+                                            // backoff. Le timer capture sa
+                                            // génération : s'il n'est plus le
+                                            // dernier au réveil (resume_system
+                                            // manuel, ou nouveau timer armé
+                                            // par une suspension ultérieure),
+                                            // il reste muet — sinon il
+                                            // écourterait le backoff suivant
+                                            // et son Resumed masquerait la
+                                            // bannière en cours.
+                                            let gen = resume_gen
+                                                .fetch_add(1, Ordering::Relaxed)
+                                                + 1;
                                             let sys_paused2 = sys_paused.clone();
                                             let suspended2 = suspended.clone();
+                                            let resume_gen2 = resume_gen.clone();
                                             let stop2 = stop.clone();
                                             let tx2 = tx.clone();
                                             tokio::spawn(async move {
                                                 tokio::time::sleep(d).await;
                                                 if stop2.load(Ordering::Relaxed) {
                                                     return; // run stoppé entre-temps
+                                                }
+                                                if resume_gen2.load(Ordering::Relaxed) != gen {
+                                                    return; // timer périmé
                                                 }
                                                 sys_paused2.store(false, Ordering::Relaxed);
                                                 suspended2.store(false, Ordering::Relaxed);
@@ -593,6 +622,7 @@ impl Engine {
             user_paused,
             sys_paused,
             suspended,
+            resume_gen,
             stop,
             update_tx,
             telemetry,
@@ -908,6 +938,81 @@ mod tests_engine {
             "une rafale d'échecs ne doit émettre qu'un seul Suspended{{server_down}}"
         );
         assert_eq!(done, 50);
+    }
+
+    /// Reprise anticipée : resume_system (bouton « Réessayer maintenant »)
+    /// relance le run sans attendre le backoff de 30 s, et le timer devenu
+    /// périmé doit rester muet — pas de Resumed parasite qui masquerait la
+    /// bannière d'une suspension ultérieure (compteur de génération).
+    /// Concurrence 1 pour un scénario déterministe : au moment du Suspended
+    /// (5e échec consécutif), plus aucune requête n'est en vol, donc aucun
+    /// échec tardif ne peut ré-ouvrir le breaker après la reprise.
+    #[tokio::test(start_paused = true)]
+    async fn resume_system_reprend_avant_le_backoff() {
+        let server = MockServer::start().await;
+        // 5 × 503 (= seuil du breaker) puis tout passe.
+        Mock::given(method("POST"))
+            .and(path("/resolve/batch"))
+            .respond_with(ResponseTemplate::new(503))
+            .up_to_n_times(5)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/resolve/batch"))
+            .respond_with(EchoResolver)
+            .mount(&server)
+            .await;
+
+        let store = Arc::new(Mutex::new(Store::open_in_memory().unwrap()));
+        let client = ApiClient::new(&server.uri(), "K", None, None).unwrap();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        let handle = Engine::start(
+            client,
+            EngineParams {
+                batch_size: 5,
+                concurrency: 1,
+            },
+            pids(10),
+            store,
+            tx,
+        );
+        loop {
+            match tokio::time::timeout(Duration::from_secs(60), rx.recv()).await {
+                Ok(Some(EngineEvent::Suspended { reason, .. })) => {
+                    assert_eq!(reason, "server_down");
+                    break;
+                }
+                Ok(Some(_)) => continue,
+                other => panic!("Suspended attendu, obtenu {other:?}"),
+            }
+        }
+        handle.resume_system();
+        let t0 = tokio::time::Instant::now();
+        let done = loop {
+            match tokio::time::timeout(Duration::from_secs(60), rx.recv()).await {
+                Ok(Some(EngineEvent::Resumed)) => {
+                    panic!("Resumed parasite : la reprise doit venir de resume_system, pas du timer")
+                }
+                Ok(Some(EngineEvent::Finished { done, .. })) => break done,
+                Ok(Some(_)) => continue,
+                other => panic!("Finished attendu, obtenu {other:?}"),
+            }
+        };
+        assert_eq!(done, 10);
+        assert!(
+            t0.elapsed() < Duration::from_secs(30),
+            "le run doit aboutir avant l'expiration du backoff (reprise anticipée)"
+        );
+        // Laisse le backoff (30 s virtuelles) s'écouler : le timer périmé ne
+        // doit émettre aucun Resumed après coup.
+        tokio::time::sleep(Duration::from_secs(40)).await;
+        loop {
+            match rx.try_recv() {
+                Ok(EngineEvent::Resumed) => panic!("Resumed parasite du timer périmé"),
+                Ok(_) => continue,
+                Err(_) => break,
+            }
+        }
     }
 
     /// Stopper un run suspendu (401 permanent) doit émettre Finished
