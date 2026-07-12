@@ -1,5 +1,6 @@
 pub mod config;
 pub mod pid;
+pub mod store;
 
 pub fn run() {
     tauri::Builder::default()
