@@ -26,6 +26,7 @@ pub fn run() {
             commands::set_config,
             commands::load_config,
             commands::save_config,
+            commands::resolved_input_path,
             commands::set_proxy_creds,
             commands::update_api_key,
             commands::test_api,

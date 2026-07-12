@@ -315,3 +315,35 @@ function ensureProxyCreds(force = false) {
   });
   return pendingCreds;
 }
+
+// --- Config YAML : sauvegarde / chargement -------------------------------------
+$("btn-save-cfg").addEventListener("click", async () => {
+  if ($("out-path").value) syncOutputForm();
+  const f = await save({ filters: [{ name: "YAML", extensions: ["yaml", "yml"] }] });
+  if (!f) return;
+  try {
+    await invoke("save_config", { path: f, cfg: state.config });
+    banner("warn", "⚠️ Config enregistrée — la clé API y est stockée en clair. " +
+      "Ne partage ce fichier qu'avec des collègues de confiance.");
+  } catch (e) {
+    banner("error", `${e}`);
+  }
+});
+
+$("btn-load-cfg").addEventListener("click", async () => {
+  const f = await open({ multiple: false, filters: [{ name: "YAML", extensions: ["yaml", "yml"] }] });
+  if (!f) return;
+  try {
+    state.config = await invoke("load_config", { path: f });
+    fillOutputForm();
+    // Recharge l'aperçu du fichier d'entrée SANS écraser le mapping du YAML.
+    const path = await invoke("resolved_input_path");
+    state.preview = await invoke("preview_csv", { path });
+    state.inputPath = path;
+    renderFilePanel();
+    hideBanner();
+    showStep(3); // directement à l'étape Run (spec) — analyze_input y détecte la reprise
+  } catch (e) {
+    banner("error", `Chargement impossible : ${e}`);
+  }
+});

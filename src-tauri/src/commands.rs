@@ -115,6 +115,13 @@ pub fn save_config(state: State<'_, AppState>, path: String, cfg: Config) -> Res
     Ok(())
 }
 
+/// Chemin absolu du fichier d'entrée (résolu relativement au YAML chargé) —
+/// l'UI ne duplique pas la logique de résolution de chemins.
+#[tauri::command]
+pub fn resolved_input_path(state: State<'_, AppState>) -> Result<String, String> {
+    Ok(state.input_path()?.display().to_string())
+}
+
 #[tauri::command]
 pub fn set_proxy_creds(
     state: State<'_, AppState>,
