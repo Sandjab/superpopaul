@@ -207,3 +207,67 @@ window.addEventListener("DOMContentLoaded", () => {
   fillOutputForm();
   setTimeout(() => $("splash").classList.add("fade"), 700);
 });
+
+// --- Étape 3 : test API et calibrage -----------------------------------------
+$("btn-test-api").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  btn.disabled = true; // garde de ré-entrance pendant l'await
+  syncOutputForm();
+  const out = $("api-test-result");
+  out.textContent = "test en cours…";
+  try {
+    await invoke("set_config", { cfg: state.config });
+    await ensureProxyCreds();
+    const stats = await invoke("test_api");
+    out.textContent = `✅ clé valide (${stats.latency_ms} ms)`;
+  } catch (e) {
+    out.textContent = `❌ ${e}`;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$("btn-calibrate").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  btn.disabled = true; // garde de ré-entrance pendant l'await
+  syncOutputForm();
+  const out = $("calibrate-result");
+  out.textContent = "calibrage en cours…";
+  try {
+    await invoke("set_config", { cfg: state.config });
+    await ensureProxyCreds();
+    const r = await invoke("calibrate_api");
+    $("api-conc").value = r.best_concurrency;
+    state.config.api.concurrency = r.best_concurrency;
+    out.textContent = `→ ${r.best_concurrency} sessions, ~${Math.round(r.addr_per_s)} adr/s` +
+      (r.rate_limited ? " (clé rate-limitée)" : "");
+  } catch (e) {
+    out.textContent = `❌ ${e}`;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+/** Si un proxy est configuré et les identifiants pas encore saisis dans cette
+ *  session, les demander (mémoire seulement — jamais persistés). */
+let proxyCredsGiven = false;
+async function ensureProxyCreds(force = false) {
+  if (!state.config.api.proxy || (proxyCredsGiven && !force)) return;
+  return new Promise((resolve) => {
+    const user = h("input", { placeholder: "login" });
+    const pass = h("input", { type: "password", placeholder: "mot de passe" });
+    modal(
+      h("h3", {}, "Identifiants proxy"),
+      h("p", { class: "muted" }, "Conservés en mémoire uniquement, jamais enregistrés."),
+      user, pass,
+      h("button", {
+        onclick: async () => {
+          await invoke("set_proxy_creds", { username: user.value, password: pass.value });
+          proxyCredsGiven = true;
+          closeModal();
+          resolve();
+        },
+      }, "Valider"),
+    );
+  });
+}
