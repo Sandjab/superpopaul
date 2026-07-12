@@ -548,9 +548,8 @@ impl Engine {
                                             // écourterait le backoff suivant
                                             // et son Resumed masquerait la
                                             // bannière en cours.
-                                            let gen = resume_gen
-                                                .fetch_add(1, Ordering::Relaxed)
-                                                + 1;
+                                            let gen =
+                                                resume_gen.fetch_add(1, Ordering::Relaxed) + 1;
                                             let sys_paused2 = sys_paused.clone();
                                             let suspended2 = suspended.clone();
                                             let resume_gen2 = resume_gen.clone();
@@ -991,7 +990,9 @@ mod tests_engine {
         let done = loop {
             match tokio::time::timeout(Duration::from_secs(60), rx.recv()).await {
                 Ok(Some(EngineEvent::Resumed)) => {
-                    panic!("Resumed parasite : la reprise doit venir de resume_system, pas du timer")
+                    panic!(
+                        "Resumed parasite : la reprise doit venir de resume_system, pas du timer"
+                    )
                 }
                 Ok(Some(EngineEvent::Finished { done, .. })) => break done,
                 Ok(Some(_)) => continue,
