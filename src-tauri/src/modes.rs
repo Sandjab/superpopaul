@@ -1,11 +1,11 @@
 use crate::store::Store;
 use serde::Deserialize;
 
-// NB : pas de deny_unknown_fields ici — inopérant sur les enums à tag
-// interne (limitation serde) ; les champs inconnus venant du front sont
-// ignorés.
+// NB : deny_unknown_fields protège les variantes struct (Reprise/Refresh)
+// contre les champs inconnus du front ; les variantes unit (Full) les
+// ignorent toujours (limitation serde).
 #[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "mode", rename_all = "lowercase")]
+#[serde(tag = "mode", rename_all = "lowercase", deny_unknown_fields)]
 pub enum RunMode {
     Full,
     Reprise { retry_failures: bool },
@@ -133,5 +133,21 @@ mod tests {
             compute_todo(&mode, &pids, &s, now).unwrap(),
             Vec::<String>::new()
         );
+    }
+
+    #[test]
+    fn champ_inconnu_rejete_sur_variante_struct() {
+        // deny_unknown_fields agit sur les variantes struct…
+        let r = serde_json::from_str::<RunMode>(
+            r#"{"mode":"reprise","retry_failures":true,"typo_field":1}"#,
+        );
+        assert!(
+            r.is_err(),
+            "champ inconnu accepté sur variante struct: {r:?}"
+        );
+        // …mais PAS sur les variantes unit (caveat serde) : Full ignore
+        // les champs parasites.
+        let r = serde_json::from_str::<RunMode>(r#"{"mode":"full","stray":1}"#);
+        assert!(matches!(r, Ok(RunMode::Full)), "attendu Ok(Full): {r:?}");
     }
 }
