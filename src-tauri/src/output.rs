@@ -5,7 +5,7 @@ use crate::store::Resolution;
 use encoding_rs_io::DecodeReaderBytesBuilder;
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::Read;
+use std::io::{BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 
 fn fmt_bool(b: Option<bool>) -> &'static str {
@@ -43,6 +43,11 @@ pub fn with_stamp(path: &Path, stamp: Option<&str>) -> PathBuf {
 
 /// Écrit le CSV de sortie : une ligne par ligne d'entrée, colonnes selon le
 /// mapping, infos Peppol lues dans `resolutions` (la base). UTF-8 en sortie.
+///
+/// Écriture atomique (comme `config::save`) : tout passe par `<final>.tmp`
+/// dans le même répertoire, renommé vers la cible seulement après le flush —
+/// un disque plein ou une permission refusée en cours de route ne laisse
+/// jamais un CSV d'apparence valide mais tronqué.
 pub fn generate(
     input_path: &Path,
     meta: &CsvMeta,
@@ -52,6 +57,38 @@ pub fn generate(
     out_path: &Path,
     stamp: Option<&str>,
 ) -> Result<PathBuf, String> {
+    let final_path = with_stamp(out_path, stamp);
+    let mut tmp_os = final_path.clone().into_os_string();
+    tmp_os.push(".tmp");
+    let tmp_path = PathBuf::from(tmp_os);
+
+    if let Err(e) = write_output(
+        input_path,
+        meta,
+        pid_column,
+        columns,
+        resolutions,
+        &tmp_path,
+    ) {
+        let _ = std::fs::remove_file(&tmp_path); // nettoyage best-effort
+        return Err(e);
+    }
+    std::fs::rename(&tmp_path, &final_path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp_path);
+        format!("renommage {tmp_path:?} → {final_path:?} : {e}")
+    })?;
+    Ok(final_path)
+}
+
+/// Lit l'entrée et écrit toutes les lignes dans `tmp_path` (flush inclus).
+fn write_output(
+    input_path: &Path,
+    meta: &CsvMeta,
+    pid_column: &str,
+    columns: &[ColumnSpec],
+    resolutions: &HashMap<String, Resolution>,
+    tmp_path: &Path,
+) -> Result<(), String> {
     let f = File::open(input_path).map_err(|e| format!("ouverture {input_path:?} : {e}"))?;
     let enc = if meta.encoding == "utf-8" {
         encoding_rs::UTF_8
@@ -87,46 +124,58 @@ pub fn generate(
         }
     }
 
-    let final_path = with_stamp(out_path, stamp);
+    let out = File::create(tmp_path).map_err(|e| format!("écriture {tmp_path:?} : {e}"))?;
+    let mut out = BufWriter::new(out);
+    // BOM UTF-8 : le public cible ouvre le CSV par double-clic dans Excel FR,
+    // qui casse les accents sans lui.
+    out.write_all(b"\xEF\xBB\xBF")
+        .map_err(|e| format!("écriture {tmp_path:?} : {e}"))?;
     let mut wtr = csv::WriterBuilder::new()
         .delimiter(meta.delimiter)
-        .from_path(&final_path)
-        .map_err(|e| format!("écriture {final_path:?} : {e}"))?;
+        .from_writer(out);
     // Entête de sortie.
-    let out_headers: Vec<String> = columns
+    let out_headers: Vec<&str> = columns
         .iter()
         .map(|c| match c {
-            ColumnSpec::Input { name } => name.clone(),
-            ColumnSpec::Peppol { field } => field_name(*field).to_string(),
+            ColumnSpec::Input { name } => name.as_str(),
+            ColumnSpec::Peppol { field } => field_name(*field),
         })
         .collect();
-    wtr.write_record(&out_headers).map_err(|e| e.to_string())?;
+    wtr.write_record(&out_headers)
+        .map_err(|e| format!("écriture {tmp_path:?} ligne 1 : {e}"))?;
 
-    for rec in rdr.records() {
-        let rec = rec.map_err(|e| e.to_string())?;
+    // Numérotation : l'entête est la ligne 1, le premier enregistrement la 2.
+    for (line, rec) in (2u64..).zip(rdr.records()) {
+        let rec = rec.map_err(|e| format!("lecture {input_path:?} ligne {line} : {e}"))?;
         let raw_pid = rec.get(pid_idx).unwrap_or("");
         let res = resolutions.get(&canonical(raw_pid));
-        let row: Vec<String> = columns
+        // Zéro allocation par cellule : la ligne est un Vec<&str>.
+        let row: Vec<&str> = columns
             .iter()
             .zip(&col_idx)
             .map(|(c, idx)| match c {
-                ColumnSpec::Input { .. } => rec.get(idx.unwrap()).unwrap_or("").to_string(),
+                ColumnSpec::Input { .. } => rec.get(idx.unwrap()).unwrap_or(""),
                 ColumnSpec::Peppol { field } => match res {
-                    None => String::new(),
+                    None => "",
                     Some(r) => match field {
-                        PeppolField::Exists => fmt_bool(r.exists_in_peppol).to_string(),
-                        PeppolField::PaCode => r.pa_code.clone().unwrap_or_default(),
-                        PeppolField::PaName => r.pa_name.clone().unwrap_or_default(),
-                        PeppolField::PaCountry => r.pa_country.clone().unwrap_or_default(),
-                        PeppolField::ExtendedCtcFr => fmt_bool(r.extended_ctc_fr).to_string(),
+                        PeppolField::Exists => fmt_bool(r.exists_in_peppol),
+                        PeppolField::PaCode => r.pa_code.as_deref().unwrap_or(""),
+                        PeppolField::PaName => r.pa_name.as_deref().unwrap_or(""),
+                        PeppolField::PaCountry => r.pa_country.as_deref().unwrap_or(""),
+                        PeppolField::ExtendedCtcFr => fmt_bool(r.extended_ctc_fr),
                     },
                 },
             })
             .collect();
-        wtr.write_record(&row).map_err(|e| e.to_string())?;
+        wtr.write_record(&row)
+            .map_err(|e| format!("écriture {tmp_path:?} ligne {line} : {e}"))?;
     }
-    wtr.flush().map_err(|e| e.to_string())?;
-    Ok(final_path)
+    // Flush complet (csv → BufWriter → fichier) avant le rename atomique.
+    wtr.into_inner()
+        .map_err(|e| format!("écriture {tmp_path:?} : {e}"))?
+        .into_inner()
+        .map_err(|e| format!("écriture {tmp_path:?} : {e}"))?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -180,12 +229,61 @@ mod tests {
         };
         let written = generate(&input, &meta, "siren", &cols, &resolutions(), &out, None).unwrap();
         let content = std::fs::read_to_string(&written).unwrap();
+        // BOM retiré ici, testé dédié dans generate_convertit_windows1252_en_utf8_avec_bom.
+        let content = content.trim_start_matches('\u{feff}');
         let lines: Vec<&str> = content.lines().collect();
         assert_eq!(lines.len(), 4); // entête + 3 lignes (autant que l'entrée)
         assert_eq!(lines[0], "nom;exists;pa_code");
         assert_eq!(lines[1], "ACME;true;PA0042");
         assert_eq!(lines[2], "GLOBEX;;"); // non résolu : colonnes vides
         assert_eq!(lines[3], "ACME BIS;true;PA0042"); // même PID → mêmes infos (base)
+    }
+
+    #[test]
+    fn generate_convertit_windows1252_en_utf8_avec_bom() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("in.csv");
+        // "Société" avec les deux é encodés windows-1252 (0xE9).
+        let mut bytes = b"siren;nom\n0009:1;Soci".to_vec();
+        bytes.push(0xE9);
+        bytes.push(b't');
+        bytes.push(0xE9);
+        bytes.push(b'\n');
+        std::fs::write(&input, &bytes).unwrap();
+        let out = dir.path().join("out.csv");
+        let cols = vec![
+            ColumnSpec::Input { name: "nom".into() },
+            ColumnSpec::Peppol {
+                field: PeppolField::Exists,
+            },
+        ];
+        let meta = CsvMeta {
+            delimiter: b';',
+            encoding: "windows-1252",
+        };
+        let written = generate(&input, &meta, "siren", &cols, &resolutions(), &out, None).unwrap();
+        let raw = std::fs::read(&written).unwrap();
+        assert!(
+            raw.starts_with(b"\xEF\xBB\xBF"),
+            "la sortie doit commencer par le BOM UTF-8"
+        );
+        let content = String::from_utf8(raw).unwrap();
+        assert!(content.contains("Société"), "contenu : {content}");
+    }
+
+    #[test]
+    fn generate_erreur_claire_si_colonne_pid_absente() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("in.csv");
+        std::fs::write(&input, b"siren;nom\n0009:1;ACME\n").unwrap();
+        let out = dir.path().join("out.csv");
+        let cols = vec![ColumnSpec::Input { name: "nom".into() }];
+        let meta = CsvMeta {
+            delimiter: b';',
+            encoding: "utf-8",
+        };
+        let err = generate(&input, &meta, "zz", &cols, &resolutions(), &out, None).unwrap_err();
+        assert!(err.contains("zz"), "message : {err}");
     }
 
     #[test]
