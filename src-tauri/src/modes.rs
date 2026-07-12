@@ -1,6 +1,9 @@
 use crate::store::Store;
 use serde::Deserialize;
 
+// NB : pas de deny_unknown_fields ici — inopérant sur les enums à tag
+// interne (limitation serde) ; les champs inconnus venant du front sont
+// ignorés.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "mode", rename_all = "lowercase")]
 pub enum RunMode {
@@ -105,6 +108,30 @@ mod tests {
         assert_eq!(
             compute_todo(&mode, &pids, &s, now).unwrap(),
             vec!["a::2".to_string(), "a::3".to_string(), "a::4".to_string()]
+        );
+    }
+
+    #[test]
+    fn refresh_borne_exactement_max_age_est_frais() {
+        let (s, _, now) = base();
+        // Résolution ok datée d'exactement max_age_days : la sémantique est
+        // `<` stricte, donc elle est encore fraîche → non reprise.
+        s.upsert(&Resolution {
+            participant: "a::borne".into(),
+            exists_in_peppol: Some(true),
+            pa_code: None,
+            pa_name: None,
+            pa_country: None,
+            extended_ctc_fr: None,
+            api_status: "ok".into(),
+            resolved_at: now - 30 * 86400,
+        })
+        .unwrap();
+        let mode = RunMode::Refresh { max_age_days: 30 };
+        let pids = vec!["a::borne".to_string()];
+        assert_eq!(
+            compute_todo(&mode, &pids, &s, now).unwrap(),
+            Vec::<String>::new()
         );
     }
 }
