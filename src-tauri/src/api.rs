@@ -1,10 +1,21 @@
 use serde::Deserialize;
 use std::time::{Duration, Instant};
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ProxyCreds {
     pub username: String,
     pub password: String,
+}
+
+/// Debug rédigé : le mot de passe proxy ne doit jamais fuiter dans un log
+/// `{creds:?}` (même convention que `config::ProxyConfig`).
+impl std::fmt::Debug for ProxyCreds {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProxyCreds")
+            .field("username", &"***")
+            .field("password", &"***")
+            .finish()
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -15,6 +26,8 @@ pub enum ApiError {
     ProxyAuth,
     #[error("Rate limit atteint (HTTP 429), Retry-After {retry_after_s}s.")]
     RateLimited { retry_after_s: f64 },
+    #[error("Erreur de requête (HTTP {0}) — non retentable.")]
+    Client(u16),
     #[error("Erreur serveur (HTTP {0}).")]
     Server(u16),
     #[error("Erreur réseau : {0}")]
@@ -26,7 +39,7 @@ impl ApiError {
     /// (0 = erreur réseau sans réponse).
     pub fn http_status(&self) -> u16 {
         match self {
-            ApiError::Auth(s) | ApiError::Server(s) => *s,
+            ApiError::Auth(s) | ApiError::Client(s) | ApiError::Server(s) => *s,
             ApiError::ProxyAuth => 407,
             ApiError::RateLimited { .. } => 429,
             ApiError::Network(_) => 0,
@@ -82,7 +95,9 @@ impl ApiClient {
         proxy_url: Option<&str>,
         creds: Option<&ProxyCreds>,
     ) -> Result<Self, String> {
-        let mut b = reqwest::Client::builder().timeout(Duration::from_secs(75));
+        let mut b = reqwest::Client::builder()
+            .timeout(Duration::from_secs(75))
+            .connect_timeout(Duration::from_secs(10));
         if let Some(purl) = proxy_url {
             let mut p = reqwest::Proxy::all(purl).map_err(|e| format!("proxy : {e}"))?;
             if let Some(c) = creds {
@@ -105,6 +120,15 @@ impl ApiClient {
         }
     }
 
+    /// Valeur de header pour la clé API, marquée sensible pour que reqwest
+    /// la rédige dans ses logs/Debug.
+    fn key_header(&self) -> Result<reqwest::header::HeaderValue, ApiError> {
+        let mut v = reqwest::header::HeaderValue::from_str(&self.key)
+            .map_err(|e| ApiError::Network(format!("clé API invalide en header HTTP : {e}")))?;
+        v.set_sensitive(true);
+        Ok(v)
+    }
+
     pub async fn resolve_batch(
         &self,
         pids: &[String],
@@ -113,7 +137,7 @@ impl ApiClient {
         let resp = self
             .http
             .post(format!("{}/resolve/batch", self.base))
-            .header("X-API-Key", &self.key)
+            .header("X-API-Key", self.key_header()?)
             .json(&serde_json::json!({ "participants": pids, "test": false }))
             .send()
             .await
@@ -148,7 +172,7 @@ impl ApiClient {
         let resp = self
             .http
             .get(format!("{}/resolve/0009:552100554", self.base))
-            .header("X-API-Key", &self.key)
+            .header("X-API-Key", self.key_header()?)
             .send()
             .await
             .map_err(|e| self.map_send_err(e))?;
@@ -194,29 +218,35 @@ impl ApiClient {
                     .get("Retry-After")
                     .and_then(|v| v.to_str().ok())
                     .and_then(|s| s.parse::<f64>().ok())
+                    .map(|v| v.clamp(0.0, 3600.0))
                     .unwrap_or(2.0);
                 ApiError::RateLimited { retry_after_s }
             }
+            s if (400..500).contains(&s) => ApiError::Client(s),
             s => ApiError::Server(s),
         }
     }
 
     fn map_send_err(&self, e: reqwest::Error) -> ApiError {
-        // reqwest signale l'échec d'auth proxy comme une erreur de connexion ;
-        // on repère "407" dans le message pour donner un diagnostic actionnable.
-        let msg = e.to_string();
-        if msg.contains("407") {
-            ApiError::ProxyAuth
-        } else {
-            ApiError::Network(msg)
+        // Un 407 sur le tunnel CONNECT (proxy + HTTPS) sort en erreur de
+        // connexion, sans code HTTP : hyper-util met "proxy authorization
+        // required" dans la chaîne de sources. On la parcourt plutôt que de
+        // chercher "407" dans le message (l'URL y figure : faux positifs).
+        let mut cur: Option<&(dyn std::error::Error + 'static)> = Some(&e);
+        while let Some(err) = cur {
+            if err.to_string().contains("proxy authorization required") {
+                return ApiError::ProxyAuth;
+            }
+            cur = err.source();
         }
+        ApiError::Network(e.to_string())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::matchers::{header, method, path};
+    use wiremock::matchers::{body_json, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn pids(v: &[&str]) -> Vec<String> {
@@ -298,6 +328,67 @@ mod tests {
             c.resolve_batch(&pids(&["0009:1"])).await,
             Err(ApiError::Server(503))
         ));
+    }
+
+    #[tokio::test]
+    async fn erreur_400_typee_client_non_retentable() {
+        // Une 4xx non mappée (requête malformée) ne doit pas passer pour une
+        // erreur serveur : le moteur ne doit pas backoff dessus.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/resolve/batch"))
+            .respond_with(ResponseTemplate::new(400))
+            .mount(&server)
+            .await;
+        let c = ApiClient::new(&server.uri(), "K", None, None).unwrap();
+        assert!(matches!(
+            c.resolve_batch(&pids(&["0009:1"])).await,
+            Err(ApiError::Client(400))
+        ));
+    }
+
+    #[tokio::test]
+    async fn le_corps_batch_a_la_forme_exacte() {
+        // Parité popaul.py : {"participants": [...], "test": false}, rien d'autre.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/resolve/batch"))
+            .and(body_json(serde_json::json!({
+                "participants": ["0009:1"],
+                "test": false
+            })))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"results": []})),
+            )
+            .mount(&server)
+            .await;
+        let c = ApiClient::new(&server.uri(), "K", None, None).unwrap();
+        assert!(c.resolve_batch(&pids(&["0009:1"])).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn connexion_refusee_typee_network() {
+        // Port fermé sur 127.0.0.1 : on bind puis on lâche le listener.
+        let port = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            l.local_addr().unwrap().port()
+        };
+        let c = ApiClient::new(&format!("http://127.0.0.1:{port}"), "K", None, None).unwrap();
+        match c.resolve_batch(&pids(&["0009:1"])).await {
+            Err(ApiError::Network(_)) => {}
+            other => panic!("attendu Network, obtenu {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn url_contenant_407_ne_declenche_pas_proxyauth() {
+        // Le message d'erreur reqwest contient l'URL : un port 40777 injoignable
+        // ne doit pas être pris pour un 407 proxy.
+        let c = ApiClient::new("http://127.0.0.1:40777", "K", None, None).unwrap();
+        match c.resolve_batch(&pids(&["0009:1"])).await {
+            Err(ApiError::Network(_)) => {}
+            other => panic!("attendu Network, obtenu {other:?}"),
+        }
     }
 
     #[tokio::test]
