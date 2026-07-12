@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     pub version: u32,
     pub api: ApiConfig,
@@ -10,6 +11,7 @@ pub struct Config {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ApiConfig {
     pub url: String,
     pub key: String,
@@ -20,7 +22,8 @@ pub struct ApiConfig {
     pub refresh_days: u32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProxyConfig {
     pub url: String,
     /// Identifiants proxy : mémoire uniquement, JAMAIS sérialisés (spec).
@@ -30,7 +33,20 @@ pub struct ProxyConfig {
     pub password: Option<String>,
 }
 
+/// Debug rédigé : `#[serde(skip)]` ne protège pas des logs `{cfg:?}`,
+/// on masque donc les identifiants ici aussi.
+impl std::fmt::Debug for ProxyConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProxyConfig")
+            .field("url", &self.url)
+            .field("username", &self.username.as_ref().map(|_| "***"))
+            .field("password", &self.password.as_ref().map(|_| "***"))
+            .finish()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct InputConfig {
     pub path: String,
     pub delimiter: String,
@@ -39,6 +55,7 @@ pub struct InputConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct OutputConfig {
     pub path: String,
     pub timestamp_suffix: bool,
@@ -87,14 +104,18 @@ pub fn from_yaml(s: &str) -> Result<Config, String> {
 
 pub fn load(path: &Path) -> Result<Config, String> {
     let s = std::fs::read_to_string(path).map_err(|e| format!("lecture {path:?} : {e}"))?;
-    let cfg = from_yaml(&s)?;
+    let cfg = from_yaml(&s).map_err(|e| format!("config {path:?} : {e}"))?;
     cfg.validate()?;
     Ok(cfg)
 }
 
 pub fn save(path: &Path, cfg: &Config) -> Result<(), String> {
     cfg.validate()?;
-    std::fs::write(path, to_yaml(cfg)?).map_err(|e| format!("écriture {path:?} : {e}"))
+    // Écriture atomique : fichier temporaire du même répertoire puis rename,
+    // pour ne jamais corrompre la config existante en cas de crash.
+    let tmp = path.with_extension("yaml.tmp");
+    std::fs::write(&tmp, to_yaml(cfg)?).map_err(|e| format!("écriture {tmp:?} : {e}"))?;
+    std::fs::rename(&tmp, path).map_err(|e| format!("écriture {path:?} : {e}"))
 }
 
 /// Résout un chemin de la config relativement au répertoire du fichier YAML.
@@ -167,7 +188,7 @@ mod tests {
         let back = from_yaml(&to_yaml(&cfg).unwrap()).unwrap();
         assert_eq!(back.api.key, "MA_CLE");
         assert_eq!(back.api.batch_size, 50);
-        assert_eq!(back.output.columns.len(), 3);
+        assert_eq!(back.output.columns, cfg.output.columns);
         // Les credentials n'ont pas survécu au round-trip : c'est voulu.
         assert_eq!(back.api.proxy.as_ref().unwrap().username, None);
     }
@@ -181,6 +202,31 @@ mod tests {
         assert!(cfg.validate().is_err());
         cfg.api.batch_size = 1;
         assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn champ_inconnu_rejete() {
+        // Un YAML édité à la main avec un champ typo (`usernme:` sous proxy)
+        // ne doit pas être avalé silencieusement.
+        let yaml = to_yaml(&config_exemple()).unwrap();
+        let bad = yaml.replace(
+            "url: http://proxy:3128",
+            "url: http://proxy:3128\n    usernme: jp",
+        );
+        assert_ne!(bad, yaml, "l'injection du champ inconnu doit avoir eu lieu");
+        assert!(from_yaml(&bad).is_err());
+    }
+
+    #[test]
+    fn debug_ne_fuit_pas_les_secrets() {
+        // #[serde(skip)] ne protège pas des logs `{cfg:?}` : le Debug de
+        // ProxyConfig doit masquer les identifiants.
+        let proxy = config_exemple().api.proxy.unwrap();
+        let dbg = format!("{proxy:?}");
+        assert!(!dbg.contains("SECRET"));
+        assert!(!dbg.contains("\"jp\""));
+        assert!(dbg.contains("***"));
+        assert!(dbg.contains("http://proxy:3128")); // l'URL reste visible
     }
 
     #[test]
