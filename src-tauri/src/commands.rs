@@ -55,15 +55,18 @@ impl AppState {
             creds.as_ref(),
         )
     }
+}
 
-    /// PIDs uniques canoniques du fichier d'entrée (lecture complète).
-    fn unique_pids(&self) -> Result<Vec<String>, String> {
-        let (_, cfg) = self.current_config()?;
-        let path = self.input_path()?;
-        let meta = csv_io::sniff(&path)?;
-        let vals = csv_io::read_column(&path, &meta, &cfg.input.pid_column)?;
-        Ok(unique_canonical(vals))
-    }
+/// Scan complet du fichier d'entrée : sniff + lecture de colonne + dédup
+/// canonique. BLOQUANT (le fichier peut faire 500k lignes) : à appeler
+/// uniquement depuis `tokio::task::spawn_blocking`.
+fn scan_unique_pids(
+    path: &std::path::Path,
+    pid_column: &str,
+) -> Result<(csv_io::CsvMeta, Vec<String>), String> {
+    let meta = csv_io::sniff(path)?;
+    let vals = csv_io::read_column(path, &meta, pid_column)?;
+    Ok((meta, unique_canonical(vals)))
 }
 
 #[derive(Serialize)]
@@ -152,33 +155,47 @@ pub struct InputStats {
 #[tauri::command]
 pub async fn analyze_input(state: State<'_, AppState>) -> Result<InputStats, String> {
     let (_, cfg) = state.current_config()?;
-    let pids = state.unique_pids()?;
-    let known = state.store.lock().unwrap().load_map(&pids)?;
-    let now = chrono::Utc::now().timestamp();
-    let max_age = cfg.api.refresh_days as i64 * 86400;
-    let (mut ok, mut failed, mut stale) = (0, 0, 0);
-    for p in &pids {
-        match known.get(p) {
-            None => {}
-            Some(r) if r.api_status != "ok" => failed += 1,
-            Some(r) if r.resolved_at < now - max_age => stale += 1,
-            Some(_) => ok += 1,
+    let input = state.input_path()?;
+    let store = state.store.clone();
+    // Scan CSV (500k lignes possibles) + load_map SQLite : bloquants, hors
+    // executor tokio.
+    tokio::task::spawn_blocking(move || {
+        let (_, pids) = scan_unique_pids(&input, &cfg.input.pid_column)?;
+        let known = store.lock().unwrap().load_map(&pids)?;
+        let now = chrono::Utc::now().timestamp();
+        let max_age = cfg.api.refresh_days as i64 * 86400;
+        let (mut ok, mut failed, mut stale) = (0, 0, 0);
+        for p in &pids {
+            match known.get(p) {
+                None => {}
+                Some(r) if r.api_status != "ok" => failed += 1,
+                Some(r) if r.resolved_at < now - max_age => stale += 1,
+                Some(_) => ok += 1,
+            }
         }
-    }
-    Ok(InputStats {
-        unique: pids.len(),
-        resolved_ok: ok,
-        failed,
-        stale,
-        missing: pids.len() - ok - failed - stale,
+        Ok(InputStats {
+            unique: pids.len(),
+            resolved_ok: ok,
+            failed,
+            stale,
+            missing: pids.len() - ok - failed - stale,
+        })
     })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
 pub async fn calibrate_api(state: State<'_, AppState>) -> Result<CalibrationReport, String> {
     let (_, cfg) = state.current_config()?;
     let client = state.client()?;
-    let mut sample = state.unique_pids()?;
+    let input = state.input_path()?;
+    let pid_column = cfg.input.pid_column.clone();
+    // Scan CSV bloquant hors executor ; calibrate() reste async ici.
+    let mut sample =
+        tokio::task::spawn_blocking(move || scan_unique_pids(&input, &pid_column).map(|(_, p)| p))
+            .await
+            .map_err(|e| e.to_string())??;
     sample.truncate(64);
     if sample.is_empty() {
         return Err("Aucun adressage dans le fichier d'entrée.".into());
@@ -198,30 +215,47 @@ pub async fn start_run(
     state: State<'_, AppState>,
     mode: RunMode,
 ) -> Result<u64, String> {
+    // Refus rapide avant le scan (le garde définitif est plus bas, sous le
+    // verrou, car le spawn_blocking introduit un await).
     if state.run.lock().unwrap().is_some() {
         return Err("Un run est déjà en cours.".into());
     }
     let (_, cfg) = state.current_config()?;
-    let pids = state.unique_pids()?;
-    let now = chrono::Utc::now().timestamp();
-    let todo = {
-        let store = state.store.lock().unwrap();
-        compute_todo(&mode, &pids, &store, now)?
-    };
+    let input = state.input_path()?;
+    let pid_column = cfg.input.pid_column.clone();
+    let store = state.store.clone();
+    // Scan CSV + compute_todo (load_map SQLite) : bloquants, hors executor.
+    let todo = tokio::task::spawn_blocking(move || {
+        let (_, pids) = scan_unique_pids(&input, &pid_column)?;
+        let now = chrono::Utc::now().timestamp();
+        let store = store.lock().unwrap();
+        compute_todo(&mode, &pids, &store, now)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
     let total = todo.len() as u64;
     let client = state.client()?;
     let (tx, mut rx) = tokio::sync::mpsc::channel(256);
-    let handle = Arc::new(Engine::start(
-        client,
-        EngineParams {
-            batch_size: cfg.api.batch_size as usize,
-            concurrency: cfg.api.concurrency,
-        },
-        todo,
-        state.store.clone(),
-        tx,
-    ));
-    *state.run.lock().unwrap() = Some(handle);
+    {
+        // Garde définitif : re-vérifie et installe sous LE MÊME verrou
+        // (Engine::start est synchrone et rapide : il ne fait que spawner).
+        // Sans cela, deux start_run concurrents passés du premier garde
+        // créeraient deux moteurs.
+        let mut guard = state.run.lock().unwrap();
+        if guard.is_some() {
+            return Err("Un run est déjà en cours.".into());
+        }
+        *guard = Some(Arc::new(Engine::start(
+            client,
+            EngineParams {
+                batch_size: cfg.api.batch_size as usize,
+                concurrency: cfg.api.concurrency,
+            },
+            todo,
+            state.store.clone(),
+            tx,
+        )));
+    }
     // Pont événements moteur → webview.
     tauri::async_runtime::spawn(async move {
         while let Some(ev) = rx.recv().await {
@@ -276,11 +310,16 @@ pub fn pause_run(state: State<'_, AppState>, paused: bool) -> Result<(), String>
 
 #[tauri::command]
 pub fn stop_run(state: State<'_, AppState>) -> Result<(), String> {
-    let mut guard = state.run.lock().unwrap();
-    match guard.as_ref() {
+    // Contrat : le slot n'est PAS libéré ici — uniquement via clear_run,
+    // appelé par le front à la réception de run-finished. Après request_stop,
+    // le moteur draine encore ses requêtes en vol (jusqu'à ~75 s de timeout
+    // HTTP) ; le slot occupé fait que le garde de start_run bloque toute
+    // relance pendant le drain. Vider le slot ici permettrait un deuxième
+    // moteur concurrent, dont le handle serait ensuite effacé par le
+    // clear_run déclenché par le run-finished tardif du vieux run.
+    match state.run.lock().unwrap().as_ref() {
         Some(h) => {
             h.request_stop();
-            *guard = None;
             Ok(())
         }
         None => Err("Aucun run en cours.".into()),
@@ -297,25 +336,35 @@ pub fn clear_run(state: State<'_, AppState>) {
 pub async fn generate_output(state: State<'_, AppState>) -> Result<String, String> {
     let (base, cfg) = state.current_config()?;
     let input = state.input_path()?;
-    let meta = csv_io::sniff(&input)?;
-    let pids = state.unique_pids()?;
-    let resolutions = state.store.lock().unwrap().load_map(&pids)?;
-    let out = match &base {
-        Some(dir) => config::resolve_relative(&dir.join("x.yaml"), &cfg.output.path),
-        None => PathBuf::from(&cfg.output.path),
-    };
-    let stamp = cfg
-        .output
-        .timestamp_suffix
-        .then(|| chrono::Local::now().format("%Y%m%d-%H%M").to_string());
-    let written = output::generate(
-        &input,
-        &meta,
-        &cfg.input.pid_column,
-        &cfg.output.columns,
-        &resolutions,
-        &out,
-        stamp.as_deref(),
-    )?;
-    Ok(written.display().to_string())
+    let store = state.store.clone();
+    // Tout le corps est bloquant (scan CSV, load_map SQLite, écriture CSV) :
+    // hors executor tokio.
+    tokio::task::spawn_blocking(move || {
+        let (meta, pids) = scan_unique_pids(&input, &cfg.input.pid_column)?;
+        // Contention assumée : pendant un run actif, ce load_map tient le
+        // Mutex<Store> et gèle brièvement les upsert_batch des workers (une
+        // seule Connection SQLite). Alternative future si ça pique : une 2e
+        // connexion lecture seule (le WAL permet lectures // écritures).
+        let resolutions = store.lock().unwrap().load_map(&pids)?;
+        let out = match &base {
+            Some(dir) => config::resolve_relative(&dir.join("x.yaml"), &cfg.output.path),
+            None => PathBuf::from(&cfg.output.path),
+        };
+        let stamp = cfg
+            .output
+            .timestamp_suffix
+            .then(|| chrono::Local::now().format("%Y%m%d-%H%M").to_string());
+        let written = output::generate(
+            &input,
+            &meta,
+            &cfg.input.pid_column,
+            &cfg.output.columns,
+            &resolutions,
+            &out,
+            stamp.as_deref(),
+        )?;
+        Ok(written.display().to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
