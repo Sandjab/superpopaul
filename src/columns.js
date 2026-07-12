@@ -4,7 +4,7 @@
 // Source de vérité : state.config.output.columns.
 
 const PEPPOL_FIELDS = [
-  ["exists", "exists"], ["pa_code", "code PA"], ["pa_name", "nom PA"],
+  ["exists", "existe"], ["pa_code", "code PA"], ["pa_name", "nom PA"],
   ["pa_country", "pays PA"], ["extended_ctc_fr", "CTC-FR"],
 ];
 const PEPPOL_SAMPLE = { exists: "true", pa_code: "PA0042", pa_name: "ACME PA",
@@ -15,11 +15,9 @@ function colLabel(c) {
        : "⚡ " + PEPPOL_FIELDS.find(([f]) => f === c.field)[1];
 }
 
-let dragFrom = null;
-
 function makeHeader(c, i) {
   const rm = h("span", {
-    class: "rm", title: "Exclure",
+    class: "rm", title: "Exclure", draggable: "false",
     onclick: (e) => {
       e.stopPropagation();
       state.config.output.columns.splice(i, 1);
@@ -27,15 +25,20 @@ function makeHeader(c, i) {
     },
   }, "✕");
   const th = h("th", { class: c.source, draggable: "true" }, `⠿ ${colLabel(c)} `, rm);
-  th.addEventListener("dragstart", () => { dragFrom = i; });
+  // L'index source voyage dans dataTransfer : le drop ignore ainsi les drags
+  // étrangers (sélection de texte, fichier) qui ne portent pas d'index.
+  th.addEventListener("dragstart", (e) =>
+    e.dataTransfer.setData("text/plain", String(i)));
   th.addEventListener("dragover", (e) => { e.preventDefault(); th.classList.add("dragover"); });
   th.addEventListener("dragleave", () => th.classList.remove("dragover"));
+  th.addEventListener("dragend", () =>
+    document.querySelectorAll(".dragover").forEach((el) => el.classList.remove("dragover")));
   th.addEventListener("drop", (e) => {
     e.preventDefault();
-    if (dragFrom === null || dragFrom === i) return;
+    const from = parseInt(e.dataTransfer.getData("text/plain"), 10);
+    if (Number.isNaN(from) || from === i) return;
     const cols = state.config.output.columns;
-    cols.splice(i, 0, cols.splice(dragFrom, 1)[0]);
-    dragFrom = null;
+    cols.splice(i, 0, cols.splice(from, 1)[0]);
     renderOutPreview();
   });
   return th;
@@ -49,10 +52,15 @@ function renderOutPreview() {
     const idx = state.preview.headers.indexOf(c.name);
     return h("td", {}, idx >= 0 ? (r[idx] ?? "") : "");
   };
-  $("out-preview").replaceChildren(
-    h("tr", {}, ...cols.map(makeHeader)),
-    ...rows.map((r) => h("tr", {}, ...cols.map((c) => cell(c, r)))),
-  );
+  if (cols.length === 0) {
+    $("out-preview").replaceChildren(h("tr", {}, h("td", { class: "muted" },
+      "Toutes les colonnes sont exclues — utilise « + Ajouter une colonne »")));
+  } else {
+    $("out-preview").replaceChildren(
+      h("tr", {}, ...cols.map(makeHeader)),
+      ...rows.map((r) => h("tr", {}, ...cols.map((c) => cell(c, r)))),
+    );
+  }
   renderAddColMenu();
 }
 
