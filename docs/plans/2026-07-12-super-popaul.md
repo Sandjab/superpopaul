@@ -937,6 +937,9 @@ git commit -m "feat(superpopaul): modes full/reprise/refresh"
 **Files:**
 - Create: `superpopaul/src-tauri/src/csv_io.rs`
 - Modify: `superpopaul/src-tauri/src/lib.rs` (ajout `pub mod csv_io;`)
+- Modify: `superpopaul/src-tauri/Cargo.toml` (retirer `chardetng`, inutile : la
+  détection se fait par validation UTF-8 std — chardetng classerait le pur ASCII
+  en windows-1252, ce qui contredirait le test `sniff_detecte_point_virgule_et_utf8`)
 
 - [ ] **Step 1 : Écrire les tests**
 
@@ -1029,7 +1032,6 @@ mod tests {
 - [ ] **Step 3 : Implémenter**
 
 ```rust
-use chardetng::EncodingDetector;
 use encoding_rs_io::DecodeReaderBytesBuilder;
 use serde::Serialize;
 use std::fs::File;
@@ -1058,10 +1060,14 @@ pub fn sniff(path: &Path) -> Result<CsvMeta, String> {
         .map_err(|e| format!("lecture {path:?} : {e}"))?;
     let sample = &buf[..n];
 
-    let mut det = EncodingDetector::new();
-    det.feed(sample, n < buf.len());
-    let enc = det.guess(None, true);
-    let encoding = if enc == encoding_rs::UTF_8 { "utf-8" } else { "windows-1252" };
+    // UTF-8 si l'échantillon est valide (l'ASCII pur en est un sous-ensemble) ;
+    // une coupure au milieu d'un caractère multi-octets en toute fin de buffer
+    // ne doit pas fausser la détection. Sinon : windows-1252 (cas Excel FR).
+    let encoding = match std::str::from_utf8(sample) {
+        Ok(_) => "utf-8",
+        Err(e) if e.valid_up_to() + 4 >= sample.len() => "utf-8",
+        Err(_) => "windows-1252",
+    };
 
     let first_line = sample.split(|&b| b == b'\n').next().unwrap_or(sample);
     let delimiter = [b';', b',', b'\t', b'|']

@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <title>Super Popaul</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="splash"><div class="splash-inner">🍿<h1>Super Popaul</h1><p>Résolution Peppol en masse</p></div></div>
+
+  <header>
+    <span class="logo">🍿 Super Popaul</span>
+    <nav id="stepper">
+      <button data-step="file"    class="step active">1. Fichier</button>
+      <button data-step="columns" class="step" disabled>2. Colonnes</button>
+      <button data-step="output"  class="step" disabled>3. Sortie &amp; API</button>
+      <button data-step="run"     class="step" disabled>▶ Run</button>
+    </nav>
+    <span class="cfg-btns">
+      <button id="btn-load-cfg" title="Charger une configuration YAML — reprend directement à l'étape Run.">Charger…</button>
+      <button id="btn-save-cfg" title="Sauvegarder la configuration en YAML. Attention : la clé API y est stockée en clair.">Sauvegarder…</button>
+    </span>
+  </header>
+
+  <div id="banner" class="hidden"></div>
+
+  <main>
+    <!-- Étape 1 : fichier d'entrée -->
+    <section id="step-file" class="panel">
+      <h2>Fichier d'entrée</h2>
+      <div id="dropzone">Dépose un fichier CSV ici, ou <button id="btn-browse">Parcourir…</button></div>
+      <div id="file-info" class="hidden">
+        <p id="file-meta" class="muted"></p>
+        <table id="preview-table"></table>
+        <p><label for="pid-column" title="Colonne contenant les identifiants Peppol à résoudre (ex. SIREN/SIRET).">Colonne des adressages :</label> <select id="pid-column" title="Colonne contenant les identifiants Peppol à résoudre (ex. SIREN/SIRET)."></select>
+           <span id="pid-hint" class="muted"></span></p>
+      </div>
+    </section>
+
+    <!-- Étape 2 : colonnes de sortie (aperçu manipulable) -->
+    <section id="step-columns" class="panel hidden">
+      <h2>Colonnes du fichier de sortie</h2>
+      <p class="muted">Glisse les en-têtes pour réordonner, ✕ pour exclure. L'aperçu montre le résultat final.</p>
+      <div><button id="btn-add-col" title="Ajouter un champ Peppol ou réintégrer une colonne exclue.">+ Ajouter une colonne ⚡</button>
+           <span id="add-col-menu" class="hidden"></span></div>
+      <table id="out-preview"></table>
+    </section>
+
+    <!-- Étape 3 : sortie & API -->
+    <section id="step-output" class="panel hidden">
+      <h2>Sortie &amp; API</h2>
+      <fieldset><legend>Fichier de sortie</legend>
+        <p><label for="out-path">Chemin</label> <input id="out-path" size="50"> <button id="btn-out-browse">…</button></p>
+        <label title="Ajoute la date/heure au nom du fichier pour ne jamais écraser une sortie précédente."><input type="checkbox" id="out-stamp" checked> Suffixer avec la date/heure</label>
+        <p><label for="out-encoding" title="Le défaut garantit les accents dans Excel FR. En Windows-1252, les caractères non représentables deviennent « ? ».">Encodage</label>
+           <select id="out-encoding" title="Le défaut garantit les accents dans Excel FR. En Windows-1252, les caractères non représentables deviennent « ? ».">
+             <option value="utf-8-bom">UTF-8 avec BOM (Excel FR)</option>
+             <option value="utf-8">UTF-8 sans BOM</option>
+             <option value="windows-1252">Windows-1252</option>
+           </select>
+           <label for="out-sep" title="Séparateur du fichier de sortie. « Identique à l'entrée » reprend celui détecté à l'étape 1.">Séparateur</label>
+           <select id="out-sep" title="Séparateur du fichier de sortie. « Identique à l'entrée » reprend celui détecté à l'étape 1.">
+             <option value="auto">Identique à l'entrée</option>
+             <option value=";">Point-virgule ;</option>
+             <option value=",">Virgule ,</option>
+             <option value="|">Pipe |</option>
+             <option value="&#9;">Tabulation</option>
+           </select></p>
+      </fieldset>
+      <fieldset><legend>API</legend>
+        <p><label for="api-url" title="URL du service de résolution Peppol.">URL</label> <input id="api-url" size="40" value="https://peppol.gavini.cloud" title="URL du service de résolution Peppol.">
+           <label for="api-key" title="Clé d'authentification du service — bouton Tester pour la vérifier.">Clé</label> <input id="api-key" type="password" size="26" title="Clé d'authentification du service — bouton Tester pour la vérifier.">
+           <button id="btn-test-api" title="Envoie une requête de test pour vérifier l'URL, la clé et le proxy.">Tester</button> <span id="api-test-result"></span></p>
+        <p><label for="proxy-url">Proxy (optionnel)</label> <input id="proxy-url" size="30" placeholder="http://proxy:3128">
+           <span class="muted">identifiants demandés au lancement, jamais enregistrés</span></p>
+        <p><label for="api-conc" title="Nombre de requêtes simultanées vers l'API. « Calibrer » trouve la valeur optimale.">Concurrence</label> <input id="api-conc" type="number" value="8" min="1" max="256" title="Nombre de requêtes simultanées vers l'API. « Calibrer » trouve la valeur optimale.">
+           <label for="api-batch" title="Nombre d'adressages envoyés par requête API (500 max).">Taille de paquet</label> <input id="api-batch" type="number" value="50" min="1" max="500" title="Nombre d'adressages envoyés par requête API (500 max).">
+           <label for="api-refresh" title="Âge au-delà duquel un résultat en base est considéré périmé (utilisé par le mode Refresh).">Ancienneté refresh (jours)</label> <input id="api-refresh" type="number" value="30" min="1" title="Âge au-delà duquel un résultat en base est considéré périmé (utilisé par le mode Refresh).">
+           <button id="btn-calibrate" title="Mesure le débit à plusieurs niveaux de concurrence et applique le meilleur.">Calibrer</button> <span id="calibrate-result"></span></p>
+      </fieldset>
+    </section>
+
+    <!-- Étape 4 : cockpit -->
+    <section id="step-run" class="panel hidden">
+      <div id="run-header">
+        <span id="run-title" class="muted"></span>
+        <span>
+          <select id="run-mode" title="Full : tout re-résoudre · Reprise : seulement les manquants · Refresh : manquants + périmés.">
+            <option value="full">Full — tout résoudre</option>
+            <option value="reprise">Reprise — seulement les manquants</option>
+            <option value="reprise-retry">Reprise + re-tenter les échecs</option>
+            <option value="refresh">Refresh — manquants + périmés</option>
+          </select>
+          <button id="btn-start">▶ Lancer</button>
+          <button id="btn-pause" class="hidden">⏸ Pause</button>
+          <button id="btn-stop" class="hidden">■ Stop</button>
+        </span>
+      </div>
+      <div id="cockpit" class="hidden">
+        <div id="ring-block">
+          <div id="ring"><div id="ring-center"><b id="ring-pct">0%</b><span id="ring-abs" class="muted"></span></div></div>
+          <p title="Temps restant estimé d'après le débit courant.">ETA <b id="eta">—</b></p>
+        </div>
+        <div id="tiles">
+          <div class="tile" title="Part des adressages résolus présents dans l'annuaire Peppol.">🟢 Dans Peppol<br><b id="t-exists">—</b></div>
+          <div class="tile" title="Part des adressages éligibles à la facturation électronique française (extension CTC-FR).">🇫🇷 CTC-FR<br><b id="t-ctc">—</b></div>
+          <div class="tile" title="req/s : requêtes API · adr/s : adressages résolus par seconde.">Débit<br><b id="t-rate">—</b></div>
+          <div class="tile">Concurrence / échecs<br><b id="t-misc">—</b></div>
+        </div>
+        <div class="wide">
+          <div class="tile" title="Répartition des réponses API — 200 OK, 429 rate-limit, 0 erreur réseau.">Codes HTTP<div id="http-bars"></div><div id="http-legend" class="hbar-legend"></div></div>
+          <div class="tile" title="Temps de réponse API en millisecondes (percentiles).">Latence (ms)<div id="latency" class="hbar-legend"></div></div>
+        </div>
+      </div>
+      <p id="run-result" class="hidden"></p>
+    </section>
+  </main>
+
+  <footer>
+    <button id="btn-prev" class="hidden">← Précédent</button>
+    <button id="btn-next">Suivant →</button>
+  </footer>
+
+  <div id="modal-backdrop" class="hidden"><div id="modal"></div></div>
+
+  <script src="app.js"></script>
+  <script src="columns.js"></script>
+  <script src="cockpit.js"></script>
+</body>
+</html>

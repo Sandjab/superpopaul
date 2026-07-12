@@ -112,8 +112,9 @@ Définis sur les **adressages uniques** du fichier d'entrée :
 
 - **full** : tout résoudre (re-résolution même si présent en base) ;
 - **reprise** : résoudre les absents de la base + option « re-tenter les échecs » ;
-- **refresh** : résoudre les absents + ceux dont `resolved_at` est plus ancien que
-  `refresh_days` jours.
+- **refresh** : résoudre les absents + les échecs (toujours re-tentés, quel que soit
+  leur âge : un échec n'est pas une donnée fraîche) + ceux dont `resolved_at` est
+  plus ancien que `refresh_days` jours.
 
 ## Moteur, erreurs, pause/reprise
 
@@ -136,8 +137,9 @@ Gestion des erreurs :
 | Erreurs réseau isolées | Retry/backoff silencieux par paquet, comptabilisées au dashboard |
 
 **Calibrage** : bouton envoyant des salves de test à concurrence croissante ; suggère la
-concurrence optimale pour la clé et alimente l'**ETA** (affichée avant lancement, recalée en
-continu pendant le run).
+concurrence optimale pour la clé. L'**ETA** n'apparaît que pendant le run, recalculée en
+continu d'après le débit courant. (Amendement 2026-07-12 : l'ETA pré-lancement initialement
+prévue est abandonnée — valeur faible pour son coût, le calibrage affiche déjà le débit.)
 
 ## UI (choix maquettés et validés)
 
