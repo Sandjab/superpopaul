@@ -318,7 +318,17 @@ function ensureProxyCreds(force = false) {
 
 // --- Config YAML : sauvegarde / chargement -------------------------------------
 $("btn-save-cfg").addEventListener("click", async () => {
+  // Le champ out-path n'est peuplé (fillOutputForm) qu'une fois l'étape
+  // Sortie & API atteinte — gating du stepper. Avant ça, synchroniser
+  // écraserait la config avec des champs de formulaire encore vides.
   if ($("out-path").value) syncOutputForm();
+  // Pas de sauvegarde de config-squelette (décision produit) : sans fichier,
+  // colonne d'adressage ou sortie, le YAML ne serait pas rechargeable.
+  if (!state.inputPath || !state.config.input.pid_column || !state.config.output.path) {
+    banner("warn", "Complète d'abord la configuration (fichier, colonne d'adressage, sortie) " +
+      "avant de sauvegarder.");
+    return;
+  }
   const f = await save({ filters: [{ name: "YAML", extensions: ["yaml", "yml"] }] });
   if (!f) return;
   try {
@@ -335,15 +345,29 @@ $("btn-load-cfg").addEventListener("click", async () => {
   if (!f) return;
   try {
     state.config = await invoke("load_config", { path: f });
-    fillOutputForm();
+  } catch (e) {
+    banner("error", `Chargement impossible : ${e}`);
+    return;
+  }
+  fillOutputForm();
+  let path = state.config.input.path;
+  try {
     // Recharge l'aperçu du fichier d'entrée SANS écraser le mapping du YAML.
-    const path = await invoke("resolved_input_path");
+    path = await invoke("resolved_input_path");
     state.preview = await invoke("preview_csv", { path });
     state.inputPath = path;
     renderFilePanel();
     hideBanner();
-    showStep(3); // directement à l'étape Run (spec) — analyze_input y détecte la reprise
-  } catch (e) {
-    banner("error", `Chargement impossible : ${e}`);
+    // Directement à l'étape Run (spec) — analyze_input y détecte la reprise.
+    showStep(STEPS.indexOf("run"));
+  } catch {
+    // Config chargée mais CSV introuvable/illisible : la config reste en
+    // place (l'utilisateur ne re-choisit que le fichier), l'état d'entrée
+    // est remis à zéro pour rester cohérent et actionnable.
+    state.inputPath = null;
+    state.preview = null;
+    banner("warn", `Config chargée, mais le fichier d'entrée ${path} est introuvable — ` +
+      "re-sélectionne-le à l'étape 1.");
+    showStep(0);
   }
 });
