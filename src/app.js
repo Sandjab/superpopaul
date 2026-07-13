@@ -25,8 +25,8 @@ const state = {
   preview: null, // {headers, rows, delimiter, encoding, suggested_pid_column}
   config: {
     version: 1,
-    api: { url: "https://peppol.gavini.cloud", key: "", batch_size: 50,
-           concurrency: 8, proxy: null, refresh_days: 30 },
+    api: { url: "https://peppol.gavini.cloud", key: "", mode: "api", doh_url: null,
+           batch_size: 50, concurrency: 8, proxy: null, refresh_days: 30 },
     input: { path: "", delimiter: ";", encoding: "utf-8", pid_column: "" },
     output: { path: "", timestamp_suffix: true, encoding: "utf-8-bom",
               separator: "auto", columns: [] },
@@ -71,7 +71,8 @@ function validateStep() {
   if (s === "output") {
     syncOutputForm();
     if (!state.config.output.path) return "Indique le fichier de sortie.";
-    if (!state.config.api.key) return "Saisis la clé API (bouton Tester pour vérifier).";
+    if (state.config.api.mode !== "direct" && !state.config.api.key)
+      return "Saisis la clé API (bouton Tester pour vérifier).";
   }
   return null;
 }
@@ -188,6 +189,8 @@ function syncOutputForm() {
   c.output.separator = $("out-sep").value;
   c.api.url = $("api-url").value.trim();
   c.api.key = $("api-key").value.trim();
+  c.api.mode = $("api-mode").value;
+  c.api.doh_url = $("doh-url").value.trim() || null;
   const proxyUrl = $("proxy-url").value.trim();
   c.api.proxy = proxyUrl ? { url: proxyUrl } : null;
   c.api.concurrency = +$("api-conc").value || 8;
@@ -202,11 +205,25 @@ function fillOutputForm() {
   $("out-sep").value = c.output.separator;
   $("api-url").value = c.api.url;
   $("api-key").value = c.api.key;
+  $("api-mode").value = c.api.mode || "api";
+  $("doh-url").value = c.api.doh_url || "";
   $("proxy-url").value = c.api.proxy ? c.api.proxy.url : "";
   $("api-conc").value = c.api.concurrency;
   $("api-batch").value = c.api.batch_size;
   $("api-refresh").value = c.api.refresh_days;
+  syncModeUi();
 }
+
+/** Active/désactive les champs selon le backend : en direct, URL/clé/Tester,
+ *  taille de paquet et Calibrer sont sans objet ; le DoH ne sert qu'en direct. */
+function syncModeUi() {
+  const direct = $("api-mode").value === "direct";
+  for (const id of ["api-url", "api-key", "btn-test-api", "api-batch", "btn-calibrate"])
+    $(id).disabled = direct;
+  $("doh-url").disabled = !direct;
+  if (direct) $("api-test-result").textContent = "";
+}
+$("api-mode").addEventListener("change", syncModeUi);
 $("btn-out-browse").addEventListener("click", async () => {
   const f = await save({ filters: [{ name: "CSV", extensions: ["csv"] }] });
   if (f) $("out-path").value = f;

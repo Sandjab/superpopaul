@@ -633,6 +633,37 @@ mod tests {
         assert!(it.error.is_none());
     }
 
+    /// Smoke test RÉSEAU RÉEL (SML prod + SMP) : hors CI, à lancer à la main
+    /// (`cargo test -- --ignored`). Adressage exemple de la doc du resolver
+    /// Python (0009:552100554, l'ancien PID du test_key API, est déradié).
+    #[tokio::test]
+    #[ignore = "réseau réel (SML prod)"]
+    async fn resolution_reelle_sur_sml_prod() {
+        let c = DirectClient::new(None, None, None).unwrap();
+        let (items, stats) = c
+            .resolve_batch(&["iso6523-actorid-upis::0225:000122308".to_string()])
+            .await
+            .unwrap();
+        let it = &items[0];
+        assert!(it.error.is_none(), "erreur item : {:?}", it.error);
+        assert_eq!(it.exists, Some(true));
+        assert!(it.pa.is_some(), "PA attendue, item : {it:?}");
+        assert!(stats.latency_ms > 0);
+    }
+
+    /// Même smoke test via DoH Cloudflare — le chemin « réseau d'entreprise ».
+    #[tokio::test]
+    #[ignore = "réseau réel (DoH + SML prod)"]
+    async fn resolution_reelle_via_doh() {
+        let c = DirectClient::new(Some("https://1.1.1.1/dns-query"), None, None).unwrap();
+        let (items, _) = c
+            .resolve_batch(&["iso6523-actorid-upis::0225:000122308".to_string()])
+            .await
+            .unwrap();
+        assert_eq!(items[0].exists, Some(true), "item : {:?}", items[0]);
+        assert!(items[0].pa.is_some());
+    }
+
     #[tokio::test]
     async fn nxdomain_donne_exists_false_sans_erreur() {
         let c = DirectClient::for_tests(fake_dns("aucun", SmlLookup::NotRegistered), ZONE);

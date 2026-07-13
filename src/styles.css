@@ -21,6 +21,7 @@ input, select {
   background: var(--bg); color: var(--fg); border: 1px solid var(--border);
   border-radius: 6px; padding: 5px 8px;
 }
+input:disabled, select:disabled { opacity: .45; }
 .muted { color: var(--muted); }
 .hidden { display: none !important; }
 

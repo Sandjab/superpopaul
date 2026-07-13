@@ -68,6 +68,13 @@
            </select></p>
       </fieldset>
       <fieldset><legend>API</legend>
+        <p><label for="api-mode" title="API Popaul : résolution en batch via le serveur (clé requise). Directe : SML + SMP interrogés depuis ce poste, sans clé ni serveur — un adressage à la fois.">Résolution</label>
+           <select id="api-mode" title="API Popaul : résolution en batch via le serveur (clé requise). Directe : SML + SMP interrogés depuis ce poste, sans clé ni serveur — un adressage à la fois.">
+             <option value="api">API Popaul (batch)</option>
+             <option value="direct">Directe — SML + SMP, sans clé</option>
+           </select>
+           <label for="doh-url" title="Mode direct uniquement : résolveur DNS-over-HTTPS (RFC 8484) pour les réseaux qui bloquent l'UDP/53 — passe par le proxy. Vide : DNS système.">DoH (optionnel)</label>
+           <input id="doh-url" size="32" placeholder="https://1.1.1.1/dns-query" title="Mode direct uniquement : résolveur DNS-over-HTTPS (RFC 8484) pour les réseaux qui bloquent l'UDP/53 — passe par le proxy. Vide : DNS système."></p>
         <p><label for="api-url" title="URL du service de résolution Peppol.">URL</label> <input id="api-url" size="40" value="https://peppol.gavini.cloud" title="URL du service de résolution Peppol.">
            <label for="api-key" title="Clé d'authentification du service — bouton Tester pour la vérifier.">Clé</label> <input id="api-key" type="password" size="26" title="Clé d'authentification du service — bouton Tester pour la vérifier.">
            <button id="btn-test-api" title="Envoie une requête de test pour vérifier l'URL, la clé et le proxy.">Tester</button> <span id="api-test-result"></span></p>
