@@ -444,7 +444,10 @@ Scénarios et assertions :
    Après : `columns` contient toujours `{source:"peppol", field:"exists"}`, plus `{source:"input", name:"exists"}` ; la zone a une chip `exists` NON-peppol ; le corps affiche encore la colonne Peppol (`true`).
 5. **Garde min 1** : écarter des colonnes jusqu'à n'en garder qu'une, puis tenter d'écarter la dernière.
    Attendu : le drag ne démarre pas ou revert (`columns.length == 1` inchangé après la tentative).
-6. **Annulation Échap** : commencer un drag de th vers la zone, presser `Escape` avant le up.
+6. **Annulation par spill** (amendé après vérif : Échap non supporté en
+   forceFallback — spec mise à jour ; `revertOnSpill: true` requis dans le
+   bloc `common` de columns.js) : glisser un th au-dessus de la zone puis
+   relâcher HORS des deux listes (ex. marge de `<main>`).
    Attendu : `columns` inchangé ; corps resynchronisé (autant de td par tr que de th).
 7. **Zone vide** : réintégrer toutes les chips une à une.
    Attendu : `#col-zone` sans enfant, texte d'aide visible (`getComputedStyle(zone, "::after").content` non vide) ; hauteur de zone ≥ 48 px.

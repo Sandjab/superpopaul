@@ -39,8 +39,12 @@ pendant le drag est exactement le fichier de sortie qu'on obtiendra.
   Peppol absents d'abord (ordre `PEPPOL_FIELDS`), puis colonnes d'entrée
   écartées (ordre du fichier). Sans ça, un tri manuel serait silencieusement
   défait au re-render suivant.
-- **Annulation** (Échap, drop hors listes) : revert natif Sortable ; le
-  re-render d'`onEnd` resynchronise le corps. Rien de plus à coder.
+- **Annulation = lâcher hors des deux listes** (`revertOnSpill: true`, plugin
+  OnSpill du build complet vendorisé) : la colonne revient à sa place, le
+  re-render d'`onEnd` resynchronise le corps. **Échap n'est PAS supporté**
+  (vérifié en Chromium : en `forceFallback` — imposé par le handler drag-drop
+  Tauri — Sortable n'écoute pas le clavier ; l'annuler exigerait ses APIs
+  privées). Pour annuler : lâcher hors des listes, ou re-glisser la colonne.
 - **Invariant « ≥ 1 colonne » étendu à Rust** : `Config::validate` rejette
   `output.columns` vide (+ test cargo). Sans ça, un YAML `columns: []`
   (constructible avec l'UI actuelle, où tout est ✕-able) chargerait vers un
