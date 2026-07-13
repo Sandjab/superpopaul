@@ -81,8 +81,22 @@ pub struct CallStats {
     pub latency_ms: u64,
 }
 
+/// Client de résolution du moteur. Deux transports : l'API Popaul
+/// (/resolve/batch) ou la résolution directe SML+SMP — même contrat
+/// (ApiItem + CallStats), le moteur ne voit pas la différence.
 #[derive(Clone)]
 pub struct ApiClient {
+    inner: Inner,
+}
+
+#[derive(Clone)]
+enum Inner {
+    Http(HttpTransport),
+    Direct(crate::direct::DirectClient),
+}
+
+#[derive(Clone)]
+struct HttpTransport {
     http: reqwest::Client,
     base: String,
     key: String,
@@ -106,20 +120,71 @@ impl ApiClient {
             b = b.proxy(p);
         }
         Ok(ApiClient {
-            http: b.build().map_err(|e| e.to_string())?,
-            base: base_url.trim_end_matches('/').to_string(),
-            key: key.to_string(),
+            inner: Inner::Http(HttpTransport {
+                http: b.build().map_err(|e| e.to_string())?,
+                base: base_url.trim_end_matches('/').to_string(),
+                key: key.to_string(),
+            }),
         })
     }
 
-    /// Même client (même pool/proxy), nouvelle clé — pour la reprise après 401.
+    /// Client en résolution directe SML+SMP (sans API ni clé).
+    pub fn new_direct(
+        doh_url: Option<&str>,
+        proxy_url: Option<&str>,
+        creds: Option<&ProxyCreds>,
+    ) -> Result<Self, String> {
+        Ok(ApiClient {
+            inner: Inner::Direct(crate::direct::DirectClient::new(doh_url, proxy_url, creds)?),
+        })
+    }
+
+    /// Même client (même pool/proxy), nouvelle clé — pour la reprise après
+    /// 401. Sans objet en mode direct (pas de clé) : clone inchangé.
     pub fn with_key(&self, key: &str) -> Self {
-        ApiClient {
-            key: key.to_string(),
-            ..self.clone()
+        match &self.inner {
+            Inner::Http(t) => ApiClient {
+                inner: Inner::Http(HttpTransport {
+                    key: key.to_string(),
+                    ..t.clone()
+                }),
+            },
+            Inner::Direct(_) => self.clone(),
         }
     }
 
+    pub async fn resolve_batch(
+        &self,
+        pids: &[String],
+    ) -> Result<(Vec<ApiItem>, CallStats), ApiError> {
+        match &self.inner {
+            Inner::Http(t) => t.resolve_batch(pids).await,
+            Inner::Direct(d) => d.resolve_batch(pids).await,
+        }
+    }
+
+    /// Test unitaire de la clé : une vraie résolution GET /resolve/<pid>.
+    pub async fn test_key(&self) -> Result<CallStats, ApiError> {
+        match &self.inner {
+            Inner::Http(t) => t.test_key().await,
+            Inner::Direct(_) => Err(ApiError::Network(
+                "Sans objet en mode direct (pas de clé API).".into(),
+            )),
+        }
+    }
+
+    /// Connectivité seule (endpoint public /health, sans clé).
+    pub async fn health(&self) -> Result<CallStats, ApiError> {
+        match &self.inner {
+            Inner::Http(t) => t.health().await,
+            Inner::Direct(_) => Err(ApiError::Network(
+                "Sans objet en mode direct (pas de serveur unique).".into(),
+            )),
+        }
+    }
+}
+
+impl HttpTransport {
     /// Valeur de header pour la clé API, marquée sensible pour que reqwest
     /// la rédige dans ses logs/Debug.
     fn key_header(&self) -> Result<reqwest::header::HeaderValue, ApiError> {

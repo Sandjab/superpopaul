@@ -1,5 +1,5 @@
 use crate::api::{ApiClient, CallStats, ProxyCreds};
-use crate::config::{self, Config};
+use crate::config::{self, ApiMode, Config};
 use crate::csv_io;
 use crate::modes::{compute_todo, RunMode};
 use crate::output;
@@ -49,12 +49,13 @@ impl AppState {
     fn client(&self) -> Result<ApiClient, String> {
         let (_, cfg) = self.current_config()?;
         let creds = self.proxy_creds.lock().unwrap().clone();
-        ApiClient::new(
-            &cfg.api.url,
-            &cfg.api.key,
-            cfg.api.proxy.as_ref().map(|p| p.url.as_str()),
-            creds.as_ref(),
-        )
+        let proxy = cfg.api.proxy.as_ref().map(|p| p.url.as_str());
+        match cfg.api.mode {
+            ApiMode::Direct => {
+                ApiClient::new_direct(cfg.api.doh_url.as_deref(), proxy, creds.as_ref())
+            }
+            ApiMode::Api => ApiClient::new(&cfg.api.url, &cfg.api.key, proxy, creds.as_ref()),
+        }
     }
 }
 
@@ -214,6 +215,11 @@ pub async fn analyze_input(state: State<'_, AppState>) -> Result<InputStats, Str
 #[tauri::command]
 pub async fn calibrate_api(state: State<'_, AppState>) -> Result<CalibrationReport, String> {
     let (_, cfg) = state.current_config()?;
+    if cfg.api.mode == ApiMode::Direct {
+        // Marteler les SMP distribués pour trouver un plafond n'a pas de
+        // sens (et serait impoli) : il n'y a pas de serveur unique à calibrer.
+        return Err("Calibration sans objet en mode direct (SMP distribués).".into());
+    }
     let client = state.client()?;
     let input = state.input_path()?;
     let pid_column = cfg.input.pid_column.clone();
@@ -274,7 +280,14 @@ pub async fn start_run(
         *guard = Some(Arc::new(Engine::start(
             client,
             EngineParams {
-                batch_size: cfg.api.batch_size as usize,
+                // En direct, chaque adressage a son propre pipeline DNS+SMP :
+                // paquets de 1 pour que latences et codes HTTP du cockpit
+                // restent par adressage.
+                batch_size: if cfg.api.mode == ApiMode::Direct {
+                    1
+                } else {
+                    cfg.api.batch_size as usize
+                },
                 concurrency: cfg.api.concurrency,
             },
             todo,

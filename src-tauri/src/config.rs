@@ -15,11 +15,34 @@ pub struct Config {
 pub struct ApiConfig {
     pub url: String,
     pub key: String,
+    /// Backend de résolution : l'API Popaul (batch) ou la résolution
+    /// directe SML+SMP. Absent des YAML d'avant cette option → Api,
+    /// et non écrit en mode Api (les configs existantes gardent leur forme).
+    #[serde(default, skip_serializing_if = "ApiMode::is_api")]
+    pub mode: ApiMode,
+    /// Résolveur DoH (RFC 8484) pour le mode direct — réseaux d'entreprise
+    /// qui bloquent l'UDP/53. Vide : DNS système.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub doh_url: Option<String>,
     pub batch_size: u32,
     pub concurrency: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proxy: Option<ProxyConfig>,
     pub refresh_days: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ApiMode {
+    #[default]
+    Api,
+    Direct,
+}
+
+impl ApiMode {
+    fn is_api(&self) -> bool {
+        *self == ApiMode::Api
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -177,6 +200,8 @@ mod tests {
             api: ApiConfig {
                 url: "https://peppol.example.org".into(),
                 key: "MA_CLE".into(),
+                mode: ApiMode::Api,
+                doh_url: None,
                 batch_size: 50,
                 concurrency: 8,
                 proxy: Some(ProxyConfig {
@@ -232,6 +257,25 @@ mod tests {
         assert_eq!(back.output.columns, cfg.output.columns);
         // Les credentials n'ont pas survécu au round-trip : c'est voulu.
         assert_eq!(back.api.proxy.as_ref().unwrap().username, None);
+    }
+
+    #[test]
+    fn mode_api_par_defaut_et_direct_en_aller_retour() {
+        // Un YAML d'avant le mode direct doit rester lisible : mode absent
+        // -> Api, et un YAML en mode Api n'écrit ni mode ni doh_url (les
+        // configs existantes ne changent pas de forme).
+        let yaml = to_yaml(&config_exemple()).unwrap();
+        assert!(!yaml.contains("mode:"));
+        assert!(!yaml.contains("doh_url:"));
+        let parsed = from_yaml(&yaml).unwrap();
+        assert_eq!(parsed.api.mode, ApiMode::Api);
+
+        let mut cfg = config_exemple();
+        cfg.api.mode = ApiMode::Direct;
+        cfg.api.doh_url = Some("https://1.1.1.1/dns-query".into());
+        let parsed = from_yaml(&to_yaml(&cfg).unwrap()).unwrap();
+        assert_eq!(parsed.api.mode, ApiMode::Direct);
+        assert_eq!(parsed.api.doh_url.as_deref(), Some("https://1.1.1.1/dns-query"));
     }
 
     #[test]
