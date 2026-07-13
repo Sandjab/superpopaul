@@ -3,10 +3,11 @@ use crate::config::{self, Config};
 use crate::csv_io;
 use crate::modes::{compute_todo, RunMode};
 use crate::output;
-use crate::pid::unique_canonical;
+use crate::pid::{canonical_line_counts, unique_canonical};
 use crate::resolver::{calibrate, CalibrationReport, Engine, EngineEvent, EngineParams, RunHandle};
 use crate::store::Store;
 use serde::Serialize;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, State};
@@ -58,15 +59,16 @@ impl AppState {
 }
 
 /// Scan complet du fichier d'entrée : sniff + lecture de colonne + dédup
-/// canonique. BLOQUANT (le fichier peut faire 500k lignes) : à appeler
-/// uniquement depuis `tokio::task::spawn_blocking`.
+/// canonique + lignes par PID canonique. BLOQUANT (le fichier peut faire
+/// 500k lignes) : à appeler uniquement depuis `tokio::task::spawn_blocking`.
 fn scan_unique_pids(
     path: &std::path::Path,
     pid_column: &str,
-) -> Result<(csv_io::CsvMeta, Vec<String>), String> {
+) -> Result<(csv_io::CsvMeta, Vec<String>, HashMap<String, u64>), String> {
     let meta = csv_io::sniff(path)?;
     let vals = csv_io::read_column(path, &meta, pid_column)?;
-    Ok((meta, unique_canonical(vals)))
+    let line_counts = canonical_line_counts(&vals);
+    Ok((meta, unique_canonical(vals), line_counts))
 }
 
 #[derive(Serialize)]
@@ -184,7 +186,7 @@ pub async fn analyze_input(state: State<'_, AppState>) -> Result<InputStats, Str
     // Scan CSV (500k lignes possibles) + load_map SQLite : bloquants, hors
     // executor tokio.
     tokio::task::spawn_blocking(move || {
-        let (_, pids) = scan_unique_pids(&input, &cfg.input.pid_column)?;
+        let (_, pids, _) = scan_unique_pids(&input, &cfg.input.pid_column)?;
         let known = store.lock().unwrap().load_map(&pids)?;
         let now = chrono::Utc::now().timestamp();
         let max_age = cfg.api.refresh_days as i64 * 86400;
@@ -217,7 +219,7 @@ pub async fn calibrate_api(state: State<'_, AppState>) -> Result<CalibrationRepo
     let pid_column = cfg.input.pid_column.clone();
     // Scan CSV bloquant hors executor ; calibrate() reste async ici.
     let mut sample =
-        tokio::task::spawn_blocking(move || scan_unique_pids(&input, &pid_column).map(|(_, p)| p))
+        tokio::task::spawn_blocking(move || scan_unique_pids(&input, &pid_column).map(|(_, p, _)| p))
             .await
             .map_err(|e| e.to_string())??;
     sample.truncate(64);
@@ -249,11 +251,11 @@ pub async fn start_run(
     let pid_column = cfg.input.pid_column.clone();
     let store = state.store.clone();
     // Scan CSV + compute_todo (load_map SQLite) : bloquants, hors executor.
-    let todo = tokio::task::spawn_blocking(move || {
-        let (_, pids) = scan_unique_pids(&input, &pid_column)?;
+    let (todo, line_counts) = tokio::task::spawn_blocking(move || {
+        let (_, pids, line_counts) = scan_unique_pids(&input, &pid_column)?;
         let now = chrono::Utc::now().timestamp();
         let store = store.lock().unwrap();
-        compute_todo(&mode, &pids, &store, now)
+        Ok::<_, String>((compute_todo(&mode, &pids, &store, now)?, line_counts))
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -276,6 +278,7 @@ pub async fn start_run(
                 concurrency: cfg.api.concurrency,
             },
             todo,
+            line_counts,
             state.store.clone(),
             tx,
         )));
@@ -379,7 +382,7 @@ pub async fn generate_output(state: State<'_, AppState>) -> Result<String, Strin
     // Tout le corps est bloquant (scan CSV, load_map SQLite, écriture CSV) :
     // hors executor tokio.
     tokio::task::spawn_blocking(move || {
-        let (meta, pids) = scan_unique_pids(&input, &cfg.input.pid_column)?;
+        let (meta, pids, _) = scan_unique_pids(&input, &cfg.input.pid_column)?;
         // Contention assumée : pendant un run actif, ce load_map tient le
         // Mutex<Store> et gèle brièvement les upsert_batch des workers (une
         // seule Connection SQLite). Alternative future si ça pique : une 2e

@@ -126,6 +126,8 @@ body > .drag-fallback {
   display: flex; align-items: center; justify-content: center;
 }
 .mini-ring-center b { font-size: 13px; }
+.ring-abs { display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
+.ring-abs b { font-size: 16px; }
 #pa-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0 18px; margin-top: 8px; }
 .pa-col { display: flex; flex-direction: column; }
 .pa-row { display: flex; align-items: baseline; gap: 8px; font-size: 12px; padding: 2px 0; }

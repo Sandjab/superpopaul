@@ -116,22 +116,27 @@ function httpColor(code) {
   return code >= 500 ? "var(--red)" : code >= 400 ? "var(--amber)" : "var(--blue)";
 }
 
-/** Mini-anneau d'une tuile : % à l'intérieur, nombre absolu à côté.
- *  `count` sur `outOf` — tant que rien n'est résolu, tout reste à « — ». */
-function renderMiniRing(ring, count, outOf) {
+/** Mini-anneau d'une tuile : % à l'intérieur (en adressages), absolus à côté
+ *  en adressages ET en lignes de fichier (le % des lignes couvertes diffère,
+ *  un adressage pouvant porter plusieurs lignes). Tant que rien n'est résolu,
+ *  tout reste à « — ». */
+function renderMiniRing(ring, count, outOf, lineCount, linesOutOf) {
   const pct = outOf ? (100 * count / outOf) : 0;
   $(`ring-${ring}`).style.background =
     `conic-gradient(var(--green) ${pct}%, #21262d ${pct}%)`;
   $(`t-${ring}`).textContent = outOf ? `${pct.toFixed(1)} %` : "—";
   $(`t-${ring}-abs`).textContent = outOf ? fmt(count) : "—";
+  $(`t-${ring}-lines`).textContent = linesOutOf ? fmt(lineCount) : "—";
+  $(`t-${ring}-lines-pct`).textContent =
+    linesOutOf ? `· ${(100 * lineCount / linesOutOf).toFixed(1)} %` : "";
 }
 
 listen("telemetry", (e) => {
   const s = e.payload;
   lastTotal = s.total;
   renderRing(s.done, s.total, s.eta_s != null ? fmtDuration(s.eta_s) : "—");
-  renderMiniRing("exists", s.exists, s.done);
-  renderMiniRing("ctc", s.ctc, s.done);
+  renderMiniRing("exists", s.exists, s.done, s.exists_lines, s.done_lines);
+  renderMiniRing("ctc", s.ctc, s.done, s.ctc_lines, s.done_lines);
   $("t-rate").textContent = `${s.req_per_s.toFixed(1)} req/s · ${Math.round(s.addr_per_s)} adr/s`;
   $("t-misc").textContent = `${fmt(s.failed)} échecs`;
   renderHttpBars(s.http);

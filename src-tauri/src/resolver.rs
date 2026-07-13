@@ -133,8 +133,8 @@ mod tests_ctrl {
 use crate::api::{ApiClient, ApiError, ApiItem};
 use crate::pid::canonical;
 use crate::store::{Resolution, Store};
-use crate::telemetry::{Snapshot, Telemetry};
-use std::collections::{BTreeMap, VecDeque};
+use crate::telemetry::{LineWeights, Snapshot, Telemetry};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::atomic::AtomicBool;
 use tokio::sync::{mpsc, watch};
 
@@ -296,14 +296,18 @@ fn client_error_resolutions(chunk: &[String], code: u16, at: i64) -> Vec<Resolut
 pub struct Engine;
 
 impl Engine {
+    /// `line_counts` : lignes du fichier d'entrée par PID canonique — un PID
+    /// absent de la carte pèse 1 ligne (repli).
     pub fn start(
         client: ApiClient,
         params: EngineParams,
         todo: Vec<String>,
+        line_counts: HashMap<String, u64>,
         store: Arc<Mutex<Store>>,
         tx: mpsc::Sender<EngineEvent>,
     ) -> RunHandle {
         let total = todo.len() as u64;
+        let line_counts = Arc::new(line_counts);
         let telemetry = Arc::new(Telemetry::new(total));
         let user_paused = Arc::new(AtomicBool::new(false));
         let sys_paused = Arc::new(AtomicBool::new(false));
@@ -356,6 +360,7 @@ impl Engine {
                 update_rx.clone(),
             );
             let in_flight = in_flight.clone();
+            let line_counts = line_counts.clone();
             workers.push(tokio::spawn(async move {
                 let mut client = client;
                 loop {
@@ -424,16 +429,22 @@ impl Engine {
                             let at = now_epoch();
                             let (mut ex, mut ctc, mut failed) = (0u32, 0u32, 0u32);
                             let mut pa_counts: BTreeMap<String, u32> = BTreeMap::new();
+                            let mut lines = LineWeights::default();
                             let mut resolutions = Vec::with_capacity(items.len());
                             for (i, item) in items.iter().enumerate() {
                                 let sent = chunk.get(i).map(String::as_str).unwrap_or("");
+                                // Poids en lignes de fichier de cet adressage.
+                                let w = line_counts.get(sent).copied().unwrap_or(1);
+                                lines.done += w;
                                 let r = to_resolution(item, sent, at);
                                 if r.api_status == "ok" {
                                     if r.exists_in_peppol == Some(true) {
                                         ex += 1;
+                                        lines.exists += w;
                                     }
                                     if r.extended_ctc_fr == Some(true) {
                                         ctc += 1;
+                                        lines.ctc += w;
                                     }
                                     // Repli sur le code si l'API n'a pas de nom.
                                     if let Some(pa) =
@@ -458,6 +469,7 @@ impl Engine {
                                 ctc,
                                 failed,
                                 &pa_counts,
+                                lines,
                             );
                         }
                         Err(ApiError::Client(code)) => {
@@ -468,14 +480,18 @@ impl Engine {
                             let at = now_epoch();
                             let resolutions = client_error_resolutions(&chunk, code, at);
                             let addr_failed = resolutions.len() as u32;
+                            let lines_failed: u64 = chunk
+                                .iter()
+                                .map(|p| line_counts.get(p).copied().unwrap_or(1))
+                                .sum();
                             {
                                 let st = store.lock().unwrap();
                                 let _ = st.upsert_batch(&resolutions);
                             }
-                            telemetry.record_error(code, addr_failed);
+                            telemetry.record_error(code, addr_failed, lines_failed);
                         }
                         Err(e) => {
-                            telemetry.record_error(e.http_status(), 0);
+                            telemetry.record_error(e.http_status(), 0, 0);
                             // Le paquet repart en tête de file : rien n'est perdu.
                             queue.lock().unwrap().push_front(chunk);
                             match e {
@@ -775,6 +791,7 @@ mod tests_engine {
                 concurrency: 4,
             },
             todo,
+            HashMap::new(),
             store.clone(),
             tx,
         );
@@ -808,9 +825,44 @@ mod tests_engine {
             .values()
             .all(|r| r.api_status == "ok" && r.pa_code.as_deref() == Some("PA1")));
         // Câblage PA → télémétrie : les 53 adressages portent la même PA.
-        let pa = handle.telemetry.snapshot().pa;
-        assert_eq!(pa.len(), 1);
-        assert_eq!((pa[0].name.as_str(), pa[0].count), ("PA UN", 53));
+        let snap = handle.telemetry.snapshot();
+        assert_eq!(snap.pa.len(), 1);
+        assert_eq!((snap.pa[0].name.as_str(), snap.pa[0].count), ("PA UN", 53));
+        // Sans carte de multiplicités (HashMap vide), 1 ligne par adressage.
+        assert_eq!(snap.done_lines, 53);
+    }
+
+    #[tokio::test]
+    async fn lignes_ponderees_par_multiplicite_du_fichier() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/resolve/batch"))
+            .respond_with(EchoResolver)
+            .mount(&server)
+            .await;
+        let store = Arc::new(Mutex::new(Store::open_in_memory().unwrap()));
+        let client = ApiClient::new(&server.uri(), "K", None, None).unwrap();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        let todo = pids(2);
+        // Le premier PID couvre 3 lignes du fichier ; le second, absent de la
+        // carte, pèse 1 ligne (repli).
+        let line_counts = HashMap::from([(todo[0].clone(), 3u64)]);
+        let handle = Engine::start(
+            client,
+            EngineParams {
+                batch_size: 10,
+                concurrency: 1,
+            },
+            todo,
+            line_counts,
+            store,
+            tx,
+        );
+        wait_finished(&mut rx).await;
+        let s = handle.telemetry.snapshot();
+        // EchoResolver : tout existe et tout est CTC → 2 adressages, 4 lignes.
+        assert_eq!((s.done, s.done_lines), (2, 4));
+        assert_eq!((s.exists_lines, s.ctc_lines), (4, 4));
     }
 
     #[tokio::test]
@@ -951,6 +1003,7 @@ mod tests_engine {
                 concurrency: 10,
             },
             pids(50),
+            HashMap::new(),
             store,
             tx,
         );
@@ -1006,6 +1059,7 @@ mod tests_engine {
                 concurrency: 1,
             },
             pids(10),
+            HashMap::new(),
             store,
             tx,
         );
@@ -1104,6 +1158,7 @@ mod tests_engine {
                 concurrency: 2,
             },
             pids(20),
+            HashMap::new(),
             store,
             tx,
         );

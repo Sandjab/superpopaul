@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 pub const DEFAULT_SCHEME: &str = "iso6523-actorid-upis";
 pub const DEFAULT_ICD: &str = "0225";
@@ -36,6 +36,24 @@ pub fn unique_canonical<I: IntoIterator<Item = String>>(values: I) -> Vec<String
         }
     }
     out
+}
+
+/// Nombre de lignes du fichier par PID canonique — mêmes règles de filtrage
+/// que unique_canonical (trim, vides ignorés).
+pub fn canonical_line_counts<I, S>(values: I) -> HashMap<String, u64>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let mut counts = HashMap::new();
+    for v in values {
+        let v = v.as_ref().trim();
+        if v.is_empty() {
+            continue;
+        }
+        *counts.entry(canonical(v)).or_insert(0) += 1;
+    }
+    counts
 }
 
 #[cfg(test)]
@@ -81,6 +99,17 @@ mod tests {
         // Un « : » simple signale un ICD déjà présent : on n'empile pas 0225.
         assert_eq!(canonical("0225:552100554"), "iso6523-actorid-upis::0225:552100554");
         assert_eq!(canonical("0009:552100554"), "iso6523-actorid-upis::0009:552100554");
+    }
+
+    #[test]
+    fn line_counts_compte_les_lignes_par_pid_canonique() {
+        // Mêmes règles que unique_canonical : trim, vides ignorés,
+        // deux écritures du même PID comptent sur la même clé canonique.
+        let vals = ["0009:1", "iso6523-actorid-upis::0009:1", "", " ", "0009:2"].map(String::from);
+        let counts = canonical_line_counts(&vals);
+        assert_eq!(counts.get("iso6523-actorid-upis::0009:1"), Some(&2));
+        assert_eq!(counts.get("iso6523-actorid-upis::0009:2"), Some(&1));
+        assert_eq!(counts.len(), 2);
     }
 
     #[test]

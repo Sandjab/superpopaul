@@ -102,16 +102,22 @@
           <p title="Temps restant estimé d'après le débit courant.">ETA <b id="eta">—</b></p>
         </div>
         <div id="tiles">
-          <div class="tile" title="Part des adressages résolus présents dans l'annuaire Peppol (nombre absolu à côté de l'anneau).">🟢 Dans Peppol
+          <div class="tile" title="Présents dans l'annuaire Peppol — % des adressages résolus dans l'anneau ; à côté, les absolus en adressages et en lignes de fichier (avec le % des lignes couvertes).">🟢 Dans Peppol
             <div class="mini-ring-row">
               <div class="mini-ring" id="ring-exists"><div class="mini-ring-center"><b id="t-exists">—</b></div></div>
-              <b id="t-exists-abs">—</b>
+              <div class="ring-abs">
+                <div><b id="t-exists-abs">—</b> <span class="muted">adressages</span></div>
+                <div><b id="t-exists-lines">—</b> <span class="muted">lignes</span> <span class="muted" id="t-exists-lines-pct"></span></div>
+              </div>
             </div>
           </div>
-          <div class="tile" title="Part des adressages éligibles à la facturation électronique française — France Invoice UBL Extension (ex-CTC-FR).">🇫🇷 France Invoice UBL Extension
+          <div class="tile" title="Éligibles à la facturation électronique française — France Invoice UBL Extension (ex-CTC-FR). % des adressages résolus dans l'anneau ; à côté, les absolus en adressages et en lignes de fichier (avec le % des lignes couvertes).">🇫🇷 France Invoice UBL Extension
             <div class="mini-ring-row">
               <div class="mini-ring" id="ring-ctc"><div class="mini-ring-center"><b id="t-ctc">—</b></div></div>
-              <b id="t-ctc-abs">—</b>
+              <div class="ring-abs">
+                <div><b id="t-ctc-abs">—</b> <span class="muted">adressages</span></div>
+                <div><b id="t-ctc-lines">—</b> <span class="muted">lignes</span> <span class="muted" id="t-ctc-lines-pct"></span></div>
+              </div>
             </div>
           </div>
           <div class="tile" title="req/s : requêtes API · adr/s : adressages résolus par seconde.">Débit<br><b id="t-rate">—</b></div>
