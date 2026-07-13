@@ -236,7 +236,10 @@ impl HttpTransport {
         let t0 = Instant::now();
         let resp = self
             .http
-            .get(format!("{}/resolve/0009:552100554", self.base))
+            // 0225:000122308 : enregistré au SML (vérifié 2026-07-13) — son
+            // prédécesseur 0009:552100554 a été radié, ce qui faisait tester
+            // la clé sur un adressage donnant exists:false.
+            .get(format!("{}/resolve/0225:000122308", self.base))
             .header("X-API-Key", self.key_header()?)
             .send()
             .await
@@ -460,10 +463,10 @@ mod tests {
     async fn test_key_ok_sur_resolve_unitaire() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/resolve/0009:552100554"))
+            .and(path("/resolve/0225:000122308"))
             .and(header("X-API-Key", "BONNE_CLE"))
             .respond_with(ResponseTemplate::new(200).set_body_json(
-                serde_json::json!({"participant_id": "iso6523-actorid-upis::0009:552100554",
+                serde_json::json!({"participant_id": "iso6523-actorid-upis::0225:000122308",
                                    "exists": true}),
             ))
             .mount(&server)
