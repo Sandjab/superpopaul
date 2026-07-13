@@ -2,6 +2,21 @@
 // "telemetry" (4×/s), "run-suspended", "run-resumed", "run-finished".
 
 let running = false;
+// Dernier total connu (via télémétrie) : run-finished ne le porte pas, mais on
+// en a besoin pour figer l'anneau à sa valeur finale à la fin du run.
+let lastTotal = 0;
+
+/** Met à jour l'anneau de progression (fond, %, absolu, ETA). Partagé entre la
+ *  télémétrie (4×/s) et run-finished, qui sinon laisserait l'anneau gelé sur le
+ *  dernier tick intermédiaire — à concurrence 1, le dernier paquet se termine
+ *  sans tick de télémétrie ultérieur, d'où un run complet affiché à 99 %. */
+function renderRing(done, total, etaText) {
+  const pct = total ? (100 * done / total) : 0;
+  $("ring").style.background = `conic-gradient(var(--green) ${pct}%, #21262d ${pct}%)`;
+  $("ring-pct").textContent = `${pct.toFixed(pct < 10 ? 1 : 0)}%`;
+  $("ring-abs").textContent = `${fmt(done)} / ${fmt(total)}`;
+  $("eta").textContent = etaText;
+}
 
 async function enterRunStep() {
   $("run-title").textContent = state.inputPath ?? "";
@@ -65,6 +80,7 @@ async function startRun() {
     await ensureProxyCreds();
     const total = await invoke("start_run", { mode: modeFromSelect() });
     running = true;
+    lastTotal = total;  // total faisant autorité, avant tout tick de télémétrie
     $("cockpit").classList.remove("hidden");
     $("run-result").classList.add("hidden");
     $("btn-start").classList.add("hidden");
@@ -102,11 +118,8 @@ function httpColor(code) {
 
 listen("telemetry", (e) => {
   const s = e.payload;
-  const pct = s.total ? (100 * s.done / s.total) : 0;
-  $("ring").style.background = `conic-gradient(var(--green) ${pct}%, #21262d ${pct}%)`;
-  $("ring-pct").textContent = `${pct.toFixed(pct < 10 ? 1 : 0)}%`;
-  $("ring-abs").textContent = `${fmt(s.done)} / ${fmt(s.total)}`;
-  $("eta").textContent = s.eta_s != null ? fmtDuration(s.eta_s) : "—";
+  lastTotal = s.total;
+  renderRing(s.done, s.total, s.eta_s != null ? fmtDuration(s.eta_s) : "—");
   $("t-exists").textContent = s.done ? `${(100 * s.exists / s.done).toFixed(1)} %` : "—";
   $("t-ctc").textContent = s.done ? `${(100 * s.ctc / s.done).toFixed(1)} %` : "—";
   $("t-rate").textContent = `${s.req_per_s.toFixed(1)} req/s · ${Math.round(s.addr_per_s)} adr/s`;
@@ -188,6 +201,10 @@ listen("run-resumed", hideBanner);
 listen("run-finished", async (e) => {
   const { done, failed, stopped } = e.payload;
   running = false;
+  // Fige l'anneau sur sa valeur finale : un run complet passe ainsi à 100 %
+  // (done == total) au lieu de rester sur le dernier tick de télémétrie ; un
+  // run arrêté reflète sa progression réelle. ETA sans objet à la fin.
+  renderRing(done, lastTotal || done, "—");
   await invoke("clear_run");
   $("btn-start").classList.remove("hidden");
   $("btn-pause").classList.add("hidden");
