@@ -629,14 +629,17 @@ impl Engine {
         }
         {
             let (telemetry, tx, stop) = (telemetry.clone(), tx, stop.clone());
+            let aimd = aimd.clone();
+            let concurrency_max = params.concurrency.max(1);
             tokio::spawn(async move {
                 loop {
                     tokio::time::sleep(Duration::from_millis(250)).await;
-                    if tx
-                        .send(EngineEvent::Telemetry(telemetry.snapshot()))
-                        .await
-                        .is_err()
-                    {
+                    // La concurrence vit dans le moteur, pas dans la
+                    // télémétrie : on complète le snapshot à l'émission.
+                    let mut s = telemetry.snapshot();
+                    s.concurrency_allowed = aimd.allowed();
+                    s.concurrency_max = concurrency_max;
+                    if tx.send(EngineEvent::Telemetry(s)).await.is_err() {
                         break; // le récepteur a disparu : run terminé
                     }
                     if stop.load(Ordering::Relaxed) {
@@ -830,6 +833,32 @@ mod tests_engine {
         assert_eq!((snap.pa[0].name.as_str(), snap.pa[0].count), ("PA UN", 53));
         // Sans carte de multiplicités (HashMap vide), 1 ligne par adressage.
         assert_eq!(snap.done_lines, 53);
+    }
+
+    #[tokio::test]
+    async fn telemetrie_expose_la_concurrence_aimd() {
+        let server = MockServer::start().await;
+        // Réponses lentes : le premier tick de télémétrie (250 ms) part
+        // pendant que le run tourne encore.
+        Mock::given(method("POST"))
+            .and(path("/resolve/batch"))
+            .respond_with(SlowEchoResolver(Duration::from_millis(300)))
+            .mount(&server)
+            .await;
+        let (handle, mut rx, _store) = run_engine(&server, "K", pids(40)).await;
+        let snap = loop {
+            match tokio::time::timeout(std::time::Duration::from_secs(10), rx.recv()).await {
+                Ok(Some(EngineEvent::Telemetry(s))) => break s,
+                Ok(Some(_)) => continue,
+                other => panic!("Telemetry attendu, obtenu {other:?}"),
+            }
+        };
+        // run_engine démarre avec concurrency = 4 ; sans 429, l'AIMD reste
+        // au plafond.
+        assert_eq!(snap.concurrency_max, 4);
+        assert_eq!(snap.concurrency_allowed, 4);
+        wait_finished(&mut rx).await;
+        let _ = handle;
     }
 
     #[tokio::test]

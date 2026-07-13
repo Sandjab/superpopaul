@@ -119,13 +119,14 @@
                 <div><b id="t-ctc-lines">—</b> <span class="muted">lignes</span> <span class="muted" id="t-ctc-lines-pct"></span></div>
               </div>
             </div>
+            <p class="ctc-gap muted" title="Présents dans l'annuaire Peppol mais sans l'extension France Invoice UBL : le reste à convertir.">dans Peppol sans l'extension : <b id="t-ctc-gap">—</b> adr · <b id="t-ctc-gap-lines">—</b> lignes</p>
           </div>
-          <div class="tile" title="req/s : requêtes API · adr/s : adressages résolus par seconde.">Débit<br><b id="t-rate">—</b></div>
-          <div class="tile">Concurrence / échecs<br><b id="t-misc">—</b></div>
+          <div class="tile" title="Adressages résolus par seconde au fil du run (courbe bleue) ; req/s : requêtes API.">Débit<div id="rate-spark" class="spark"></div><div id="t-rate" class="hbar-legend">—</div></div>
+          <div class="tile" title="Concurrence effective / plafond configuré — l'AIMD réduit après un 429 et remonte progressivement. Échecs = adressages en erreur définitive.">Concurrence / échecs<br><b id="t-misc">—</b></div>
         </div>
         <div class="wide">
           <div class="tile" title="Appels API par famille de code HTTP — survoler chaque ligne pour l'explication et le détail des codes.">Codes HTTP<div id="http-hist"></div></div>
-          <div class="tile" title="Temps de réponse API au fil du run — p50 en vert, p90 en ambre. Percentiles cumulés en légende.">Latence (ms)<div id="lat-spark"></div><div id="latency" class="hbar-legend"></div></div>
+          <div class="tile" title="Temps de réponse API au fil du run — p50 en vert, p90 en ambre. Percentiles cumulés en légende.">Latence (ms)<div id="lat-spark" class="spark"></div><div id="latency" class="hbar-legend"></div></div>
           <div class="tile" title="Répartition des appels API par tranche de latence (ms), cumulée depuis le début du run.">Distribution (ms)<div id="lat-hist"></div></div>
         </div>
         <div class="wide">

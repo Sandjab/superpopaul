@@ -80,6 +80,11 @@ pub struct Snapshot {
     /// Répartition des appels par tranche de latence (bornes fixes,
     /// cumulée depuis le début du run). Toujours 8 buckets.
     pub latency_hist: Vec<HistBucket>,
+    /// Concurrence effective autorisée par l'AIMD et plafond configuré.
+    /// La télémétrie ne les connaît pas : le superviseur du moteur les
+    /// renseigne à l'émission (0/0 sur un snapshot pris hors moteur).
+    pub concurrency_allowed: u32,
+    pub concurrency_max: u32,
     pub req_per_s: f64,
     pub addr_per_s: f64,
     pub eta_s: Option<u64>,
@@ -217,6 +222,8 @@ impl Telemetry {
             pa,
             latency: lat_stats(&latencies),
             latency_hist: lat_hist(&latencies),
+            concurrency_allowed: 0,
+            concurrency_max: 0,
             req_per_s,
             addr_per_s,
             eta_s,

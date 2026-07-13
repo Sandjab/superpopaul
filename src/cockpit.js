@@ -5,13 +5,27 @@ let running = false;
 // Dernier total connu (via télémétrie) : run-finished ne le porte pas, mais on
 // en a besoin pour figer l'anneau à sa valeur finale à la fin du run.
 let lastTotal = 0;
-// Historique p50/p90 pour la sparkline. Borné : au-delà de LAT_MAX_POINTS on
-// décime par 2 et on n'enregistre plus qu'un tick sur latKeepEvery — le graphe
-// couvre ainsi tout le run avec un pas qui grossit, sans croître sans fin.
-const LAT_MAX_POINTS = 600;
-let latHistory = [];
-let latKeepEvery = 1;
-let latTick = 0;
+// Séries des sparklines (latence, débit). Bornées : au-delà de
+// SPARK_MAX_POINTS on décime par 2 et on n'enregistre plus qu'un tick sur
+// keepEvery — le graphe couvre ainsi tout le run avec un pas qui grossit,
+// sans croître sans fin.
+const SPARK_MAX_POINTS = 600;
+function makeSparkSeries() {
+  return {
+    hist: [], keepEvery: 1, tick: 0,
+    push(pt) {
+      if (++this.tick % this.keepEvery !== 0) return;
+      this.hist.push(pt);
+      if (this.hist.length > SPARK_MAX_POINTS) {
+        this.hist = this.hist.filter((_, i) => i % 2 === 1);
+        this.keepEvery *= 2;
+      }
+    },
+    reset() { this.hist = []; this.keepEvery = 1; this.tick = 0; },
+  };
+}
+const latSeries = makeSparkSeries();
+const rateSeries = makeSparkSeries();
 
 /** Met à jour l'anneau de progression (fond, %, absolu, ETA). Partagé entre la
  *  télémétrie (4×/s) et run-finished, qui sinon laisserait l'anneau gelé sur le
@@ -88,10 +102,10 @@ async function startRun() {
     const total = await invoke("start_run", { mode: modeFromSelect() });
     running = true;
     lastTotal = total;  // total faisant autorité, avant tout tick de télémétrie
-    latHistory = [];    // la sparkline repart de zéro à chaque run
-    latKeepEvery = 1;
-    latTick = 0;
+    latSeries.reset();  // les sparklines repartent de zéro à chaque run
+    rateSeries.reset();
     $("lat-spark").replaceChildren();
+    $("rate-spark").replaceChildren();
     $("cockpit").classList.remove("hidden");
     $("run-result").classList.add("hidden");
     $("btn-start").classList.add("hidden");
@@ -160,8 +174,16 @@ listen("telemetry", (e) => {
   renderRing(s.done, s.total, s.eta_s != null ? fmtDuration(s.eta_s) : "—");
   renderMiniRing("exists", s.exists, s.done, s.exists_lines, s.done_lines);
   renderMiniRing("ctc", s.ctc, s.done, s.ctc_lines, s.done_lines);
+  // Reste à convertir : présents dans Peppol mais sans l'extension France.
+  $("t-ctc-gap").textContent = s.done ? fmt(Math.max(0, s.exists - s.ctc)) : "—";
+  $("t-ctc-gap-lines").textContent =
+    s.done ? fmt(Math.max(0, s.exists_lines - s.ctc_lines)) : "—";
   $("t-rate").textContent = `${s.req_per_s.toFixed(1)} req/s · ${Math.round(s.addr_per_s)} adr/s`;
-  $("t-misc").textContent = `${fmt(s.failed)} échecs`;
+  rateSeries.push({ adr: s.addr_per_s });
+  renderSpark("rate-spark", rateSeries.hist, [["adr", "var(--blue)"]]);
+  $("t-misc").textContent = s.concurrency_max
+    ? `${s.concurrency_allowed}/${s.concurrency_max} · ${fmt(s.failed)} échecs`
+    : `${fmt(s.failed)} échecs`;
   renderHttpBars(s.http);
   renderPaGrid(s.pa, s.total);
   const l = s.latency;
@@ -169,15 +191,9 @@ listen("telemetry", (e) => {
     ? `min ${l.min} · moy ${l.mean} · p50 ${l.p50} · p90 ${l.p90} · p99 ${l.p99} · max ${l.max}`
     : "—";
   if (l) {
-    latTick++;
-    if (latTick % latKeepEvery === 0) {
-      latHistory.push({ p50: l.p50, p90: l.p90 });
-      if (latHistory.length > LAT_MAX_POINTS) {
-        latHistory = latHistory.filter((_, i) => i % 2 === 1);
-        latKeepEvery *= 2;
-      }
-    }
-    renderSparkline();
+    latSeries.push({ p50: l.p50, p90: l.p90 });
+    renderSpark("lat-spark", latSeries.hist,
+      [["p90", "var(--amber)"], ["p50", "var(--green)"]]);
   }
   renderLatHist(s.latency_hist);
 });
@@ -189,16 +205,17 @@ function svgEl(tag, attrs) {
   return el;
 }
 
-/** Sparkline p50 (vert) / p90 (ambre) sur l'historique du run. L'échelle
- *  verticale suit le max p90 observé ; l'horizontale s'étire sur le run. */
-function renderSparkline() {
-  if (latHistory.length < 2) return;
+/** Sparkline générique : trace `series` ([clé, couleur]…) sur `hist`.
+ *  L'échelle verticale suit le max observé toutes courbes confondues ;
+ *  l'horizontale s'étire sur le run. */
+function renderSpark(elId, hist, series) {
+  if (hist.length < 2) return;
   const W = 300, H = 60, PAD = 2;
-  const max = Math.max(...latHistory.map((p) => p.p90), 1);
+  const max = Math.max(...hist.flatMap((p) => series.map(([k]) => p[k])), 1);
   const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: "none" });
-  for (const [key, color] of [["p90", "var(--amber)"], ["p50", "var(--green)"]]) {
-    const pts = latHistory
-      .map((p, i) => `${((i * W) / (latHistory.length - 1)).toFixed(1)},` +
+  for (const [key, color] of series) {
+    const pts = hist
+      .map((p, i) => `${((i * W) / (hist.length - 1)).toFixed(1)},` +
         `${(H - PAD - ((H - 2 * PAD) * p[key]) / max).toFixed(1)}`)
       .join(" ");
     svg.append(svgEl("polyline", {
@@ -206,7 +223,7 @@ function renderSparkline() {
       "vector-effect": "non-scaling-stroke",
     }));
   }
-  $("lat-spark").replaceChildren(svg);
+  $(elId).replaceChildren(svg);
 }
 
 /** Histogramme : une colonne par tranche (bornes fixes côté Rust, dernier
