@@ -102,7 +102,7 @@
           <p title="Temps restant estimé d'après le débit courant.">ETA <b id="eta">—</b></p>
         </div>
         <div id="tiles">
-          <div class="tile" title="Présents dans l'annuaire Peppol — % des adressages résolus dans l'anneau ; à côté, les absolus en adressages et en lignes de fichier (avec le % des lignes couvertes).">🟢 Dans Peppol
+          <div class="tile" title="Présents dans l'annuaire Peppol — % des adressages résolus dans l'anneau ; à côté, les absolus en adressages et en lignes de fichier (avec le % des lignes couvertes).">🎯 Dans Peppol
             <div class="mini-ring-row">
               <div class="mini-ring" id="ring-exists"><div class="mini-ring-center"><b id="t-exists">—</b></div></div>
               <div class="ring-abs">
@@ -124,7 +124,7 @@
           <div class="tile">Concurrence / échecs<br><b id="t-misc">—</b></div>
         </div>
         <div class="wide">
-          <div class="tile" title="Répartition des réponses API — 200 OK, 429 rate-limit, 0 erreur réseau.">Codes HTTP<div id="http-bars"></div><div id="http-legend" class="hbar-legend"></div></div>
+          <div class="tile" title="Appels API par code HTTP — vert 200, orange 429 (rate-limit), rouge erreurs, gris erreurs réseau.">Codes HTTP<div id="http-hist"></div></div>
           <div class="tile" title="Temps de réponse API au fil du run — p50 en vert, p90 en ambre. Percentiles cumulés en légende.">Latence (ms)<div id="lat-spark"></div><div id="latency" class="hbar-legend"></div></div>
           <div class="tile" title="Répartition des appels API par tranche de latence (ms), cumulée depuis le début du run.">Distribution (ms)<div id="lat-hist"></div></div>
         </div>

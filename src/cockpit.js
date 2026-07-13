@@ -124,7 +124,8 @@ function httpColor(code) {
   if (code === 200) return "var(--green)";
   if (code === 429) return "var(--amber)";
   if (code === 0) return "var(--muted)";
-  return code >= 500 ? "var(--red)" : code >= 400 ? "var(--amber)" : "var(--blue)";
+  // 4xx (hors 429) : échec définitif ou blocage auth ; 5xx : erreur serveur.
+  return code >= 400 ? "var(--red)" : "var(--blue)";
 }
 
 /** Mini-anneau d'une tuile : % à l'intérieur (en adressages), absolus à côté
@@ -218,18 +219,26 @@ function renderLatHist(hist) {
   }));
 }
 
+/** Histogramme horizontal : une barre par code HTTP rencontré, triée par
+ *  fréquence décroissante, longueur relative au code le plus fréquent. */
 function renderHttpBars(http) {
-  const entries = Object.entries(http);
-  const total = entries.reduce((a, [, n]) => a + n, 0) || 1;
-  $("http-bars").replaceChildren(h("div", { class: "hbar" },
-    ...entries.map(([code, n]) => {
-      const span = h("span", {});
-      span.style.width = `${(100 * n / total)}%`;
-      span.style.background = httpColor(+code);
-      return span;
-    })));
-  $("http-legend").textContent =
-    entries.map(([c, n]) => `${c === "0" ? "réseau" : c}×${fmt(n)}`).join("   ");
+  const entries = Object.entries(http)
+    .map(([c, n]) => [+c, n])
+    .sort((a, b) => b[1] - a[1]);
+  if (!entries.length) {
+    $("http-hist").replaceChildren(h("span", { class: "muted" }, "—"));
+    return;
+  }
+  const max = entries[0][1];
+  $("http-hist").replaceChildren(...entries.map(([code, n]) => {
+    const bar = h("span", { class: "http-bar" });
+    bar.style.width = `${Math.max(1, (100 * n) / max)}%`;
+    bar.style.background = httpColor(code);
+    return h("div", { class: "http-row" },
+      h("span", { class: "http-code" }, code === 0 ? "réseau" : `${code}`),
+      h("div", { class: "http-bar-wrap" }, bar),
+      h("span", { class: "http-count" }, fmt(n)));
+  }));
 }
 
 /** Carte PA : classement sur 3 colonnes remplies de haut en bas puis de
