@@ -10,6 +10,12 @@ const WINDOW_S: f64 = 10.0;
 /// Un dernier bucket ouvert (le_ms = u32::MAX) reçoit tout ce qui dépasse.
 const LAT_HIST_BOUNDS_MS: [u32; 7] = [50, 100, 200, 500, 1000, 2000, 5000];
 
+/// Motifs d'erreur distincts conservés au maximum : les messages peuvent
+/// contenir des parties variables (identifiants…) — au-delà, tout part dans
+/// « (autres) » pour borner mémoire et taille du snapshot.
+const MAX_ERROR_MOTIFS: usize = 20;
+const AUTRES: &str = "(autres)";
+
 pub struct Telemetry {
     total: u64,
     inner: Mutex<Inner>,
@@ -22,6 +28,7 @@ struct Inner {
     failed: u64,
     http: BTreeMap<u16, u64>,
     pa: BTreeMap<String, u64>, // nom de PA → adressages routés vers elle
+    errors: BTreeMap<String, u64>, // motif d'échec → adressages concernés
     lines: LineWeights,        // mêmes compteurs, pondérés en lignes de fichier
     latencies_ms: Vec<u32>,
     calls: VecDeque<(Instant, u32)>, // (instant, adressages traités par l'appel)
@@ -46,9 +53,9 @@ pub struct LineWeights {
     pub ctc: u64,
 }
 
-/// Une PA et le nombre d'adressages routés vers elle.
+/// Un libellé (nom de PA, motif d'échec…) et un nombre d'adressages.
 #[derive(Debug, Clone, Serialize)]
-pub struct PaCount {
+pub struct NamedCount {
     pub name: String,
     pub count: u64,
 }
@@ -75,7 +82,10 @@ pub struct Snapshot {
     pub http: BTreeMap<u16, u64>,
     /// PA découvertes, classées par représentativité décroissante
     /// (à égalité : ordre alphabétique, pour un affichage stable).
-    pub pa: Vec<PaCount>,
+    pub pa: Vec<NamedCount>,
+    /// Motifs d'échec (erreurs item et échecs HTTP définitifs), classés par
+    /// fréquence décroissante — mêmes règles de tri que `pa`.
+    pub errors: Vec<NamedCount>,
     pub latency: Option<LatStats>,
     /// Répartition des appels par tranche de latence (bornes fixes,
     /// cumulée depuis le début du run). Toujours 8 buckets.
@@ -101,6 +111,7 @@ impl Telemetry {
                 failed: 0,
                 http: BTreeMap::new(),
                 pa: BTreeMap::new(),
+                errors: BTreeMap::new(),
                 lines: LineWeights::default(),
                 latencies_ms: Vec::new(),
                 calls: VecDeque::new(),
@@ -112,6 +123,7 @@ impl Telemetry {
     /// présents Peppol, `ctc` supportant CTC-FR, `failed` en erreur item.
     /// `pa` : adressages de l'appel agrégés par nom de PA.
     /// `lines` : les mêmes compteurs pondérés en lignes de fichier.
+    /// `errors` : adressages en erreur item, agrégés par motif.
     #[allow(clippy::too_many_arguments)]
     pub fn record_call(
         &self,
@@ -123,6 +135,7 @@ impl Telemetry {
         failed: u32,
         pa: &BTreeMap<String, u32>,
         lines: LineWeights,
+        errors: &BTreeMap<String, u32>,
     ) {
         let mut i = self.inner.lock().unwrap();
         i.done += addr as u64;
@@ -135,6 +148,9 @@ impl Telemetry {
         *i.http.entry(http_status).or_insert(0) += 1;
         for (name, n) in pa {
             *i.pa.entry(name.clone()).or_insert(0) += *n as u64;
+        }
+        for (motif, n) in errors {
+            bump_error(&mut i.errors, motif, *n as u64);
         }
         i.latencies_ms.push(latency_ms.min(u32::MAX as u64) as u32);
         i.calls.push_back((Instant::now(), addr));
@@ -153,6 +169,10 @@ impl Telemetry {
         i.done += addr_failed as u64;
         i.failed += addr_failed as u64;
         i.lines.done += lines_failed;
+        if addr_failed > 0 {
+            // Échec définitif : le motif est le statut HTTP du paquet.
+            bump_error(&mut i.errors, &format!("HTTP {http_status}"), addr_failed as u64);
+        }
         *i.http.entry(http_status).or_insert(0) += 1;
         // La fenêtre crédite les adressages en échec définitif : ils comptent
         // dans le débit (addr_per_s), donc dans l'ETA, comme la progression.
@@ -163,7 +183,7 @@ impl Telemetry {
         // Sous le verrou : purge de la fenêtre + copies. Le tri des latences
         // (coûteux à grand volume) se fait HORS verrou pour ne pas bloquer
         // les record_call des workers.
-        let (done, exists, ctc, failed, http, pa, lines, latencies, req_per_s, addr_per_s) = {
+        let (done, exists, ctc, failed, http, pa, errors, lines, latencies, req_per_s, addr_per_s) = {
             let mut i = self.inner.lock().unwrap();
             let now = Instant::now();
             while let Some((t, _)) = i.calls.front() {
@@ -190,6 +210,7 @@ impl Telemetry {
                 i.failed,
                 i.http.clone(),
                 i.pa.clone(),
+                i.errors.clone(),
                 i.lines,
                 i.latencies_ms.clone(),
                 req_per_s,
@@ -198,11 +219,15 @@ impl Telemetry {
         }; // verrou relâché ici
         // Classement par représentativité (BTreeMap garantit déjà l'ordre
         // alphabétique, que sort_by_key stable préserve à égalité de compte).
-        let mut pa: Vec<PaCount> = pa
-            .into_iter()
-            .map(|(name, count)| PaCount { name, count })
-            .collect();
-        pa.sort_by_key(|p| std::cmp::Reverse(p.count));
+        let ranked = |map: BTreeMap<String, u64>| -> Vec<NamedCount> {
+            let mut v: Vec<NamedCount> = map
+                .into_iter()
+                .map(|(name, count)| NamedCount { name, count })
+                .collect();
+            v.sort_by_key(|p| std::cmp::Reverse(p.count));
+            v
+        };
+        let (pa, errors) = (ranked(pa), ranked(errors));
         let remaining = self.total.saturating_sub(done);
         let eta_s = if addr_per_s > 0.0 && remaining > 0 {
             Some((remaining as f64 / addr_per_s).round() as u64)
@@ -220,6 +245,7 @@ impl Telemetry {
             ctc_lines: lines.ctc,
             http,
             pa,
+            errors,
             latency: lat_stats(&latencies),
             latency_hist: lat_hist(&latencies),
             concurrency_allowed: 0,
@@ -228,6 +254,17 @@ impl Telemetry {
             addr_per_s,
             eta_s,
         }
+    }
+}
+
+/// Incrémente un motif d'erreur en bornant le nombre de motifs distincts :
+/// au-delà de MAX_ERROR_MOTIFS, le compte part dans « (autres) ».
+fn bump_error(errors: &mut BTreeMap<String, u64>, motif: &str, n: u64) {
+    let distinct = errors.len() - usize::from(errors.contains_key(AUTRES));
+    if errors.contains_key(motif) || distinct < MAX_ERROR_MOTIFS {
+        *errors.entry(motif.to_string()).or_insert(0) += n;
+    } else {
+        *errors.entry(AUTRES.to_string()).or_insert(0) += n;
     }
 }
 
@@ -271,7 +308,7 @@ fn lat_stats(lat: &[u32]) -> Option<LatStats> {
 mod tests {
     use super::*;
 
-    fn no_pa() -> BTreeMap<String, u32> {
+    fn vide() -> BTreeMap<String, u32> {
         BTreeMap::new()
     }
 
@@ -279,8 +316,8 @@ mod tests {
     fn compteurs_et_pourcentages() {
         let t = Telemetry::new(1000);
         // 2 appels : 50 adressages ok (30 existent, 20 ctc), puis 25 ok + 5 échecs
-        t.record_call(200, 120, 50, 30, 20, 0, &no_pa(), LineWeights::default());
-        t.record_call(200, 250, 30, 10, 5, 5, &no_pa(), LineWeights::default());
+        t.record_call(200, 120, 50, 30, 20, 0, &vide(), LineWeights::default(), &vide());
+        t.record_call(200, 250, 30, 10, 5, 5, &vide(), LineWeights::default(), &vide());
         let s = t.snapshot();
         assert_eq!(s.total, 1000);
         assert_eq!(s.done, 80);
@@ -308,8 +345,8 @@ mod tests {
         // peut couvrir 7 lignes dont 5 présentes et 3 CTC. Un échec d'appel
         // définitif couvre aussi ses lignes (dénominateur cohérent).
         let t = Telemetry::new(10);
-        t.record_call(200, 100, 2, 1, 1, 0, &no_pa(),
-            LineWeights { done: 7, exists: 5, ctc: 3 });
+        t.record_call(200, 100, 2, 1, 1, 0, &vide(),
+            LineWeights { done: 7, exists: 5, ctc: 3 }, &vide());
         t.record_error(400, 2, 4);
         let s = t.snapshot();
         assert_eq!((s.done_lines, s.exists_lines, s.ctc_lines), (11, 5, 3));
@@ -322,9 +359,9 @@ mod tests {
         // à égalité par nom pour un ordre stable.
         let t = Telemetry::new(100);
         t.record_call(200, 100, 8, 8, 0, 0, &BTreeMap::from([("Beta".into(), 5), ("Alpha".into(), 3)]),
-            LineWeights::default());
+            LineWeights::default(), &vide());
         t.record_call(200, 100, 4, 4, 0, 0, &BTreeMap::from([("Alpha".into(), 4), ("Gamma".into(), 5)]),
-            LineWeights::default());
+            LineWeights::default(), &vide());
         let s = t.snapshot();
         let ranking: Vec<(&str, u64)> = s.pa.iter().map(|p| (p.name.as_str(), p.count)).collect();
         assert_eq!(
@@ -337,7 +374,7 @@ mod tests {
     fn percentiles_latence() {
         let t = Telemetry::new(100);
         for (i, ms) in (1..=100u64).enumerate() {
-            t.record_call(200, ms, 1, 0, 0, 0, &no_pa(), LineWeights::default());
+            t.record_call(200, ms, 1, 0, 0, 0, &vide(), LineWeights::default(), &vide());
             let _ = i;
         }
         let s = t.snapshot();
@@ -350,10 +387,51 @@ mod tests {
     }
 
     #[test]
+    fn top_erreurs_agregees_et_classees() {
+        let t = Telemetry::new(100);
+        // 2 erreurs item « timeout SMP », 1 « participant invalide » dans un
+        // appel 200 ; puis un échec HTTP définitif de 10 adressages.
+        t.record_call(200, 100, 5, 2, 0, 3, &vide(), LineWeights::default(),
+            &BTreeMap::from([("timeout SMP".into(), 2), ("participant invalide".into(), 1)]));
+        t.record_error(404, 10, 10);
+        let s = t.snapshot();
+        let top: Vec<(&str, u64)> = s.errors.iter().map(|e| (e.name.as_str(), e.count)).collect();
+        assert_eq!(
+            top,
+            vec![("HTTP 404", 10), ("timeout SMP", 2), ("participant invalide", 1)]
+        );
+    }
+
+    #[test]
+    fn erreur_reseau_retentable_sans_motif() {
+        // Une erreur retentable (addr_failed = 0) ne crée pas de motif :
+        // rien n'a définitivement échoué.
+        let t = Telemetry::new(100);
+        t.record_error(0, 0, 0);
+        assert!(t.snapshot().errors.is_empty());
+    }
+
+    #[test]
+    fn motifs_d_erreur_bornes_avec_bucket_autres() {
+        // Les messages d'erreur peuvent contenir des parties variables :
+        // au-delà de 20 motifs distincts, tout part dans « (autres) » pour
+        // borner mémoire et taille du snapshot.
+        let t = Telemetry::new(1000);
+        for i in 0..25 {
+            t.record_call(200, 100, 1, 0, 0, 1, &vide(), LineWeights::default(),
+                &BTreeMap::from([(format!("motif {i:02}"), 1u32)]));
+        }
+        let s = t.snapshot();
+        assert_eq!(s.errors.len(), 21); // 20 motifs + « (autres) »
+        let autres = s.errors.iter().find(|e| e.name == "(autres)").unwrap();
+        assert_eq!(autres.count, 5);
+    }
+
+    #[test]
     fn histogramme_de_latences_par_tranches() {
         let t = Telemetry::new(10);
         for ms in [10u64, 60, 150, 700, 6000] {
-            t.record_call(200, ms, 1, 0, 0, 0, &no_pa(), LineWeights::default());
+            t.record_call(200, ms, 1, 0, 0, 0, &vide(), LineWeights::default(), &vide());
         }
         let hist = t.snapshot().latency_hist;
         // Bornes fixes ≤50, ≤100, ≤200, ≤500, ≤1000, ≤2000, ≤5000, au-delà.
@@ -379,7 +457,7 @@ mod tests {
         // 1 requête portant 50 adressages : addr_per_s ≈ 50 × req_per_s.
         // Un swap des deux champs ne passerait pas ce test.
         let t = Telemetry::new(1000);
-        t.record_call(200, 100, 50, 0, 0, 0, &no_pa(), LineWeights::default());
+        t.record_call(200, 100, 50, 0, 0, 0, &vide(), LineWeights::default(), &vide());
         let s = t.snapshot();
         assert!(s.req_per_s > 0.0);
         let ratio = s.addr_per_s / s.req_per_s;
@@ -390,7 +468,7 @@ mod tests {
     fn eta_present_des_qu_il_y_a_du_debit() {
         let t = Telemetry::new(1000);
         assert!(t.snapshot().eta_s.is_none()); // rien traité
-        t.record_call(200, 100, 100, 0, 0, 0, &no_pa(), LineWeights::default());
+        t.record_call(200, 100, 100, 0, 0, 0, &vide(), LineWeights::default(), &vide());
         let s = t.snapshot();
         assert!(s.addr_per_s > 0.0);
         assert!(s.eta_s.is_some());

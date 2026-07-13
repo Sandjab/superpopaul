@@ -429,6 +429,7 @@ impl Engine {
                             let at = now_epoch();
                             let (mut ex, mut ctc, mut failed) = (0u32, 0u32, 0u32);
                             let mut pa_counts: BTreeMap<String, u32> = BTreeMap::new();
+                            let mut error_counts: BTreeMap<String, u32> = BTreeMap::new();
                             let mut lines = LineWeights::default();
                             let mut resolutions = Vec::with_capacity(items.len());
                             for (i, item) in items.iter().enumerate() {
@@ -454,6 +455,11 @@ impl Engine {
                                     }
                                 } else {
                                     failed += 1;
+                                    let motif = r
+                                        .api_status
+                                        .strip_prefix("error:")
+                                        .unwrap_or(&r.api_status);
+                                    *error_counts.entry(motif.to_string()).or_insert(0) += 1;
                                 }
                                 resolutions.push(r);
                             }
@@ -470,6 +476,7 @@ impl Engine {
                                 failed,
                                 &pa_counts,
                                 lines,
+                                &error_counts,
                             );
                         }
                         Err(ApiError::Client(code)) => {
@@ -833,6 +840,46 @@ mod tests_engine {
         assert_eq!((snap.pa[0].name.as_str(), snap.pa[0].count), ("PA UN", 53));
         // Sans carte de multiplicités (HashMap vide), 1 ligne par adressage.
         assert_eq!(snap.done_lines, 53);
+    }
+
+    /// Répond 200 mais un participant sur deux est en erreur item
+    /// « timeout SMP » — le cas réel d'une API saturée.
+    struct HalfErrorResolver;
+    impl Respond for HalfErrorResolver {
+        fn respond(&self, req: &Request) -> ResponseTemplate {
+            let body: serde_json::Value = serde_json::from_slice(&req.body).unwrap();
+            let results: Vec<serde_json::Value> = body["participants"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .enumerate()
+                .map(|(i, p)| {
+                    if i % 2 == 0 {
+                        serde_json::json!({"participant_id": p, "error": "timeout SMP"})
+                    } else {
+                        serde_json::json!({"participant_id": p, "exists": true,
+                            "supports_extended_ctc_fr": false})
+                    }
+                })
+                .collect();
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"results": results}))
+        }
+    }
+
+    #[tokio::test]
+    async fn erreurs_item_remontees_par_motif_dans_la_telemetrie() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/resolve/batch"))
+            .respond_with(HalfErrorResolver)
+            .mount(&server)
+            .await;
+        let (handle, mut rx, _store) = run_engine(&server, "K", pids(10)).await;
+        let (done, failed) = wait_finished(&mut rx).await;
+        assert_eq!((done, failed), (10, 5));
+        let errors = handle.telemetry.snapshot().errors;
+        assert_eq!(errors.len(), 1);
+        assert_eq!((errors[0].name.as_str(), errors[0].count), ("timeout SMP", 5));
     }
 
     #[tokio::test]

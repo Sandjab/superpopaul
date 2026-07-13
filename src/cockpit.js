@@ -185,6 +185,7 @@ listen("telemetry", (e) => {
     ? `${s.concurrency_allowed}/${s.concurrency_max} · ${fmt(s.failed)} échecs`
     : `${fmt(s.failed)} échecs`;
   renderHttpBars(s.http);
+  renderTopErrors(s.errors);
   renderPaGrid(s.pa, s.total);
   const l = s.latency;
   $("latency").textContent = l
@@ -273,6 +274,27 @@ function renderHttpBars(http) {
       return h("div", { class: "http-row", title },
         code, h("div", { class: "http-bar-wrap" }, bar), count);
     }));
+}
+
+/** Top erreurs : les 5 motifs d'échec les plus fréquents (le backend borne
+ *  déjà à 20 motifs + « (autres) ») ; au-delà de 5, une ligne de synthèse. */
+function renderTopErrors(errors) {
+  if (!errors.length) {
+    $("top-errors").replaceChildren(h("span", { class: "muted" }, "aucun échec"));
+    return;
+  }
+  const rows = errors.slice(0, 5).map((e) =>
+    h("div", { class: "err-row" },
+      h("span", { class: "err-count" }, fmt(e.count)),
+      h("span", { class: "err-name", title: e.name }, e.name)));
+  const rest = errors.slice(5);
+  if (rest.length) {
+    const sum = rest.reduce((a, e) => a + e.count, 0);
+    rows.push(h("div", { class: "err-row muted" },
+      h("span", { class: "err-count" }, fmt(sum)),
+      h("span", { class: "err-name" }, `sur ${rest.length} autres motifs`)));
+  }
+  $("top-errors").replaceChildren(...rows);
 }
 
 /** Carte PA : classement sur 3 colonnes remplies de haut en bas puis de
