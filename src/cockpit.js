@@ -156,11 +156,9 @@ function renderHttpBars(http) {
     entries.map(([c, n]) => `${c === "0" ? "réseau" : c}×${fmt(n)}`).join("   ");
 }
 
-/** Carte PA : classement sur 3 colonnes remplies de bas en haut puis de
- *  gauche à droite (rang 1 en bas à gauche, comme un funnel). Chaque ligne :
- *  rang, nom, adressages, % du total d'adressages uniques du run. Le
- *  bas-en-haut est rendu par flex column-reverse : les rangs croissants sont
- *  ajoutés dans l'ordre du DOM et s'empilent depuis le bas. */
+/** Carte PA : classement sur 3 colonnes remplies de haut en bas puis de
+ *  gauche à droite (rang 1 en haut à gauche). Chaque ligne : rang, nom,
+ *  adressages, % du total d'adressages uniques du run. */
 function renderPaGrid(pa, total) {
   const grid = $("pa-grid");
   if (!pa.length) {

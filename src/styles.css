@@ -127,8 +127,7 @@ body > .drag-fallback {
 }
 .mini-ring-center b { font-size: 13px; }
 #pa-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0 18px; margin-top: 8px; }
-/* column-reverse : rang 1 (premier du DOM) en bas, les suivants s'empilent vers le haut */
-.pa-col { display: flex; flex-direction: column-reverse; justify-content: flex-start; }
+.pa-col { display: flex; flex-direction: column; }
 .pa-row { display: flex; align-items: baseline; gap: 8px; font-size: 12px; padding: 2px 0; }
 .pa-rank { color: var(--muted); min-width: 2ch; text-align: right; }
 .pa-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
