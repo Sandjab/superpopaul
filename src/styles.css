@@ -100,6 +100,10 @@ footer {
   display: flex; justify-content: space-between; padding: 10px 18px;
   border-top: 1px solid var(--border);
 }
+/* « Suivant » reste à droite même quand « Précédent » est masqué (étape 1) :
+   space-between colle un enfant unique à gauche, margin-left auto le pousse
+   à droite dans tous les cas. */
+#btn-next { margin-left: auto; }
 #modal-backdrop {
   position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 50;
   display: flex; align-items: center; justify-content: center;
