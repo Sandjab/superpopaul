@@ -115,6 +115,25 @@ body > .drag-fallback {
 .hbar { display: flex; height: 14px; border-radius: 4px; overflow: hidden; margin-top: 8px; }
 .hbar span { display: block; height: 100%; }
 .hbar-legend { font-size: 12px; color: var(--muted); margin-top: 4px; }
+.mini-ring-row { display: flex; align-items: center; gap: 12px; margin-top: 6px; }
+.mini-ring {
+  flex: none; width: 72px; height: 72px; border-radius: 50%;
+  background: conic-gradient(var(--green) 0%, #21262d 0%);
+  display: flex; align-items: center; justify-content: center;
+}
+.mini-ring-center {
+  width: 54px; height: 54px; border-radius: 50%; background: var(--card);
+  display: flex; align-items: center; justify-content: center;
+}
+.mini-ring-center b { font-size: 13px; }
+#pa-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0 18px; margin-top: 8px; }
+/* column-reverse : rang 1 (premier du DOM) en bas, les suivants s'empilent vers le haut */
+.pa-col { display: flex; flex-direction: column-reverse; justify-content: flex-start; }
+.pa-row { display: flex; align-items: baseline; gap: 8px; font-size: 12px; padding: 2px 0; }
+.pa-rank { color: var(--muted); min-width: 2ch; text-align: right; }
+.pa-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pa-count, .pa-pct { color: var(--muted); white-space: nowrap; }
+.pa-pct { min-width: 6ch; text-align: right; }
 
 footer {
   display: flex; justify-content: space-between; padding: 10px 18px;

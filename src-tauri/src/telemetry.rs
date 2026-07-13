@@ -17,6 +17,7 @@ struct Inner {
     ctc: u64,
     failed: u64,
     http: BTreeMap<u16, u64>,
+    pa: BTreeMap<String, u64>, // nom de PA → adressages routés vers elle
     latencies_ms: Vec<u32>,
     calls: VecDeque<(Instant, u32)>, // (instant, adressages traités par l'appel)
 }
@@ -31,6 +32,13 @@ pub struct LatStats {
     pub max: u32,
 }
 
+/// Une PA et le nombre d'adressages routés vers elle.
+#[derive(Debug, Clone, Serialize)]
+pub struct PaCount {
+    pub name: String,
+    pub count: u64,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Snapshot {
     pub done: u64,
@@ -39,6 +47,9 @@ pub struct Snapshot {
     pub ctc: u64,
     pub failed: u64,
     pub http: BTreeMap<u16, u64>,
+    /// PA découvertes, classées par représentativité décroissante
+    /// (à égalité : ordre alphabétique, pour un affichage stable).
+    pub pa: Vec<PaCount>,
     pub latency: Option<LatStats>,
     pub req_per_s: f64,
     pub addr_per_s: f64,
@@ -55,6 +66,7 @@ impl Telemetry {
                 ctc: 0,
                 failed: 0,
                 http: BTreeMap::new(),
+                pa: BTreeMap::new(),
                 latencies_ms: Vec::new(),
                 calls: VecDeque::new(),
             }),
@@ -63,6 +75,7 @@ impl Telemetry {
 
     /// Un appel HTTP abouti (200) : addr adressages traités, dont `exists`
     /// présents Peppol, `ctc` supportant CTC-FR, `failed` en erreur item.
+    /// `pa` : adressages de l'appel agrégés par nom de PA.
     pub fn record_call(
         &self,
         http_status: u16,
@@ -71,6 +84,7 @@ impl Telemetry {
         exists: u32,
         ctc: u32,
         failed: u32,
+        pa: &BTreeMap<String, u32>,
     ) {
         let mut i = self.inner.lock().unwrap();
         i.done += addr as u64;
@@ -78,6 +92,9 @@ impl Telemetry {
         i.ctc += ctc as u64;
         i.failed += failed as u64;
         *i.http.entry(http_status).or_insert(0) += 1;
+        for (name, n) in pa {
+            *i.pa.entry(name.clone()).or_insert(0) += *n as u64;
+        }
         i.latencies_ms.push(latency_ms.min(u32::MAX as u64) as u32);
         i.calls.push_back((Instant::now(), addr));
     }
@@ -102,7 +119,7 @@ impl Telemetry {
         // Sous le verrou : purge de la fenêtre + copies. Le tri des latences
         // (coûteux à grand volume) se fait HORS verrou pour ne pas bloquer
         // les record_call des workers.
-        let (done, exists, ctc, failed, http, latencies, req_per_s, addr_per_s) = {
+        let (done, exists, ctc, failed, http, pa, latencies, req_per_s, addr_per_s) = {
             let mut i = self.inner.lock().unwrap();
             let now = Instant::now();
             while let Some((t, _)) = i.calls.front() {
@@ -128,11 +145,19 @@ impl Telemetry {
                 i.ctc,
                 i.failed,
                 i.http.clone(),
+                i.pa.clone(),
                 i.latencies_ms.clone(),
                 req_per_s,
                 addr_per_s,
             )
         }; // verrou relâché ici
+        // Classement par représentativité (BTreeMap garantit déjà l'ordre
+        // alphabétique, que sort_by_key stable préserve à égalité de compte).
+        let mut pa: Vec<PaCount> = pa
+            .into_iter()
+            .map(|(name, count)| PaCount { name, count })
+            .collect();
+        pa.sort_by_key(|p| std::cmp::Reverse(p.count));
         let remaining = self.total.saturating_sub(done);
         let eta_s = if addr_per_s > 0.0 && remaining > 0 {
             Some((remaining as f64 / addr_per_s).round() as u64)
@@ -146,6 +171,7 @@ impl Telemetry {
             ctc,
             failed,
             http,
+            pa,
             latency: lat_stats(&latencies),
             req_per_s,
             addr_per_s,
@@ -175,12 +201,16 @@ fn lat_stats(lat: &[u32]) -> Option<LatStats> {
 mod tests {
     use super::*;
 
+    fn no_pa() -> BTreeMap<String, u32> {
+        BTreeMap::new()
+    }
+
     #[test]
     fn compteurs_et_pourcentages() {
         let t = Telemetry::new(1000);
         // 2 appels : 50 adressages ok (30 existent, 20 ctc), puis 25 ok + 5 échecs
-        t.record_call(200, 120, 50, 30, 20, 0);
-        t.record_call(200, 250, 30, 10, 5, 5);
+        t.record_call(200, 120, 50, 30, 20, 0, &no_pa());
+        t.record_call(200, 250, 30, 10, 5, 5, &no_pa());
         let s = t.snapshot();
         assert_eq!(s.total, 1000);
         assert_eq!(s.done, 80);
@@ -202,10 +232,26 @@ mod tests {
     }
 
     #[test]
+    fn classement_pa_par_representativite() {
+        // Les comptes s'accumulent entre appels ; le snapshot classe par
+        // nombre d'adressages décroissant (rang 1 = la plus représentée),
+        // à égalité par nom pour un ordre stable.
+        let t = Telemetry::new(100);
+        t.record_call(200, 100, 8, 8, 0, 0, &BTreeMap::from([("Beta".into(), 5), ("Alpha".into(), 3)]));
+        t.record_call(200, 100, 4, 4, 0, 0, &BTreeMap::from([("Alpha".into(), 4), ("Gamma".into(), 5)]));
+        let s = t.snapshot();
+        let ranking: Vec<(&str, u64)> = s.pa.iter().map(|p| (p.name.as_str(), p.count)).collect();
+        assert_eq!(
+            ranking,
+            vec![("Alpha", 7), ("Beta", 5), ("Gamma", 5)] // Beta avant Gamma : égalité → ordre alphabétique
+        );
+    }
+
+    #[test]
     fn percentiles_latence() {
         let t = Telemetry::new(100);
         for (i, ms) in (1..=100u64).enumerate() {
-            t.record_call(200, ms, 1, 0, 0, 0);
+            t.record_call(200, ms, 1, 0, 0, 0, &no_pa());
             let _ = i;
         }
         let s = t.snapshot();
@@ -231,7 +277,7 @@ mod tests {
         // 1 requête portant 50 adressages : addr_per_s ≈ 50 × req_per_s.
         // Un swap des deux champs ne passerait pas ce test.
         let t = Telemetry::new(1000);
-        t.record_call(200, 100, 50, 0, 0, 0);
+        t.record_call(200, 100, 50, 0, 0, 0, &no_pa());
         let s = t.snapshot();
         assert!(s.req_per_s > 0.0);
         let ratio = s.addr_per_s / s.req_per_s;
@@ -242,7 +288,7 @@ mod tests {
     fn eta_present_des_qu_il_y_a_du_debit() {
         let t = Telemetry::new(1000);
         assert!(t.snapshot().eta_s.is_none()); // rien traité
-        t.record_call(200, 100, 100, 0, 0, 0);
+        t.record_call(200, 100, 100, 0, 0, 0, &no_pa());
         let s = t.snapshot();
         assert!(s.addr_per_s > 0.0);
         assert!(s.eta_s.is_some());

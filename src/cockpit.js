@@ -116,15 +116,26 @@ function httpColor(code) {
   return code >= 500 ? "var(--red)" : code >= 400 ? "var(--amber)" : "var(--blue)";
 }
 
+/** Mini-anneau d'une tuile : % à l'intérieur, nombre absolu à côté.
+ *  `count` sur `outOf` — tant que rien n'est résolu, tout reste à « — ». */
+function renderMiniRing(ring, count, outOf) {
+  const pct = outOf ? (100 * count / outOf) : 0;
+  $(`ring-${ring}`).style.background =
+    `conic-gradient(var(--green) ${pct}%, #21262d ${pct}%)`;
+  $(`t-${ring}`).textContent = outOf ? `${pct.toFixed(1)} %` : "—";
+  $(`t-${ring}-abs`).textContent = outOf ? fmt(count) : "—";
+}
+
 listen("telemetry", (e) => {
   const s = e.payload;
   lastTotal = s.total;
   renderRing(s.done, s.total, s.eta_s != null ? fmtDuration(s.eta_s) : "—");
-  $("t-exists").textContent = s.done ? `${(100 * s.exists / s.done).toFixed(1)} %` : "—";
-  $("t-ctc").textContent = s.done ? `${(100 * s.ctc / s.done).toFixed(1)} %` : "—";
+  renderMiniRing("exists", s.exists, s.done);
+  renderMiniRing("ctc", s.ctc, s.done);
   $("t-rate").textContent = `${s.req_per_s.toFixed(1)} req/s · ${Math.round(s.addr_per_s)} adr/s`;
   $("t-misc").textContent = `${fmt(s.failed)} échecs`;
   renderHttpBars(s.http);
+  renderPaGrid(s.pa, s.total);
   const l = s.latency;
   $("latency").textContent = l
     ? `min ${l.min} · moy ${l.mean} · p50 ${l.p50} · p90 ${l.p90} · p99 ${l.p99} · max ${l.max}`
@@ -143,6 +154,29 @@ function renderHttpBars(http) {
     })));
   $("http-legend").textContent =
     entries.map(([c, n]) => `${c === "0" ? "réseau" : c}×${fmt(n)}`).join("   ");
+}
+
+/** Carte PA : classement sur 3 colonnes remplies de bas en haut puis de
+ *  gauche à droite (rang 1 en bas à gauche, comme un funnel). Chaque ligne :
+ *  rang, nom, adressages, % du total d'adressages uniques du run. Le
+ *  bas-en-haut est rendu par flex column-reverse : les rangs croissants sont
+ *  ajoutés dans l'ordre du DOM et s'empilent depuis le bas. */
+function renderPaGrid(pa, total) {
+  const grid = $("pa-grid");
+  if (!pa.length) {
+    grid.replaceChildren(h("span", { class: "muted" }, "—"));
+    return;
+  }
+  const rows = Math.ceil(pa.length / 3);
+  const cols = [[], [], []];
+  pa.forEach((p, i) => {
+    cols[Math.floor(i / rows)].push(h("div", { class: "pa-row" },
+      h("span", { class: "pa-rank" }, `${i + 1}`),
+      h("span", { class: "pa-name", title: p.name }, p.name),
+      h("span", { class: "pa-count" }, fmt(p.count)),
+      h("span", { class: "pa-pct" }, total ? `${(100 * p.count / total).toFixed(1)} %` : "—")));
+  });
+  grid.replaceChildren(...cols.map((c) => h("div", { class: "pa-col" }, ...c)));
 }
 
 function fmt(n) { return Number(n).toLocaleString("fr-FR"); }

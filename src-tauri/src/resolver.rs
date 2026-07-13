@@ -134,7 +134,7 @@ use crate::api::{ApiClient, ApiError, ApiItem};
 use crate::pid::canonical;
 use crate::store::{Resolution, Store};
 use crate::telemetry::{Snapshot, Telemetry};
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::atomic::AtomicBool;
 use tokio::sync::{mpsc, watch};
 
@@ -423,6 +423,7 @@ impl Engine {
                             aimd.on_success();
                             let at = now_epoch();
                             let (mut ex, mut ctc, mut failed) = (0u32, 0u32, 0u32);
+                            let mut pa_counts: BTreeMap<String, u32> = BTreeMap::new();
                             let mut resolutions = Vec::with_capacity(items.len());
                             for (i, item) in items.iter().enumerate() {
                                 let sent = chunk.get(i).map(String::as_str).unwrap_or("");
@@ -433,6 +434,12 @@ impl Engine {
                                     }
                                     if r.extended_ctc_fr == Some(true) {
                                         ctc += 1;
+                                    }
+                                    // Repli sur le code si l'API n'a pas de nom.
+                                    if let Some(pa) =
+                                        r.pa_name.as_ref().or(r.pa_code.as_ref())
+                                    {
+                                        *pa_counts.entry(pa.clone()).or_insert(0) += 1;
                                     }
                                 } else {
                                     failed += 1;
@@ -450,6 +457,7 @@ impl Engine {
                                 ex,
                                 ctc,
                                 failed,
+                                &pa_counts,
                             );
                         }
                         Err(ApiError::Client(code)) => {
@@ -799,7 +807,10 @@ mod tests_engine {
         assert!(m
             .values()
             .all(|r| r.api_status == "ok" && r.pa_code.as_deref() == Some("PA1")));
-        let _ = handle;
+        // Câblage PA → télémétrie : les 53 adressages portent la même PA.
+        let pa = handle.telemetry.snapshot().pa;
+        assert_eq!(pa.len(), 1);
+        assert_eq!((pa[0].name.as_str(), pa[0].count), ("PA UN", 53));
     }
 
     #[tokio::test]

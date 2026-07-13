@@ -102,14 +102,27 @@
           <p title="Temps restant estimé d'après le débit courant.">ETA <b id="eta">—</b></p>
         </div>
         <div id="tiles">
-          <div class="tile" title="Part des adressages résolus présents dans l'annuaire Peppol.">🟢 Dans Peppol<br><b id="t-exists">—</b></div>
-          <div class="tile" title="Part des adressages éligibles à la facturation électronique française (extension CTC-FR).">🇫🇷 CTC-FR<br><b id="t-ctc">—</b></div>
+          <div class="tile" title="Part des adressages résolus présents dans l'annuaire Peppol (nombre absolu à côté de l'anneau).">🟢 Dans Peppol
+            <div class="mini-ring-row">
+              <div class="mini-ring" id="ring-exists"><div class="mini-ring-center"><b id="t-exists">—</b></div></div>
+              <b id="t-exists-abs">—</b>
+            </div>
+          </div>
+          <div class="tile" title="Part des adressages éligibles à la facturation électronique française — France Invoice UBL Extension (ex-CTC-FR).">🇫🇷 France Invoice UBL Extension
+            <div class="mini-ring-row">
+              <div class="mini-ring" id="ring-ctc"><div class="mini-ring-center"><b id="t-ctc">—</b></div></div>
+              <b id="t-ctc-abs">—</b>
+            </div>
+          </div>
           <div class="tile" title="req/s : requêtes API · adr/s : adressages résolus par seconde.">Débit<br><b id="t-rate">—</b></div>
           <div class="tile">Concurrence / échecs<br><b id="t-misc">—</b></div>
         </div>
         <div class="wide">
           <div class="tile" title="Répartition des réponses API — 200 OK, 429 rate-limit, 0 erreur réseau.">Codes HTTP<div id="http-bars"></div><div id="http-legend" class="hbar-legend"></div></div>
           <div class="tile" title="Temps de réponse API en millisecondes (percentiles).">Latence (ms)<div id="latency" class="hbar-legend"></div></div>
+        </div>
+        <div class="wide">
+          <div class="tile" title="PA découvertes, classées par représentativité — rang 1 en bas à gauche, puis de bas en haut et de gauche à droite : rang, nom, adressages routés vers cette PA, % du total d'adressages uniques.">PA<div id="pa-grid"></div></div>
         </div>
       </div>
       <p id="run-result" class="hidden"></p>
