@@ -126,6 +126,9 @@ impl Config {
         if self.api.concurrency < 1 {
             return Err("concurrency doit être ≥ 1".into());
         }
+        if self.output.columns.is_empty() {
+            return Err("output.columns ne doit pas être vide".into());
+        }
         Ok(())
     }
 }
@@ -243,6 +246,16 @@ mod tests {
         // Le plafond suit celui du serveur (/resolve/batch : 500 max).
         cfg.api.batch_size = 500;
         assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejette_colonnes_vides() {
+        // L'UI (drop zone, garde « min 1 colonne ») garantit ≥ 1 colonne ; un
+        // YAML columns: [] chargerait vers un tableau sans ligne d'en-têtes —
+        // aucune cible de drop, utilisateur coincé.
+        let mut cfg = config_exemple();
+        cfg.output.columns.clear();
+        assert!(cfg.validate().is_err());
     }
 
     #[test]
