@@ -10,28 +10,22 @@ const PEPPOL_FIELDS = [
 const PEPPOL_SAMPLE = { exists: "true", pa_code: "PA0042", pa_name: "ACME PA",
                         pa_country: "FR", extended_ctc_fr: "false" };
 
-// Réordonnancement des colonnes au POINTEUR (pointerdown/move/up), pas en
-// drag-and-drop HTML5 : ce dernier est avalé par le handler drag-drop natif de
-// la webview Tauri (dragDropEnabled=true, requis pour déposer un FICHIER sur le
-// dropzone). Les pointer events, eux, ne dépendent pas de ce réglage.
-let dragFrom = null;
+// Réordonnancement des colonnes par SortableJS (vendor/Sortable.min.js) en
+// mode forceFallback : le drag-and-drop HTML5 est avalé par le handler
+// drag-drop natif de la webview Tauri (dragDropEnabled=true, requis pour
+// déposer un FICHIER sur le dropzone). Le fallback de Sortable n'émet que des
+// événements pointeur, insensibles à ce réglage.
+let sortable = null;
 
-function clearDragOver() {
-  document.querySelectorAll("#out-preview th.dragover")
-    .forEach((el) => el.classList.remove("dragover"));
-}
-
-// Index de colonne sous le pointeur (via la cellule survolée), ou null.
-function colUnderPointer(e) {
-  const cell = document.elementFromPoint(e.clientX, e.clientY)
-    ?.closest("#out-preview td, #out-preview th");
-  return cell ? cell.cellIndex : null;
-}
-
-// En-tête (th) d'une colonne d'index donné, pour le retour visuel .dragover.
-function headerAt(idx) {
-  const head = $("out-preview").firstElementChild;   // 1re ligne = les en-têtes
-  return head ? head.children[idx] : null;
+// Fait suivre les cellules du corps à l'ordre courant des en-têtes : pendant
+// le drag, Sortable ne déplace que les th ; on réaligne les td via data-idx
+// (l'index de colonne au moment du render).
+function syncBodyToHeaders() {
+  const order = [...$("out-preview").rows[0].cells].map((th) => +th.dataset.idx);
+  for (const tr of [...$("out-preview").rows].slice(1)) {
+    const byIdx = new Map([...tr.cells].map((td) => [+td.dataset.idx, td]));
+    tr.append(...order.map((i) => byIdx.get(i)));
+  }
 }
 
 function colLabel(c) {
@@ -48,61 +42,46 @@ function makeHeader(c, i) {
       renderOutPreview();
     },
   }, "✕");
-  const attrs = { class: c.source };
+  const attrs = { class: c.source, "data-idx": i };
   if (c.source === "peppol")
     attrs.title = "Champ calculé par l'API Peppol — les valeurs affichées sont un exemple.";
-  const th = h("th", attrs, `⠿ ${colLabel(c)} `, rm);
-  // Drag au pointeur : on capture le pointeur pour suivre le curseur même hors
-  // du th, on surligne la colonne cible, on réordonne au relâchement. Démarrage
-  // ignoré sur le ✕ (qui garde son clic) et hors clic principal.
-  th.addEventListener("pointerdown", (e) => {
-    if (e.button !== 0 || e.target.closest(".rm")) return;
-    dragFrom = i;
-    th.setPointerCapture(e.pointerId);
-    th.style.cursor = "grabbing";
-  });
-  th.addEventListener("pointermove", (e) => {
-    if (dragFrom === null) return;
-    clearDragOver();
-    const to = colUnderPointer(e);
-    if (to !== null && to !== dragFrom) headerAt(to)?.classList.add("dragover");
-  });
-  th.addEventListener("pointerup", (e) => {
-    if (dragFrom === null) return;
-    const from = dragFrom;
-    const to = colUnderPointer(e);
-    dragFrom = null;
-    th.style.cursor = "";
-    clearDragOver();
-    if (to === null || to === from) return;
-    const cols = state.config.output.columns;
-    cols.splice(to, 0, cols.splice(from, 1)[0]);
-    renderOutPreview();
-  });
-  th.addEventListener("pointercancel", () => {
-    dragFrom = null;
-    th.style.cursor = "";
-    clearDragOver();
-  });
-  return th;
+  return h("th", attrs, `⠿ ${colLabel(c)} `, rm);
 }
 
 function renderOutPreview() {
+  sortable?.destroy();
+  sortable = null;
   const cols = state.config.output.columns;
   const rows = state.preview ? state.preview.rows : [];
-  const cell = (c, r) => {
-    if (c.source === "peppol") return h("td", { class: "muted" }, PEPPOL_SAMPLE[c.field]);
+  const cell = (c, r, i) => {
+    if (c.source === "peppol")
+      return h("td", { class: "muted", "data-idx": i }, PEPPOL_SAMPLE[c.field]);
     const idx = state.preview.headers.indexOf(c.name);
-    return h("td", {}, idx >= 0 ? (r[idx] ?? "") : "");
+    return h("td", { "data-idx": i }, idx >= 0 ? (r[idx] ?? "") : "");
   };
   if (cols.length === 0) {
     $("out-preview").replaceChildren(h("tr", {}, h("td", { class: "muted" },
       "Toutes les colonnes sont exclues — utilise « + Ajouter une colonne »")));
   } else {
+    const head = h("tr", {}, ...cols.map(makeHeader));
     $("out-preview").replaceChildren(
-      h("tr", {}, ...cols.map(makeHeader)),
-      ...rows.map((r) => h("tr", {}, ...cols.map((c) => cell(c, r)))),
+      head,
+      ...rows.map((r) => h("tr", {}, ...cols.map((c, i) => cell(c, r, i)))),
     );
+    sortable = new Sortable(head, {
+      animation: 250,
+      forceFallback: true,          // jamais de DnD HTML5 (cf. commentaire ci-dessus)
+      fallbackOnBody: true,
+      ghostClass: "drag-ghost",     // placeholder dans le tableau
+      fallbackClass: "drag-fallback", // clone qui suit le curseur
+      filter: ".rm",                // le ✕ garde son clic, pas de drag depuis lui
+      onChange: syncBodyToHeaders,
+      onEnd: () => {
+        const order = [...$("out-preview").rows[0].cells].map((th) => +th.dataset.idx);
+        cols.splice(0, cols.length, ...order.map((i) => cols[i]));
+        renderOutPreview();
+      },
+    });
   }
   renderAddColMenu();
 }

@@ -9,6 +9,11 @@
 - Frontend : vanilla HTML/CSS/JS, **pas de bundler ni de framework**.
   L'UI n'a aucune logique métier : elle invoque des commandes et affiche
   des événements.
+  Dérogation unique : SortableJS 1.15.6 vendorisé (`src/vendor/Sortable.min.js`,
+  MIT, fichier seul) pour le drag des colonnes de l'étape 2 — le DnD HTML5 est
+  avalé par le handler drag-drop Tauri (requis pour le drop de fichier), et le
+  mode `forceFallback` de Sortable donne un drag pointeur animé qu'un
+  équivalent maison ne justifiait pas de réécrire.
 - Sécurité UI : **jamais d'innerHTML avec des données dynamiques** (contenu
   CSV, messages d'erreur backend) — construire le DOM via le helper `h()`
   de `app.js` ou `textContent`. Un CSV est une entrée non fiable.

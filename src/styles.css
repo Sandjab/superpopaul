@@ -69,7 +69,13 @@ th, td { border: 1px solid var(--border); padding: 4px 10px; text-align: left; }
 th { background: var(--card); }
 #out-preview th { cursor: grab; user-select: none; white-space: nowrap; }
 #out-preview th.peppol { color: var(--blue); border-color: var(--blue); }
-#out-preview th.dragover { border-left: 3px solid var(--blue); }
+/* Drag des colonnes (SortableJS forceFallback) : placeholder bleu translucide
+   dans le tableau, clone flottant ombré qui suit le curseur (fallbackOnBody). */
+#out-preview th.drag-ghost { opacity: .4; background: rgba(88, 166, 255, .16); }
+body > .drag-fallback {
+  opacity: .9; box-shadow: 0 8px 24px rgba(0, 0, 0, .6);
+  border-radius: 4px; cursor: grabbing;
+}
 th .rm { color: var(--muted); cursor: pointer; margin-left: 6px; }
 th .rm:hover { color: var(--red); }
 #add-col-menu button { margin: 4px 4px 0 0; }
