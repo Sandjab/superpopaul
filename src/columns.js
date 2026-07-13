@@ -10,6 +10,30 @@ const PEPPOL_FIELDS = [
 const PEPPOL_SAMPLE = { exists: "true", pa_code: "PA0042", pa_name: "ACME PA",
                         pa_country: "FR", extended_ctc_fr: "false" };
 
+// Réordonnancement des colonnes au POINTEUR (pointerdown/move/up), pas en
+// drag-and-drop HTML5 : ce dernier est avalé par le handler drag-drop natif de
+// la webview Tauri (dragDropEnabled=true, requis pour déposer un FICHIER sur le
+// dropzone). Les pointer events, eux, ne dépendent pas de ce réglage.
+let dragFrom = null;
+
+function clearDragOver() {
+  document.querySelectorAll("#out-preview th.dragover")
+    .forEach((el) => el.classList.remove("dragover"));
+}
+
+// Index de colonne sous le pointeur (via la cellule survolée), ou null.
+function colUnderPointer(e) {
+  const cell = document.elementFromPoint(e.clientX, e.clientY)
+    ?.closest("#out-preview td, #out-preview th");
+  return cell ? cell.cellIndex : null;
+}
+
+// En-tête (th) d'une colonne d'index donné, pour le retour visuel .dragover.
+function headerAt(idx) {
+  const head = $("out-preview").firstElementChild;   // 1re ligne = les en-têtes
+  return head ? head.children[idx] : null;
+}
+
 function colLabel(c) {
   return c.source === "input" ? c.name
        : "⚡ " + PEPPOL_FIELDS.find(([f]) => f === c.field)[1];
@@ -17,32 +41,48 @@ function colLabel(c) {
 
 function makeHeader(c, i) {
   const rm = h("span", {
-    class: "rm", title: "Exclure", draggable: "false",
+    class: "rm", title: "Exclure",
     onclick: (e) => {
       e.stopPropagation();
       state.config.output.columns.splice(i, 1);
       renderOutPreview();
     },
   }, "✕");
-  const attrs = { class: c.source, draggable: "true" };
+  const attrs = { class: c.source };
   if (c.source === "peppol")
     attrs.title = "Champ calculé par l'API Peppol — les valeurs affichées sont un exemple.";
   const th = h("th", attrs, `⠿ ${colLabel(c)} `, rm);
-  // L'index source voyage dans dataTransfer : le drop ignore ainsi les drags
-  // étrangers (sélection de texte, fichier) qui ne portent pas d'index.
-  th.addEventListener("dragstart", (e) =>
-    e.dataTransfer.setData("text/plain", String(i)));
-  th.addEventListener("dragover", (e) => { e.preventDefault(); th.classList.add("dragover"); });
-  th.addEventListener("dragleave", () => th.classList.remove("dragover"));
-  th.addEventListener("dragend", () =>
-    document.querySelectorAll(".dragover").forEach((el) => el.classList.remove("dragover")));
-  th.addEventListener("drop", (e) => {
-    e.preventDefault();
-    const from = parseInt(e.dataTransfer.getData("text/plain"), 10);
-    if (Number.isNaN(from) || from === i) return;
+  // Drag au pointeur : on capture le pointeur pour suivre le curseur même hors
+  // du th, on surligne la colonne cible, on réordonne au relâchement. Démarrage
+  // ignoré sur le ✕ (qui garde son clic) et hors clic principal.
+  th.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0 || e.target.closest(".rm")) return;
+    dragFrom = i;
+    th.setPointerCapture(e.pointerId);
+    th.style.cursor = "grabbing";
+  });
+  th.addEventListener("pointermove", (e) => {
+    if (dragFrom === null) return;
+    clearDragOver();
+    const to = colUnderPointer(e);
+    if (to !== null && to !== dragFrom) headerAt(to)?.classList.add("dragover");
+  });
+  th.addEventListener("pointerup", (e) => {
+    if (dragFrom === null) return;
+    const from = dragFrom;
+    const to = colUnderPointer(e);
+    dragFrom = null;
+    th.style.cursor = "";
+    clearDragOver();
+    if (to === null || to === from) return;
     const cols = state.config.output.columns;
-    cols.splice(i, 0, cols.splice(from, 1)[0]);
+    cols.splice(to, 0, cols.splice(from, 1)[0]);
     renderOutPreview();
+  });
+  th.addEventListener("pointercancel", () => {
+    dragFrom = null;
+    th.style.cursor = "";
+    clearDragOver();
   });
   return th;
 }
