@@ -116,7 +116,8 @@ async function pickInput(path) {
       path, delimiter: p.delimiter, encoding: p.encoding,
       pid_column: p.suggested_pid_column != null ? p.headers[p.suggested_pid_column] : "",
     };
-    // Mapping par défaut : toutes les colonnes d'entrée + les 4 champs Peppol.
+    // Mapping par défaut : toutes les colonnes d'entrée + existe/CTC-FR ; les
+    // autres champs Peppol démarrent dans la drop zone de l'étape 2.
     // Préserve un mapping personnalisé quand on re-choisit le même fichier :
     // on ne le reconstruit que si aucune colonne n'existe encore, ou si les
     // entêtes du nouveau fichier diffèrent de celles de l'ancien preview.
@@ -127,8 +128,6 @@ async function pickInput(path) {
       state.config.output.columns = [
         ...p.headers.map((name) => ({ source: "input", name })),
         { source: "peppol", field: "exists" },
-        { source: "peppol", field: "pa_code" },
-        { source: "peppol", field: "pa_country" },
         { source: "peppol", field: "extended_ctc_fr" },
       ];
     }
