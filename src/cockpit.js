@@ -120,13 +120,24 @@ $("btn-stop").addEventListener("click", () =>
   invoke("stop_run").catch((e) => banner("error", `${e}`)));
 
 // --- Télémétrie -----------------------------------------------------------------
-function httpColor(code) {
-  if (code === 200) return "var(--green)";
-  if (code === 429) return "var(--amber)";
-  if (code === 0) return "var(--muted)";
-  // 4xx (hors 429) : échec définitif ou blocage auth ; 5xx : erreur serveur.
-  return code >= 400 ? "var(--red)" : "var(--blue)";
-}
+// Catégories fixes de l'histogramme HTTP, toujours pré-affichées même à zéro
+// (l'ordre de déclaration fait foi : premier match gagne, et c'est l'ordre
+// d'affichage). « autres » ramasse les codes inattendus (1xx/3xx/2xx hors
+// 200) et n'apparaît que si rencontré.
+const HTTP_CATS = [
+  { label: "200", color: "var(--green)", match: (c) => c === 200,
+    help: "Réponses abouties." },
+  { label: "429", color: "var(--amber)", match: (c) => c === 429,
+    help: "Rate-limit : le moteur réduit la concurrence et retente." },
+  { label: "4xx", color: "var(--red)", match: (c) => c >= 400 && c < 500,
+    help: "Erreurs client hors 429 : échec définitif du paquet ; 401/407 suspendent le run (clé API / proxy)." },
+  { label: "5xx", color: "var(--red)", match: (c) => c >= 500,
+    help: "Erreurs serveur : retentées (disjoncteur, reprise automatique)." },
+  { label: "réseau", color: "var(--muted)", match: (c) => c === 0,
+    help: "Erreurs réseau (connexion, timeout) : retentées." },
+  { label: "autres", color: "var(--blue)", match: () => true, onlyIfPresent: true,
+    help: "Codes inattendus (1xx, 3xx, 2xx hors 200)." },
+];
 
 /** Mini-anneau d'une tuile : % à l'intérieur (en adressages), absolus à côté
  *  en adressages ET en lignes de fichier (le % des lignes couvertes diffère,
@@ -219,26 +230,32 @@ function renderLatHist(hist) {
   }));
 }
 
-/** Histogramme horizontal : une barre par code HTTP rencontré, triée par
- *  fréquence décroissante, longueur relative au code le plus fréquent. */
+/** Histogramme horizontal par catégorie fixe (HTTP_CATS), longueurs
+ *  relatives à la catégorie la plus fréquente. L'infobulle de chaque ligne
+ *  porte l'explication et le détail des codes réels agrégés. */
 function renderHttpBars(http) {
-  const entries = Object.entries(http)
-    .map(([c, n]) => [+c, n])
-    .sort((a, b) => b[1] - a[1]);
-  if (!entries.length) {
-    $("http-hist").replaceChildren(h("span", { class: "muted" }, "—"));
-    return;
+  const cats = HTTP_CATS.map((c) => ({ ...c, count: 0, detail: [] }));
+  for (const [codeStr, n] of Object.entries(http)) {
+    const code = +codeStr;
+    const cat = cats.find((c) => c.match(code));
+    cat.count += n;
+    cat.detail.push(`${code === 0 ? "réseau" : code}×${fmt(n)}`);
   }
-  const max = entries[0][1];
-  $("http-hist").replaceChildren(...entries.map(([code, n]) => {
-    const bar = h("span", { class: "http-bar" });
-    bar.style.width = `${Math.max(1, (100 * n) / max)}%`;
-    bar.style.background = httpColor(code);
-    return h("div", { class: "http-row" },
-      h("span", { class: "http-code" }, code === 0 ? "réseau" : `${code}`),
-      h("div", { class: "http-bar-wrap" }, bar),
-      h("span", { class: "http-count" }, fmt(n)));
-  }));
+  const max = Math.max(...cats.map((c) => c.count), 1);
+  $("http-hist").replaceChildren(...cats
+    .filter((c) => c.count || !c.onlyIfPresent)
+    .map((c) => {
+      const bar = h("span", { class: "http-bar" });
+      bar.style.width = c.count ? `${Math.max(1, (100 * c.count) / max)}%` : "0";
+      bar.style.background = c.color;
+      const code = h("span", { class: "http-code" }, c.label);
+      const count = h("span", { class: "http-count" }, fmt(c.count));
+      code.style.color = c.color;
+      count.style.color = c.color;
+      const title = c.detail.length ? `${c.help}\n${c.detail.join(" · ")}` : c.help;
+      return h("div", { class: "http-row", title },
+        code, h("div", { class: "http-bar-wrap" }, bar), count);
+    }));
 }
 
 /** Carte PA : classement sur 3 colonnes remplies de haut en bas puis de
