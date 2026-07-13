@@ -36,7 +36,7 @@ input, select {
   text-shadow: 0 1px 6px rgba(0, 0, 0, .85); /* lisible sur l'illustration */
 }
 .splash-inner h1 { margin: 8px 0 0; }
-.splash-inner p { font-size: 28px; color: var(--fg); }
+.splash-inner p { font-size: 42px; color: var(--fg); }
 
 header {
   display: flex; align-items: center; gap: 16px;
