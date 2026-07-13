@@ -2,6 +2,7 @@ pub mod api;
 pub mod commands;
 pub mod config;
 pub mod csv_io;
+pub mod direct;
 pub mod modes;
 pub mod output;
 pub mod pid;

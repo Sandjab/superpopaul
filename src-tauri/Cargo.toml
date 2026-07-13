@@ -24,6 +24,14 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 encoding_rs = "0.8"
 encoding_rs_io = "0.1"
 thiserror = "1"
+# Résolution directe SML+SMP (mode « direct », parité peppol_resolver.py)
+sha2 = "0.10"
+data-encoding = "2"           # base32 (hostname SML) + base64 (certificat SMP)
+roxmltree = "0.20"            # parsing des réponses XML SMP
+x509-parser = "0.16"          # identification de la PA via le certificat AS4
+hickory-resolver = "0.24"     # NAPTR via le DNS système
+hickory-proto = "0.24"        # encodage des requêtes DNS pour le DoH (RFC 8484)
+percent-encoding = "2"        # encodage du PID dans les URL SMP (parité quote(safe=''))
 
 [dev-dependencies]
 wiremock = "0.6"
