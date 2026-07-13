@@ -5,6 +5,13 @@ let running = false;
 // Dernier total connu (via télémétrie) : run-finished ne le porte pas, mais on
 // en a besoin pour figer l'anneau à sa valeur finale à la fin du run.
 let lastTotal = 0;
+// Historique p50/p90 pour la sparkline. Borné : au-delà de LAT_MAX_POINTS on
+// décime par 2 et on n'enregistre plus qu'un tick sur latKeepEvery — le graphe
+// couvre ainsi tout le run avec un pas qui grossit, sans croître sans fin.
+const LAT_MAX_POINTS = 600;
+let latHistory = [];
+let latKeepEvery = 1;
+let latTick = 0;
 
 /** Met à jour l'anneau de progression (fond, %, absolu, ETA). Partagé entre la
  *  télémétrie (4×/s) et run-finished, qui sinon laisserait l'anneau gelé sur le
@@ -81,6 +88,10 @@ async function startRun() {
     const total = await invoke("start_run", { mode: modeFromSelect() });
     running = true;
     lastTotal = total;  // total faisant autorité, avant tout tick de télémétrie
+    latHistory = [];    // la sparkline repart de zéro à chaque run
+    latKeepEvery = 1;
+    latTick = 0;
+    $("lat-spark").replaceChildren();
     $("cockpit").classList.remove("hidden");
     $("run-result").classList.add("hidden");
     $("btn-start").classList.add("hidden");
@@ -145,7 +156,67 @@ listen("telemetry", (e) => {
   $("latency").textContent = l
     ? `min ${l.min} · moy ${l.mean} · p50 ${l.p50} · p90 ${l.p90} · p99 ${l.p99} · max ${l.max}`
     : "—";
+  if (l) {
+    latTick++;
+    if (latTick % latKeepEvery === 0) {
+      latHistory.push({ p50: l.p50, p90: l.p90 });
+      if (latHistory.length > LAT_MAX_POINTS) {
+        latHistory = latHistory.filter((_, i) => i % 2 === 1);
+        latKeepEvery *= 2;
+      }
+    }
+    renderSparkline();
+  }
+  renderLatHist(s.latency_hist);
 });
+
+/** Élément SVG (createElement ne suffit pas : il faut l'espace de noms SVG). */
+function svgEl(tag, attrs) {
+  const el = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+  return el;
+}
+
+/** Sparkline p50 (vert) / p90 (ambre) sur l'historique du run. L'échelle
+ *  verticale suit le max p90 observé ; l'horizontale s'étire sur le run. */
+function renderSparkline() {
+  if (latHistory.length < 2) return;
+  const W = 300, H = 60, PAD = 2;
+  const max = Math.max(...latHistory.map((p) => p.p90), 1);
+  const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: "none" });
+  for (const [key, color] of [["p90", "var(--amber)"], ["p50", "var(--green)"]]) {
+    const pts = latHistory
+      .map((p, i) => `${((i * W) / (latHistory.length - 1)).toFixed(1)},` +
+        `${(H - PAD - ((H - 2 * PAD) * p[key]) / max).toFixed(1)}`)
+      .join(" ");
+    svg.append(svgEl("polyline", {
+      points: pts, fill: "none", stroke: color, "stroke-width": "1.5",
+      "vector-effect": "non-scaling-stroke",
+    }));
+  }
+  $("lat-spark").replaceChildren(svg);
+}
+
+/** Histogramme : une colonne par tranche (bornes fixes côté Rust, dernier
+ *  bucket ouvert). Hauteurs relatives au bucket le plus rempli. */
+function renderLatHist(hist) {
+  if (!hist || !hist.some((b) => b.count)) {
+    $("lat-hist").replaceChildren(h("span", { class: "muted" }, "—"));
+    return;
+  }
+  const max = Math.max(...hist.map((b) => b.count));
+  const fmtBound = (ms) => (ms >= 1000 ? `${ms / 1000}s` : `${ms}`);
+  $("lat-hist").replaceChildren(...hist.map((b, i) => {
+    const open = b.le_ms === 0xffffffff; // dernier bucket « au-delà »
+    const label = open ? `>${fmtBound(hist[i - 1].le_ms)}`
+      : i === 0 ? `≤${fmtBound(b.le_ms)}` : fmtBound(b.le_ms);
+    const bar = h("div", { class: "lat-bar" });
+    bar.style.height = b.count ? `${Math.max(3, (100 * b.count) / max)}%` : "0";
+    return h("div", { class: "lat-bucket", title: `${fmt(b.count)} appel(s)` },
+      h("div", { class: "lat-bar-wrap" }, bar),
+      h("span", {}, label));
+  }));
+}
 
 function renderHttpBars(http) {
   const entries = Object.entries(http);

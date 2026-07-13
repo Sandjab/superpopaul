@@ -6,6 +6,10 @@ use std::time::Instant;
 /// Fenêtre glissante pour les débits instantanés.
 const WINDOW_S: f64 = 10.0;
 
+/// Bornes (incluses) des tranches de l'histogramme de latences, en ms.
+/// Un dernier bucket ouvert (le_ms = u32::MAX) reçoit tout ce qui dépasse.
+const LAT_HIST_BOUNDS_MS: [u32; 7] = [50, 100, 200, 500, 1000, 2000, 5000];
+
 pub struct Telemetry {
     total: u64,
     inner: Mutex<Inner>,
@@ -49,6 +53,14 @@ pub struct PaCount {
     pub count: u64,
 }
 
+/// Tranche de l'histogramme de latences : appels dont la latence est
+/// ≤ le_ms (u32::MAX pour le bucket ouvert au-delà de la dernière borne).
+#[derive(Debug, Clone, Serialize)]
+pub struct HistBucket {
+    pub le_ms: u32,
+    pub count: u64,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Snapshot {
     pub done: u64,
@@ -65,6 +77,9 @@ pub struct Snapshot {
     /// (à égalité : ordre alphabétique, pour un affichage stable).
     pub pa: Vec<PaCount>,
     pub latency: Option<LatStats>,
+    /// Répartition des appels par tranche de latence (bornes fixes,
+    /// cumulée depuis le début du run). Toujours 8 buckets.
+    pub latency_hist: Vec<HistBucket>,
     pub req_per_s: f64,
     pub addr_per_s: f64,
     pub eta_s: Option<u64>,
@@ -201,11 +216,31 @@ impl Telemetry {
             http,
             pa,
             latency: lat_stats(&latencies),
+            latency_hist: lat_hist(&latencies),
             req_per_s,
             addr_per_s,
             eta_s,
         }
     }
+}
+
+fn lat_hist(lat: &[u32]) -> Vec<HistBucket> {
+    let mut hist: Vec<HistBucket> = LAT_HIST_BOUNDS_MS
+        .iter()
+        .map(|&le_ms| HistBucket { le_ms, count: 0 })
+        .chain(std::iter::once(HistBucket {
+            le_ms: u32::MAX,
+            count: 0,
+        }))
+        .collect();
+    for &ms in lat {
+        let idx = LAT_HIST_BOUNDS_MS
+            .iter()
+            .position(|&b| ms <= b)
+            .unwrap_or(LAT_HIST_BOUNDS_MS.len());
+        hist[idx].count += 1;
+    }
+    hist
 }
 
 fn lat_stats(lat: &[u32]) -> Option<LatStats> {
@@ -308,9 +343,25 @@ mod tests {
     }
 
     #[test]
+    fn histogramme_de_latences_par_tranches() {
+        let t = Telemetry::new(10);
+        for ms in [10u64, 60, 150, 700, 6000] {
+            t.record_call(200, ms, 1, 0, 0, 0, &no_pa(), LineWeights::default());
+        }
+        let hist = t.snapshot().latency_hist;
+        // Bornes fixes ≤50, ≤100, ≤200, ≤500, ≤1000, ≤2000, ≤5000, au-delà.
+        assert_eq!(hist.len(), 8);
+        let counts: Vec<u64> = hist.iter().map(|b| b.count).collect();
+        assert_eq!(counts, vec![1, 1, 1, 0, 1, 0, 0, 1]);
+        assert_eq!(hist[0].le_ms, 50);
+        assert_eq!(hist[7].le_ms, u32::MAX); // bucket ouvert « > 5000 »
+    }
+
+    #[test]
     fn latence_none_avant_le_premier_appel() {
         let s = Telemetry::new(10).snapshot();
         assert!(s.latency.is_none());
+        assert!(s.latency_hist.iter().all(|b| b.count == 0));
         assert_eq!(s.req_per_s, 0.0);
         assert_eq!(s.addr_per_s, 0.0);
         assert!(s.eta_s.is_none());

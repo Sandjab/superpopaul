@@ -125,7 +125,8 @@
         </div>
         <div class="wide">
           <div class="tile" title="Répartition des réponses API — 200 OK, 429 rate-limit, 0 erreur réseau.">Codes HTTP<div id="http-bars"></div><div id="http-legend" class="hbar-legend"></div></div>
-          <div class="tile" title="Temps de réponse API en millisecondes (percentiles).">Latence (ms)<div id="latency" class="hbar-legend"></div></div>
+          <div class="tile" title="Temps de réponse API au fil du run — p50 en vert, p90 en ambre. Percentiles cumulés en légende.">Latence (ms)<div id="lat-spark"></div><div id="latency" class="hbar-legend"></div></div>
+          <div class="tile" title="Répartition des appels API par tranche de latence (ms), cumulée depuis le début du run.">Distribution (ms)<div id="lat-hist"></div></div>
         </div>
         <div class="wide">
           <div class="tile" title="PA découvertes, classées par représentativité — rang 1 en haut à gauche, de haut en bas puis de gauche à droite : rang, nom, adressages routés vers cette PA, % du total d'adressages uniques.">PA<div id="pa-grid"></div></div>
