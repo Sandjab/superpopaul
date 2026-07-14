@@ -2,6 +2,14 @@
 
 # <img src="client/src/logo.png" width="32" alt="" align="top"> Super Popaul
 
+[![windows](https://github.com/Sandjab/superpopaul/actions/workflows/windows.yml/badge.svg)](https://github.com/Sandjab/superpopaul/actions/workflows/windows.yml)
+[![Last commit](https://img.shields.io/github/last-commit/Sandjab/superpopaul)](https://github.com/Sandjab/superpopaul/commits/main)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/Rust-Tauri%202-orange.svg)](client/src-tauri)
+[![Python](https://img.shields.io/badge/Python-%E2%89%A53.11-blue.svg)](https://www.python.org)
+[![Release](https://img.shields.io/github/v/release/Sandjab/superpopaul)](https://github.com/Sandjab/superpopaul/releases/latest)
+[![Visitors](https://komarev.com/ghpvc/?username=sandjab-superpopaul&label=Visitors&color=0e75b6&style=flat)](https://github.com/Sandjab/superpopaul)
+
 Résolution Peppol en masse : un CSV d'adressages en entrée, un CSV enrichi en
 sortie (présence dans Peppol, code, nom et pays de la PA, prise en charge
 d'EXTENDED-CTC-FR).
