@@ -654,12 +654,13 @@ impl Engine {
                     // Échantillonnage du temps actif : la boucle tourne aussi
                     // pendant les pauses/suspensions, l'intervalle n'est alors
                     // pas compté (durée affichée en fin de run).
-                    telemetry.tick_active(
-                        !user_paused.load(Ordering::Relaxed) && !suspended.load(Ordering::Relaxed),
-                    );
-                    // La concurrence vit dans le moteur, pas dans la
-                    // télémétrie : on complète le snapshot à l'émission.
+                    let active = !user_paused.load(Ordering::Relaxed)
+                        && !suspended.load(Ordering::Relaxed);
+                    telemetry.tick_active(active);
+                    // La concurrence et l'état d'arrêt vivent dans le moteur,
+                    // pas dans la télémétrie : complétés à l'émission.
                     let mut s = telemetry.snapshot();
+                    s.halted = !active;
                     s.concurrency_allowed = aimd.allowed();
                     s.concurrency_max = concurrency_max;
                     if tx.send(EngineEvent::Telemetry(s)).await.is_err() {
@@ -925,6 +926,8 @@ mod tests_engine {
         // au plafond.
         assert_eq!(snap.concurrency_max, 4);
         assert_eq!(snap.concurrency_allowed, 4);
+        // Ni pause ni suspension : le superviseur émet halted = false.
+        assert!(!snap.halted);
         wait_finished(&mut rx).await;
         let _ = handle;
     }

@@ -104,6 +104,10 @@ pub struct Snapshot {
     pub eta_s: Option<u64>,
     /// Durée active du run en secondes (pauses et suspensions exclues).
     pub active_s: f64,
+    /// Moteur à l'arrêt (pause utilisateur ou suspension système) au moment
+    /// de l'émission. Comme la concurrence : renseigné par le superviseur à
+    /// l'émission, false sur un snapshot pris hors moteur.
+    pub halted: bool,
 }
 
 impl Telemetry {
@@ -278,6 +282,7 @@ impl Telemetry {
             addr_per_s,
             eta_s,
             active_s,
+            halted: false,
         }
     }
 }

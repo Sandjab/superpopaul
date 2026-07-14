@@ -123,10 +123,15 @@ body > .drag-fallback {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
 }
 #ring-pct { font-size: 26px; }
-/* Fin de run : « terminé » sous l'anneau, durée à la place de l'ETA, moyenne
-   en dessous — marges resserrées pour former un seul bloc. */
+/* État du run sous l'anneau : « running » rouge clignotant, « suspendu »
+   orange (durée/moyenne provisoires en italique), « terminé » vert avec durée
+   à la place de l'ETA et moyenne en dessous — marges resserrées. */
 #ring-state { margin: 8px 0 -10px; font-weight: 600; color: var(--green); }
+#ring-state.running { color: var(--red); animation: ring-blink 1.1s step-start infinite; }
+#ring-state.suspended { color: var(--amber); }
+@keyframes ring-blink { 50% { opacity: 0; } }
 #avg-rate { margin: -12px 0 0; font-size: 12px; }
+.provisional, .provisional b { font-style: italic; }
 #tiles { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .tile { background: var(--card); border-radius: 8px; padding: 10px 14px; }
 .tile b { font-size: 18px; }

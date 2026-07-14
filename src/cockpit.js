@@ -39,6 +39,35 @@ function renderRing(done, total, etaText) {
   $("eta").textContent = etaText;
 }
 
+/** État affiché sous l'anneau et bascule ETA ↔ durée + moyenne.
+ *  "running" : rouge clignotant, ETA normale, moyenne cachée.
+ *  "suspended" : « suspendu » orange, durée active et moyenne provisoires
+ *  (italique) — l'état vient de la télémétrie (s.halted), source unique :
+ *  les reprises anticipées et update_api_key n'émettent pas de Resumed.
+ *  "finished" : « terminé », durée et moyenne définitives. */
+function setRunState(st) {
+  const el = $("ring-state");
+  el.classList.toggle("running", st === "running");
+  el.classList.toggle("suspended", st === "suspended");
+  el.classList.remove("hidden");
+  el.textContent = st === "running" ? "running"
+    : st === "suspended" ? "suspendu" : "terminé";
+  const halted = st !== "running";
+  $("eta-label").textContent = halted ? "Durée" : "ETA";
+  $("eta-line").title = halted
+    ? "Durée totale du run, pauses et suspensions exclues."
+    : "Temps restant estimé d'après le débit courant.";
+  $("avg-rate").classList.toggle("hidden", !halted);
+  $("eta-line").classList.toggle("provisional", st === "suspended");
+  $("avg-rate").classList.toggle("provisional", st === "suspended");
+}
+const fmtActive = (s) => (s >= 0.5 ? fmtDuration(Math.round(s)) : "< 1 s");
+function renderAvg(done, activeS) {
+  const avg = activeS > 0 ? done / activeS : 0;
+  $("avg-rate").textContent =
+    `≈ ${avg.toLocaleString("fr-FR", { maximumFractionDigits: avg < 10 ? 1 : 0 })} adr/s en moyenne`;
+}
+
 async function enterRunStep() {
   $("run-title").textContent = state.inputPath ?? "";
   // Pendant un run, revenir sur cet onglet ne relance ni set_config ni
@@ -115,13 +144,9 @@ async function startRun() {
     $("rate-spark").replaceChildren();
     $("cockpit").classList.remove("hidden");
     $("run-result").classList.add("hidden");
-    // Efface l'affichage de fin du run précédent : l'ETA reprend sa place
-    // (« — » jusqu'au premier tick de télémétrie).
-    $("ring-state").classList.add("hidden");
-    $("avg-rate").classList.add("hidden");
-    $("eta-label").textContent = "ETA";
+    // « running » sous l'anneau, ETA remise à « — » jusqu'au premier tick.
+    setRunState("running");
     $("eta").textContent = "—";
-    $("eta-line").title = "Temps restant estimé d'après le débit courant.";
     $("btn-start").classList.add("hidden");
     $("btn-pause").classList.remove("hidden");
     $("btn-stop").classList.remove("hidden");
@@ -185,7 +210,16 @@ function renderMiniRing(ring, count, outOf, lineCount, linesOutOf) {
 listen("telemetry", (e) => {
   const s = e.payload;
   lastTotal = s.total;
-  renderRing(s.done, s.total, s.eta_s != null ? fmtDuration(s.eta_s) : "—");
+  // Moteur à l'arrêt (pause ou suspension) : « suspendu » + durée active et
+  // moyenne provisoires ; sinon « running » + ETA. Ne rien toucher après la
+  // fin (running=false) : l'affichage définitif appartient à run-finished.
+  if (running) {
+    setRunState(s.halted ? "suspended" : "running");
+    if (s.halted) renderAvg(s.done, s.active_s);
+  }
+  renderRing(s.done, s.total,
+    s.halted ? fmtActive(s.active_s)
+             : s.eta_s != null ? fmtDuration(s.eta_s) : "—");
   renderMiniRing("exists", s.exists, s.done, s.exists_lines, s.done_lines);
   renderMiniRing("ctc", s.ctc, s.done, s.ctc_lines, s.done_lines);
   // Reste à convertir : présents dans Peppol mais sans l'extension France.
@@ -418,15 +452,9 @@ listen("run-finished", async (e) => {
   // (done == total) au lieu de rester sur le dernier tick de télémétrie ; un
   // run arrêté reflète sa progression réelle. À la place de l'ETA : la durée
   // active du run (pauses et suspensions exclues), et en dessous la moyenne.
-  renderRing(done, lastTotal || done,
-    active_s >= 0.5 ? fmtDuration(Math.round(active_s)) : "< 1 s");
-  $("ring-state").classList.remove("hidden");
-  $("eta-label").textContent = "Durée";
-  $("eta-line").title = "Durée totale du run, pauses et suspensions exclues.";
-  const avg = active_s > 0 ? done / active_s : 0;
-  $("avg-rate").textContent =
-    `≈ ${avg.toLocaleString("fr-FR", { maximumFractionDigits: avg < 10 ? 1 : 0 })} adr/s en moyenne`;
-  $("avg-rate").classList.remove("hidden");
+  renderRing(done, lastTotal || done, fmtActive(active_s));
+  setRunState("finished");
+  renderAvg(done, active_s);
   await invoke("clear_run");
   $("btn-start").classList.remove("hidden");
   $("btn-pause").classList.add("hidden");
