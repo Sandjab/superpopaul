@@ -24,6 +24,8 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import http.client
+import io
 import json
 import os
 import random
@@ -84,6 +86,16 @@ def _dbg(msg: str) -> None:
 
 # Initialized by configure_network(); fall back to defaults if never called.
 _HTTP_OPENER: urllib.request.OpenerDirector | None = None
+# Pool de connexions keep-alive par hôte (profilage 2026-07-14 : ~58 % du CPU
+# d'une résolution part en handshakes TLS + getaddrinfo + connect, un par
+# requête urllib). Thread-local : le serveur est threadé et une connexion
+# http.client n'est pas partageable. Désactivé derrière un proxy (le chemin
+# urllib gère CONNECT et l'auth). L'époque invalide les connexions ouvertes
+# quand configure_network change de contexte (CA, proxy).
+_POOL_LOCAL = threading.local()
+_POOL_EPOCH = 0
+_POOL_ENABLED = True
+_SSL_CONTEXT: ssl.SSLContext | None = None
 _DNS_RESOLVER: Any = None  # dns.resolver.Resolver or _DoHResolver
 # Résolveur de SECOURS (autre cache) consulté en ultime recours quand le
 # principal échoue après retries : son cache négatif à lui n'est presque
@@ -165,6 +177,7 @@ def configure_network(
     corporate resolver blocks public NAPTR lookups).
     """
     global _HTTP_OPENER, _DNS_RESOLVER, _DNS_FALLBACK
+    global _POOL_EPOCH, _POOL_ENABLED, _SSL_CONTEXT
 
     handlers: list[urllib.request.BaseHandler] = []
 
@@ -183,6 +196,9 @@ def configure_network(
     handlers.append(urllib.request.HTTPSHandler(context=ctx))
 
     _HTTP_OPENER = urllib.request.build_opener(*handlers)
+    _SSL_CONTEXT = ctx
+    _POOL_ENABLED = not proxy and not urllib.request.getproxies()
+    _POOL_EPOCH += 1  # invalide les connexions du contexte précédent
 
     if doh_endpoint:
         _DNS_RESOLVER = _DoHResolver(doh_endpoint)
@@ -318,13 +334,100 @@ def _retry_after_seconds(e: urllib.error.HTTPError, attempt: int) -> float:
     return HTTP_RETRY_BASE * (2 ** attempt) + random.uniform(0, 0.5)
 
 
+def _pool_enabled() -> bool:
+    if _HTTP_OPENER is None:
+        configure_network()
+    return _POOL_ENABLED
+
+
+def _pool_connection(scheme: str, host: str, port: int) -> Any:
+    """Connexion keep-alive du thread courant vers (scheme, host, port)."""
+    if getattr(_POOL_LOCAL, "epoch", None) != _POOL_EPOCH:
+        for c in getattr(_POOL_LOCAL, "conns", {}).values():
+            c.close()
+        _POOL_LOCAL.conns = {}
+        _POOL_LOCAL.epoch = _POOL_EPOCH
+    key = (scheme, host, port)
+    conn = _POOL_LOCAL.conns.get(key)
+    if conn is None:
+        if scheme == "https":
+            conn = http.client.HTTPSConnection(
+                host, port, timeout=HTTP_TIMEOUT, context=_SSL_CONTEXT)
+        else:
+            conn = http.client.HTTPConnection(host, port, timeout=HTTP_TIMEOUT)
+        _POOL_LOCAL.conns[key] = conn
+    return conn
+
+
+def _pool_drop(scheme: str, host: str, port: int) -> None:
+    conn = getattr(_POOL_LOCAL, "conns", {}).pop((scheme, host, port), None)
+    if conn is not None:
+        conn.close()
+
+
+# Connexion keep-alive périmée (fermée par le pair entre deux requêtes) :
+# on la jette et on rejoue UNE fois sur une connexion neuve.
+_STALE_ERRORS = (
+    http.client.BadStatusLine,  # englobe RemoteDisconnected
+    http.client.CannotSendRequest,
+    ConnectionResetError,
+    BrokenPipeError,
+    ssl.SSLEOFError,
+)
+
+
+def _pooled_get(url: str, headers: dict[str, str]) -> str:
+    """GET keep-alive. Erreurs au contrat urllib (HTTPError/URLError)."""
+    for _redirect in range(4):
+        u = urllib.parse.urlsplit(url)
+        scheme = u.scheme or "http"
+        host = u.hostname or ""
+        port = u.port or (443 if scheme == "https" else 80)
+        path = (u.path or "/") + (f"?{u.query}" if u.query else "")
+        resp = body = None
+        for fresh in (False, True):
+            conn = _pool_connection(scheme, host, port)
+            try:
+                conn.request("GET", path, headers={"Host": u.netloc, **headers})
+                resp = conn.getresponse()
+                body = resp.read()  # lecture complète, requis pour réutiliser
+                break
+            except _STALE_ERRORS as e:
+                _pool_drop(scheme, host, port)
+                if fresh:
+                    raise urllib.error.URLError(e)
+                _dbg("  ↻ connexion keep-alive périmée, reprise")
+            except OSError as e:
+                _pool_drop(scheme, host, port)
+                raise urllib.error.URLError(e)
+        assert resp is not None and body is not None
+        if resp.status in (301, 302, 303, 307, 308):
+            location = resp.getheader("Location")
+            if location:
+                url = urllib.parse.urljoin(url, location)
+                continue
+        if resp.status >= 400:
+            raise urllib.error.HTTPError(
+                url, resp.status, resp.reason, resp.headers, io.BytesIO(body))
+        _dbg(f"  < {resp.status} {resp.reason}")
+        for k, v in resp.headers.items():
+            _dbg(f"  < {k}: {v}")
+        text = body.decode("utf-8", errors="replace")
+        _dbg(f"  < body[:300] = {text[:300]!r}")
+        return text
+    raise urllib.error.URLError("trop de redirections")
+
+
 def http_get(url: str, accept: str = "application/xml", ua: str = UA) -> str:
-    req = urllib.request.Request(url, headers={"Accept": accept, "User-Agent": ua})
+    headers = {"Accept": accept, "User-Agent": ua}
+    req = urllib.request.Request(url, headers=headers)
     _dbg(f"GET {url}")
     _dbg(f"  > Accept: {accept}")
     _dbg(f"  > User-Agent: {ua}")
     for attempt in range(HTTP_MAX_RETRIES + 1):
         try:
+            if _pool_enabled():
+                return _pooled_get(url, headers)
             with _opener().open(req, timeout=HTTP_TIMEOUT) as resp:
                 body = resp.read().decode("utf-8", errors="replace")
                 _dbg(f"  < {resp.status} {resp.reason}")
@@ -336,17 +439,19 @@ def http_get(url: str, accept: str = "application/xml", ua: str = UA) -> str:
             _dbg(f"  < HTTP {e.code} {e.reason}")
             for k, v in e.headers.items():
                 _dbg(f"  < {k}: {v}")
-            try:
-                err_body = e.read().decode("utf-8", errors="replace")
-                _dbg(f"  < body[:300] = {err_body[:300]!r}")
-            except Exception:
-                pass
+            if _DEBUG:  # e.read() draine le corps : seulement en debug,
+                try:    # les appelants doivent pouvoir le relire
+                    err_body = e.read().decode("utf-8", errors="replace")
+                    _dbg(f"  < body[:300] = {err_body[:300]!r}")
+                except Exception:
+                    pass
             if e.code in HTTP_RETRY_STATUSES and attempt < HTTP_MAX_RETRIES:
                 delay = _retry_after_seconds(e, attempt)
                 _dbg(f"  ↻ retry {attempt + 1}/{HTTP_MAX_RETRIES} dans {delay:.1f}s")
                 time.sleep(delay)
                 continue
             raise
+    raise AssertionError("inatteignable : chaque tentative retourne ou lève")
 
 
 # (User-Agent, Accept, urlencode-colons?) variants used by --debug to diagnose 4xx
