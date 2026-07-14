@@ -16,9 +16,9 @@
       <button data-step="run"     class="step" disabled>▶ Run</button>
     </nav>
     <span class="cfg-btns">
-      <button id="btn-settings" title="Réglages — sortie, API, proxy…">⚙</button>
-      <button id="btn-load-cfg" title="Charger une configuration YAML — reprend directement à l'étape Run.">Charger…</button>
-      <button id="btn-save-cfg" title="Sauvegarder la configuration en YAML. Attention : la clé API y est stockée en clair.">Sauvegarder…</button>
+      <button id="btn-settings" title="Réglages — sortie, API, proxy… Appliqués et enregistrés automatiquement à la fermeture.">⚙</button>
+      <button id="btn-load-cfg" title="Charger un profil (fichier, colonne des adressages, colonnes de sortie) — reprend directement à l'étape Run.">Charger…</button>
+      <button id="btn-save-cfg" title="Sauvegarder le profil de chargement du fichier en YAML (fichier, colonne des adressages, colonnes de sortie).">Sauvegarder…</button>
     </span>
   </header>
 
@@ -120,7 +120,7 @@
       </div>
       <fieldset><legend>Fichier de sortie</legend>
         <p><label for="out-dir" title="Répertoire où écrire le fichier enrichi. Le nom est celui du fichier d'entrée suivi du suffixe.">Répertoire</label>
-           <input id="out-dir" size="42" title="Répertoire où écrire le fichier enrichi. Le nom est celui du fichier d'entrée suivi du suffixe."> <button id="btn-out-browse">…</button></p>
+           <input id="out-dir" size="42" placeholder="vide = dossier du fichier d'entrée" title="Répertoire où écrire le fichier enrichi. Le nom est celui du fichier d'entrée suivi du suffixe."> <button id="btn-out-browse">…</button></p>
         <p><label for="out-suffix" title="Ajouté au nom du fichier d'entrée : clients.csv → clients_enrichi.csv.">Suffixe</label>
            <input id="out-suffix" size="12" value="_enrichi" title="Ajouté au nom du fichier d'entrée : clients.csv → clients_enrichi.csv.">
            <label title="Ajoute la date/heure au nom du fichier pour ne jamais écraser une sortie précédente."><input type="checkbox" id="out-stamp" checked> Suffixer avec la date/heure</label></p>
@@ -163,15 +163,17 @@
              <input id="direct-conc" type="number" value="8" min="1" max="256" title="Nombre de résolutions simultanées (workers SML + SMP)."></p>
         </div>
       </fieldset>
-      <fieldset><legend>Proxy</legend>
-        <p><label title="Faire passer les requêtes (API ou DoH) par un proxy d'entreprise."><input type="checkbox" id="proxy-on"> Utiliser un proxy</label>
-           <label for="proxy-url">URL</label> <input id="proxy-url" size="30" placeholder="http://proxy:3128" disabled>
+      <!-- La case vit dans la légende : les descendants de la première legend
+           échappent au disabled du fieldset, qui grise tout le reste. -->
+      <fieldset id="proxy-zone" disabled><legend><label title="Faire passer les requêtes (API ou DoH) par un proxy d'entreprise."><input type="checkbox" id="proxy-on"> Proxy</label></legend>
+        <p><label for="proxy-url">URL</label> <input id="proxy-url" size="30" placeholder="http://proxy:3128">
            <span class="muted">identifiants demandés au lancement, jamais enregistrés</span></p>
       </fieldset>
       <fieldset><legend>Divers</legend>
         <p><label for="api-refresh" title="Âge au-delà duquel un résultat en base est considéré périmé (utilisé par le mode Refresh).">Ancienneté refresh (jours)</label>
            <input id="api-refresh" type="number" value="30" min="1" title="Âge au-delà duquel un résultat en base est considéré périmé (utilisé par le mode Refresh)."></p>
       </fieldset>
+      <p id="settings-error" class="hidden"></p>
     </section>
   </div>
 

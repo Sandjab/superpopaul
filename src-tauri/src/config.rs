@@ -180,25 +180,162 @@ pub enum PeppolField {
     ExtendedCtcFr,
 }
 
+/// Bornes des paramètres API — partagées entre la config runtime (set_config)
+/// et les réglages persistés (superpopaul.yaml), pour ne jamais diverger.
+fn validate_api(api: &ApiConfig) -> Result<(), String> {
+    if !(1..=500).contains(&api.batch_size) {
+        return Err("batch_size doit être entre 1 et 500".into());
+    }
+    if api.concurrency < 1 {
+        return Err("concurrency doit être ≥ 1".into());
+    }
+    if !(1..=256).contains(&api.dns_concurrency) {
+        return Err("dns_concurrency doit être entre 1 et 256".into());
+    }
+    Ok(())
+}
+
+fn validate_suffix(suffix: &str) -> Result<(), String> {
+    if suffix.contains(['/', '\\']) {
+        return Err("le suffixe de sortie ne doit pas contenir / ou \\".into());
+    }
+    Ok(())
+}
+
 impl Config {
     pub fn validate(&self) -> Result<(), String> {
-        if !(1..=500).contains(&self.api.batch_size) {
-            return Err("batch_size doit être entre 1 et 500".into());
+        // L'absence de colonnes n'est plus bloquante ici : la config est posée
+        // (set_config) dès l'ouverture des réglages, avant tout choix de
+        // fichier — Tester/Calibrer doivent marcher. La garde vit dans
+        // Profile::validate et output::generate.
+        validate_api(&self.api)?;
+        validate_suffix(&self.output.suffix)
+    }
+}
+
+// --- Réglages persistants (superpopaul.yaml, dossier données de l'app) --------
+// Lus au démarrage, écrits à la fermeture du panneau ⚙ : tout ce qui ne dépend
+// pas du fichier traité (API, proxy, forme de la sortie). Jamais les
+// identifiants proxy (ProxyConfig les skippe déjà).
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Settings {
+    pub version: u32,
+    pub api: ApiConfig,
+    pub output: OutputSettings,
+}
+
+/// La partie « forme » d'OutputConfig, sans les colonnes (qui appartiennent
+/// au profil) ni le champ legacy `path`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OutputSettings {
+    /// Vide : répertoire du fichier d'entrée.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub dir: String,
+    #[serde(default = "suffix_default", skip_serializing_if = "suffix_is_default")]
+    pub suffix: String,
+    pub timestamp_suffix: bool,
+    #[serde(default)]
+    pub encoding: OutputEncoding,
+    #[serde(default)]
+    pub separator: OutputSeparator,
+}
+
+impl Settings {
+    pub fn validate(&self) -> Result<(), String> {
+        validate_api(&self.api)?;
+        validate_suffix(&self.output.suffix)
+    }
+}
+
+pub fn save_settings_file(path: &Path, s: &Settings) -> Result<(), String> {
+    s.validate()?;
+    atomic_write(path, &serde_yaml::to_string(s).map_err(|e| e.to_string())?)
+}
+
+/// `Ok(None)` si le fichier n'existe pas (premier lancement : défauts UI) ;
+/// `Err` s'il existe mais est illisible — à montrer, pas à avaler.
+pub fn load_settings_file(path: &Path) -> Result<Option<Settings>, String> {
+    let s = match std::fs::read_to_string(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("lecture {path:?} : {e}")),
+        Ok(s) => s,
+    };
+    let settings: Settings =
+        serde_yaml::from_str(&s).map_err(|e| format!("réglages {path:?} : {e}"))?;
+    settings.validate()?;
+    Ok(Some(settings))
+}
+
+// --- Profils de chargement (sauvegarde/chargement explicites) -----------------
+// Ce qui décrit COMMENT traiter un fichier : le fichier lui-même, la colonne
+// des adressages, le mapping des colonnes de sortie. Ni clé API ni réglages.
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Profile {
+    pub version: u32,
+    pub input: ProfileInput,
+    pub columns: Vec<ColumnSpec>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProfileInput {
+    pub path: String,
+    pub pid_column: String,
+}
+
+impl Profile {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.input.pid_column.is_empty() {
+            return Err("le profil doit indiquer la colonne des adressages".into());
         }
-        if self.api.concurrency < 1 {
-            return Err("concurrency doit être ≥ 1".into());
-        }
-        if !(1..=256).contains(&self.api.dns_concurrency) {
-            return Err("dns_concurrency doit être entre 1 et 256".into());
-        }
-        if self.output.columns.is_empty() {
-            return Err("output.columns ne doit pas être vide".into());
-        }
-        if self.output.suffix.contains(['/', '\\']) {
-            return Err("le suffixe de sortie ne doit pas contenir / ou \\".into());
+        // Un profil columns: [] chargerait vers un tableau sans ligne
+        // d'en-têtes — aucune cible de drop, utilisateur coincé.
+        if self.columns.is_empty() {
+            return Err("le profil doit contenir au moins une colonne de sortie".into());
         }
         Ok(())
     }
+}
+
+/// Lit un profil ; le booléen indique un ancien format (config complète
+/// d'avant la séparation réglages/profils), dont seuls fichier, colonne
+/// d'adressage et colonnes sont repris.
+pub fn profile_from_yaml(s: &str) -> Result<(Profile, bool), String> {
+    let err_new = match serde_yaml::from_str::<Profile>(s) {
+        Ok(p) => {
+            p.validate()?;
+            return Ok((p, false));
+        }
+        Err(e) => e,
+    };
+    if let Ok(cfg) = from_yaml(s) {
+        let p = Profile {
+            version: 1,
+            input: ProfileInput {
+                path: cfg.input.path,
+                pid_column: cfg.input.pid_column,
+            },
+            columns: cfg.output.columns,
+        };
+        p.validate()?;
+        return Ok((p, true));
+    }
+    Err(format!("profil : {err_new}"))
+}
+
+pub fn save_profile_file(path: &Path, p: &Profile) -> Result<(), String> {
+    p.validate()?;
+    atomic_write(path, &serde_yaml::to_string(p).map_err(|e| e.to_string())?)
+}
+
+pub fn load_profile_file(path: &Path) -> Result<(Profile, bool), String> {
+    let s = std::fs::read_to_string(path).map_err(|e| format!("lecture {path:?} : {e}"))?;
+    profile_from_yaml(&s).map_err(|e| format!("{path:?} : {e}"))
 }
 
 pub fn to_yaml(cfg: &Config) -> Result<String, String> {
@@ -219,19 +356,11 @@ pub fn from_yaml(s: &str) -> Result<Config, String> {
     Ok(cfg)
 }
 
-pub fn load(path: &Path) -> Result<Config, String> {
-    let s = std::fs::read_to_string(path).map_err(|e| format!("lecture {path:?} : {e}"))?;
-    let cfg = from_yaml(&s).map_err(|e| format!("config {path:?} : {e}"))?;
-    cfg.validate()?;
-    Ok(cfg)
-}
-
-pub fn save(path: &Path, cfg: &Config) -> Result<(), String> {
-    cfg.validate()?;
-    // Écriture atomique : fichier temporaire du même répertoire puis rename,
-    // pour ne jamais corrompre la config existante en cas de crash.
+/// Écriture atomique : fichier temporaire du même répertoire puis rename,
+/// pour ne jamais corrompre le fichier existant en cas de crash.
+fn atomic_write(path: &Path, contents: &str) -> Result<(), String> {
     let tmp = path.with_extension("yaml.tmp");
-    std::fs::write(&tmp, to_yaml(cfg)?).map_err(|e| format!("écriture {tmp:?} : {e}"))?;
+    std::fs::write(&tmp, contents).map_err(|e| format!("écriture {tmp:?} : {e}"))?;
     std::fs::rename(&tmp, path).map_err(|e| format!("écriture {path:?} : {e}"))
 }
 
@@ -389,13 +518,108 @@ mod tests {
     }
 
     #[test]
-    fn validate_rejette_colonnes_vides() {
-        // L'UI (drop zone, garde « min 1 colonne ») garantit ≥ 1 colonne ; un
-        // YAML columns: [] chargerait vers un tableau sans ligne d'en-têtes —
-        // aucune cible de drop, utilisateur coincé.
+    fn validate_tolere_colonnes_vides() {
+        // La config est posée dès l'ouverture des réglages, avant tout choix
+        // de fichier : Tester/Calibrer ne doivent pas buter sur « pas de
+        // colonnes ». La garde vit dans Profile::validate et output::generate.
         let mut cfg = config_exemple();
         cfg.output.columns.clear();
-        assert!(cfg.validate().is_err());
+        assert!(cfg.validate().is_ok());
+    }
+
+    fn settings_exemple() -> Settings {
+        let cfg = config_exemple();
+        Settings {
+            version: 1,
+            api: cfg.api,
+            output: OutputSettings {
+                dir: cfg.output.dir,
+                suffix: cfg.output.suffix,
+                timestamp_suffix: cfg.output.timestamp_suffix,
+                encoding: cfg.output.encoding,
+                separator: cfg.output.separator,
+            },
+        }
+    }
+
+    #[test]
+    fn settings_fichier_aller_retour_absent_et_corrompu() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("superpopaul.yaml");
+        // Absent (premier lancement) : None, pas une erreur.
+        assert_eq!(load_settings_file(&p).unwrap().map(|s| s.version), None);
+        save_settings_file(&p, &settings_exemple()).unwrap();
+        let back = load_settings_file(&p).unwrap().unwrap();
+        assert_eq!(back.api.key, "MA_CLE");
+        assert_eq!(back.output.suffix, "_enrichi");
+        // Corrompu : erreur montrée, pas avalée.
+        std::fs::write(&p, "version: [oops").unwrap();
+        assert!(load_settings_file(&p).is_err());
+    }
+
+    #[test]
+    fn settings_ne_serialisent_jamais_les_creds_proxy() {
+        // Même intention de sécurité que proxy_creds_never_serialized : le
+        // fichier auto-écrit ne doit jamais contenir les identifiants.
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("superpopaul.yaml");
+        save_settings_file(&p, &settings_exemple()).unwrap();
+        let yaml = std::fs::read_to_string(&p).unwrap();
+        assert!(!yaml.contains("SECRET"));
+        assert!(!yaml.contains("username"));
+        assert!(yaml.contains("http://proxy:3128"));
+    }
+
+    fn profile_exemple() -> Profile {
+        Profile {
+            version: 1,
+            input: ProfileInput {
+                path: "./clients.csv".into(),
+                pid_column: "siren".into(),
+            },
+            columns: config_exemple().output.columns,
+        }
+    }
+
+    #[test]
+    fn profil_aller_retour_et_champ_inconnu_rejete() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("clients.profil.yaml");
+        save_profile_file(&p, &profile_exemple()).unwrap();
+        let (back, legacy) = load_profile_file(&p).unwrap();
+        assert!(!legacy);
+        assert_eq!(back.input.pid_column, "siren");
+        assert_eq!(back.columns, profile_exemple().columns);
+        // Ni clé API ni réglages dans le fichier.
+        let yaml = std::fs::read_to_string(&p).unwrap();
+        assert!(!yaml.contains("key"));
+        assert!(!yaml.contains("api"));
+        // Typo dans un profil neuf : rejet (pas d'aspiration par le fallback
+        // legacy, qui exige la forme complète api/input/output).
+        let bad = serde_yaml::to_string(&back).unwrap().replace("pid_column:", "pid_colum:");
+        assert!(profile_from_yaml(&bad).is_err());
+    }
+
+    #[test]
+    fn profil_depuis_yaml_ancien_format_complet() {
+        // Charger une vieille config complète reste possible : on n'en reprend
+        // que le profil (fichier, colonne d'adressage, colonnes) — l'API et la
+        // sortie vivent désormais dans superpopaul.yaml.
+        let (p, legacy) = profile_from_yaml(yaml_ancien()).unwrap();
+        assert!(legacy);
+        assert_eq!(p.input.path, "./a.csv");
+        assert_eq!(p.input.pid_column, "siren");
+        assert_eq!(p.columns.len(), 1);
+    }
+
+    #[test]
+    fn profil_rejette_colonnes_vides_et_pid_manquant() {
+        let mut p = profile_exemple();
+        p.columns.clear();
+        assert!(p.validate().is_err());
+        let mut p = profile_exemple();
+        p.input.pid_column.clear();
+        assert!(p.validate().is_err());
     }
 
     #[test]

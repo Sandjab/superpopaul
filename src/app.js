@@ -92,12 +92,6 @@ function modal(...nodes) {
 }
 function closeModal() { $("modal-backdrop").classList.add("hidden"); }
 
-/** Répertoire parent d'un chemin (séparateurs / ou \) ; vide si aucun. */
-function parentDir(p) {
-  const m = p.match(/^(.*)[\\/][^\\/]+$/);
-  return m ? m[1] : "";
-}
-
 // --- Étape 1 : fichier -----------------------------------------------------------
 async function pickInput(path) {
   // Garde léger : le dialogue filtre déjà csv/txt, mais le drag-drop accepte
@@ -130,7 +124,8 @@ async function pickInput(path) {
         { source: "peppol", field: "extended_ctc_fr" },
       ];
     }
-    if (!state.config.output.dir) state.config.output.dir = parentDir(path);
+    // output.dir vide = « dossier du fichier d'entrée » (résolu côté Rust) :
+    // pas de valeur à poser ici, le réglage persiste d'un fichier à l'autre.
     renderFilePanel();
     hideBanner();
   } catch (e) {
@@ -237,9 +232,10 @@ function syncModeUi() {
 }
 $("api-mode").addEventListener("change", syncModeUi);
 
-/** Grise l'URL proxy tant que la case n'est pas cochée. */
+/** Grise toute la zone Proxy tant que la case (dans la légende, donc épargnée
+ *  par le disabled natif du fieldset) n'est pas cochée. */
 function syncProxyUi() {
-  $("proxy-url").disabled = !$("proxy-on").checked;
+  $("proxy-zone").disabled = !$("proxy-on").checked;
 }
 $("proxy-on").addEventListener("change", syncProxyUi);
 
@@ -253,13 +249,41 @@ $("btn-out-browse").addEventListener("click", async () => {
   if (d) $("out-dir").value = d;
 });
 
+// --- Réglages : persistance (superpopaul.yaml, dossier données de l'app) -----------
+/** La tranche de l'état qui va dans le fichier de réglages : API + forme de la
+ *  sortie. Ni le fichier d'entrée ni les colonnes (ça, c'est le profil). */
+function currentSettings() {
+  const c = state.config;
+  const { dir, suffix, timestamp_suffix, encoding, separator } = c.output;
+  return { version: 1, api: c.api,
+           output: { dir, suffix, timestamp_suffix, encoding, separator } };
+}
+/** Fusion sur les défauts de l'état : les champs à leur valeur par défaut sont
+ *  absents du YAML (serde skip_serializing_if), un remplacement les perdrait. */
+function applySettings(s) {
+  Object.assign(state.config.api, s.api);
+  Object.assign(state.config.output, s.output);
+}
+
 // --- Réglages : ouverture / fermeture ------------------------------------------------
 function openSettings() {
   fillSettingsForm();
+  $("settings-error").classList.add("hidden");
   $("settings-backdrop").classList.remove("hidden");
 }
-function closeSettings() {
+async function closeSettings() {
   syncSettingsForm();
+  // Auto-enregistrement à la fermeture. En cas de refus (suffixe invalide…),
+  // le panneau reste ouvert avec l'erreur — la bannière du haut serait
+  // recouverte par l'overlay.
+  try {
+    await invoke("save_settings", { settings: currentSettings() });
+  } catch (e) {
+    const err = $("settings-error");
+    err.textContent = `Réglages non enregistrés : ${e}`;
+    err.classList.remove("hidden");
+    return;
+  }
   $("settings-backdrop").classList.add("hidden");
 }
 $("btn-settings").addEventListener("click", openSettings);
@@ -275,10 +299,17 @@ document.addEventListener("keydown", (e) => {
       && $("modal-backdrop").classList.contains("hidden")) closeSettings();
 });
 
-// --- Splash --------------------------------------------------------------------------
-window.addEventListener("DOMContentLoaded", () => {
-  fillSettingsForm();
+// --- Splash + réglages au démarrage ---------------------------------------------------
+window.addEventListener("DOMContentLoaded", async () => {
   setTimeout(() => $("splash").classList.add("fade"), 2000);
+  // Réglages auto-persistés : lus au démarrage (premier lancement : défauts).
+  try {
+    const s = await invoke("load_settings");
+    if (s) applySettings(s);
+  } catch (e) {
+    banner("warn", `Réglages illisibles — valeurs par défaut appliquées. (${e})`);
+  }
+  fillSettingsForm();
 });
 
 // --- Réglages : test API et calibrage -----------------------------------------
@@ -390,25 +421,24 @@ function ensureProxyCreds(force = false) {
   return pendingCreds;
 }
 
-// --- Config YAML : sauvegarde / chargement -------------------------------------
+// --- Profils de chargement : sauvegarde / chargement explicites -------------------
+// Un profil décrit COMMENT traiter un fichier (chemin, colonne des adressages,
+// colonnes de sortie) ; les réglages (API, sortie), eux, sont auto-persistés.
 $("btn-save-cfg").addEventListener("click", async () => {
-  // Des éditions peuvent être en cours dans le panneau Réglages ouvert ;
-  // s'il est fermé, l'état est déjà à jour (synchronisé à la fermeture).
-  if (!$("settings-backdrop").classList.contains("hidden")) syncSettingsForm();
-  // Pas de sauvegarde de config-squelette (décision produit) : sans fichier ou
-  // colonne d'adressage, le YAML ne serait pas rechargeable. (Le répertoire et
-  // le suffixe de sortie, eux, ont toujours une valeur par défaut.)
   if (!state.inputPath || !state.config.input.pid_column) {
-    banner("warn", "Complète d'abord la configuration (fichier, colonne d'adressage) " +
-      "avant de sauvegarder.");
+    banner("warn", "Choisis d'abord le fichier et la colonne des adressages " +
+      "avant de sauvegarder un profil.");
     return;
   }
   const f = await save({ filters: [{ name: "YAML", extensions: ["yaml", "yml"] }] });
   if (!f) return;
   try {
-    await invoke("save_config", { path: f, cfg: state.config });
-    banner("warn", "⚠️ Config enregistrée — la clé API y est stockée en clair. " +
-      "Ne partage ce fichier qu'avec des collègues de confiance.");
+    await invoke("save_profile", { path: f, profile: {
+      version: 1,
+      input: { path: state.inputPath, pid_column: state.config.input.pid_column },
+      columns: state.config.output.columns,
+    } });
+    hideBanner(); // plus de clé API dans le fichier : plus d'avertissement
   } catch (e) {
     banner("error", `${e}`);
   }
@@ -417,24 +447,32 @@ $("btn-save-cfg").addEventListener("click", async () => {
 $("btn-load-cfg").addEventListener("click", async () => {
   const f = await open({ multiple: false, filters: [{ name: "YAML", extensions: ["yaml", "yml"] }] });
   if (!f) return;
+  let r;
   try {
-    state.config = await invoke("load_config", { path: f });
+    r = await invoke("load_profile", { path: f });
   } catch (e) {
     banner("error", `Chargement impossible : ${e}`);
     return;
   }
-  fillSettingsForm();
-  let path = state.config.input.path;
+  state.config.input.path = r.profile.input.path;
+  state.config.input.pid_column = r.profile.input.pid_column;
+  state.config.output.columns = r.profile.columns;
+  let path = r.profile.input.path;
   try {
-    // Recharge l'aperçu du fichier d'entrée SANS écraser le mapping du YAML.
+    // Pose la config assemblée AVANT resolved_input_path (qui lit la config
+    // active), puis recharge l'aperçu SANS écraser le mapping du profil.
+    await invoke("set_config", { cfg: state.config });
     path = await invoke("resolved_input_path");
     state.preview = await invoke("preview_csv", { path });
     state.inputPath = path;
     renderFilePanel();
-    hideBanner();
+    if (r.legacy)
+      banner("warn", "Ancien format : seuls le fichier, la colonne des adressages et " +
+        "les colonnes ont été repris — l'API et la sortie se règlent désormais dans ⚙.");
+    else hideBanner();
     // Directement à l'étape Run (spec) — analyze_input y détecte la reprise.
     // showStep() a un early-return si on est déjà sur l'étape courante (cas du
-    // clic sur l'onglet actif) : quand on charge un YAML depuis l'étape Run,
+    // clic sur l'onglet actif) : quand on charge un profil depuis l'étape Run,
     // ce serait un no-op et enterRunStep() (donc analyze_input et la bannière
     // de reprise) ne serait jamais rappelé. On force donc l'entrée dans
     // l'étape Run dans ce cas précis, plutôt que de passer par showStep().
@@ -442,12 +480,12 @@ $("btn-load-cfg").addEventListener("click", async () => {
     if (current === runIdx) enterRunStep();
     else showStep(runIdx);
   } catch {
-    // Config chargée mais CSV introuvable/illisible : la config reste en
+    // Profil chargé mais CSV introuvable/illisible : le profil reste en
     // place (l'utilisateur ne re-choisit que le fichier), l'état d'entrée
     // est remis à zéro pour rester cohérent et actionnable.
     state.inputPath = null;
     state.preview = null;
-    banner("warn", `Config chargée, mais le fichier d'entrée ${path} est introuvable — ` +
+    banner("warn", `Profil chargé, mais le fichier d'entrée ${path} est introuvable — ` +
       "re-sélectionne-le à l'étape 1.");
     showStep(0);
   }

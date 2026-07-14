@@ -177,6 +177,13 @@ footer {
 }
 #settings-head { display: flex; justify-content: space-between; align-items: center; }
 #settings fieldset { background: var(--bg); }
+/* Zone Proxy décochée : la case de la légende échappe au disabled natif du
+   fieldset, le contenu (contrôles ET textes) est grisé. */
+#proxy-zone:disabled p { opacity: .45; }
+#proxy-zone legend label { cursor: pointer; }
+/* Erreur d'enregistrement des réglages : affichée dans le panneau (la bannière
+   du haut est recouverte par l'overlay). */
+#settings-error { color: var(--red); font-weight: 600; }
 
 #modal-backdrop {
   position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 50;

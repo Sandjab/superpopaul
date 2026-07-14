@@ -47,14 +47,16 @@ pub fn run() {
             let dir = app.path().app_data_dir()?;
             let store = store::Store::open(&dir.join("superpopaul.db"))
                 .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-            app.manage(commands::AppState::new(store));
+            app.manage(commands::AppState::new(store, dir.join("superpopaul.yaml")));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             commands::preview_csv,
             commands::set_config,
-            commands::load_config,
-            commands::save_config,
+            commands::load_settings,
+            commands::save_settings,
+            commands::load_profile,
+            commands::save_profile,
             commands::resolved_input_path,
             commands::set_proxy_creds,
             commands::update_api_key,

@@ -70,6 +70,13 @@ pub fn generate(
     out_path: &Path,
     stamp: Option<&str>,
 ) -> Result<PathBuf, String> {
+    // La garde n'est plus dans Config::validate (une config sans colonnes est
+    // légitime avant le choix du fichier) : c'est ici, au moment d'écrire,
+    // qu'un mapping vide doit échouer fort plutôt que produire un CSV sans
+    // en-têtes.
+    if output.columns.is_empty() {
+        return Err("aucune colonne de sortie — reconfigure l'étape Colonnes".into());
+    }
     let final_path = with_stamp(out_path, stamp);
     // Suffixe vide + même répertoire + pas de date/heure : la sortie porterait
     // le nom de l'entrée. Comparaison lexicale (les deux chemins sortent de la
@@ -306,6 +313,22 @@ mod tests {
         // L'extension de sortie est toujours .csv, même pour une entrée .txt.
         assert_eq!(out_file_name(Path::new("data.txt"), "_peppol"), "data_peppol.csv");
         assert_eq!(out_file_name(Path::new("/x/clients.csv"), ""), "clients.csv");
+    }
+
+    #[test]
+    fn generate_refuse_un_mapping_sans_colonnes() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("in.csv");
+        std::fs::File::create(&input)
+            .unwrap()
+            .write_all(b"siren\n0009:1\n")
+            .unwrap();
+        let out = dir.path().join("out.csv");
+        let meta = CsvMeta { delimiter: b';', encoding: "utf-8" };
+        let err = generate(&input, &meta, "siren", &out_cfg(vec![]), &resolutions(), &out, None)
+            .unwrap_err();
+        assert!(err.contains("colonne"), "{err}");
+        assert!(!out.exists());
     }
 
     #[test]

@@ -8,10 +8,15 @@ code PA, pays PA, support EXTENDED-CTC-FR), via l'API REST `peppol_api`
 ## Points clés
 - **Wizard 3 étapes** : fichier d'entrée → colonnes de sortie → run. La sortie
   (répertoire + suffixe), l'API et le proxy se règlent dans le panneau ⚙.
+- **Réglages auto-persistés** (`superpopaul.yaml`, dossier données utilisateur) :
+  lus au démarrage, écrits à la fermeture du panneau ⚙. La clé API y est
+  stockée ; les identifiants proxy **jamais**.
 - **Cache SQLite global** (dossier données utilisateur) : chaque adressage unique
   est résolu une fois ; modes **full / reprise / refresh** (seuil d'ancienneté).
-- **Config YAML** sauvegardable/rechargeable (chemins relatifs au YAML).
-  La clé API y est stockée (avertissement UI) ; les identifiants proxy **jamais**.
+- **Profils de chargement YAML** sauvegardés/chargés explicitement : fichier
+  d'entrée (chemin relatif au YAML), colonne des adressages, colonnes de
+  sortie. Ni clé API ni réglages ; les anciennes configs complètes restent
+  chargeables (seul le profil en est repris).
 - **Cockpit temps réel** : ring de progression + ETA, % Peppol, % CTC-FR,
   débits (req/s et adressages/s), codes HTTP, latences p50/p90/p99.
 - **Pause/reprise** à chaud et entre sessions (détection de run incomplet).

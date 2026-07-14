@@ -347,6 +347,13 @@ listen("run-suspended", (e) => {
         try {
           await invoke("update_api_key", { key: key.value });
           hideBanner();
+          // Réglages auto-persistés : la nouvelle clé doit survivre au
+          // redémarrage, pas seulement au run en cours.
+          try {
+            await invoke("save_settings", { settings: currentSettings() });
+          } catch (err) {
+            banner("warn", `Clé appliquée au run, mais non enregistrée : ${err}`);
+          }
         } catch (err) {
           banner("error", `${err}`);
         }

@@ -14,16 +14,23 @@ use tauri::{AppHandle, Emitter, State};
 
 pub struct AppState {
     pub store: Arc<Mutex<Store>>,
-    /// (répertoire du YAML si chargé/sauvé — base des chemins relatifs, config)
-    pub config: Mutex<Option<(Option<PathBuf>, Config)>>,
+    /// Fichier des réglages auto-persistés (superpopaul.yaml, dossier données).
+    pub settings_path: PathBuf,
+    /// Répertoire du dernier profil chargé/sauvé — base des chemins relatifs
+    /// du fichier d'entrée. Indépendant de la config : le profil est chargé
+    /// avant que l'UI ne pousse la config assemblée (set_config).
+    pub base: Mutex<Option<PathBuf>>,
+    pub config: Mutex<Option<Config>>,
     pub proxy_creds: Mutex<Option<ProxyCreds>>,
     pub run: Mutex<Option<Arc<RunHandle>>>,
 }
 
 impl AppState {
-    pub fn new(store: Store) -> Self {
+    pub fn new(store: Store, settings_path: PathBuf) -> Self {
         AppState {
             store: Arc::new(Mutex::new(store)),
+            settings_path,
+            base: Mutex::new(None),
             config: Mutex::new(None),
             proxy_creds: Mutex::new(None),
             run: Mutex::new(None),
@@ -31,11 +38,13 @@ impl AppState {
     }
 
     fn current_config(&self) -> Result<(Option<PathBuf>, Config), String> {
-        self.config
+        let cfg = self
+            .config
             .lock()
             .unwrap()
             .clone()
-            .ok_or_else(|| "Aucune configuration active.".into())
+            .ok_or_else(|| String::from("Aucune configuration active."))?;
+        Ok((self.base.lock().unwrap().clone(), cfg))
     }
 
     fn input_path(&self) -> Result<PathBuf, String> {
@@ -101,25 +110,45 @@ pub async fn preview_csv(path: String) -> Result<PreviewPayload, String> {
 #[tauri::command]
 pub fn set_config(state: State<'_, AppState>, cfg: Config) -> Result<(), String> {
     cfg.validate()?;
-    let mut guard = state.config.lock().unwrap();
-    let base = guard.as_ref().and_then(|(b, _)| b.clone());
-    *guard = Some((base, cfg));
+    *state.config.lock().unwrap() = Some(cfg);
     Ok(())
 }
 
 #[tauri::command]
-pub fn load_config(state: State<'_, AppState>, path: String) -> Result<Config, String> {
-    let p = PathBuf::from(&path);
-    let cfg = config::load(&p)?;
-    *state.config.lock().unwrap() = Some((p.parent().map(PathBuf::from), cfg.clone()));
-    Ok(cfg)
+pub fn load_settings(state: State<'_, AppState>) -> Result<Option<config::Settings>, String> {
+    config::load_settings_file(&state.settings_path)
 }
 
 #[tauri::command]
-pub fn save_config(state: State<'_, AppState>, path: String, cfg: Config) -> Result<(), String> {
+pub fn save_settings(state: State<'_, AppState>, settings: config::Settings) -> Result<(), String> {
+    config::save_settings_file(&state.settings_path, &settings)
+}
+
+#[derive(Serialize)]
+pub struct ProfileLoad {
+    pub profile: config::Profile,
+    /// Ancien format (config complète) : seuls fichier/adressage/colonnes
+    /// sont repris — l'UI le signale.
+    pub legacy: bool,
+}
+
+#[tauri::command]
+pub fn load_profile(state: State<'_, AppState>, path: String) -> Result<ProfileLoad, String> {
     let p = PathBuf::from(&path);
-    config::save(&p, &cfg)?;
-    *state.config.lock().unwrap() = Some((p.parent().map(PathBuf::from), cfg));
+    let (profile, legacy) = config::load_profile_file(&p)?;
+    *state.base.lock().unwrap() = p.parent().map(PathBuf::from);
+    Ok(ProfileLoad { profile, legacy })
+}
+
+#[tauri::command]
+pub fn save_profile(
+    state: State<'_, AppState>,
+    path: String,
+    profile: config::Profile,
+) -> Result<(), String> {
+    let p = PathBuf::from(&path);
+    config::save_profile_file(&p, &profile)?;
+    *state.base.lock().unwrap() = p.parent().map(PathBuf::from);
     Ok(())
 }
 
@@ -149,7 +178,7 @@ pub fn set_proxy_creds(
 
 #[tauri::command]
 pub fn update_api_key(state: State<'_, AppState>, key: String) -> Result<(), String> {
-    if let Some((_, cfg)) = state.config.lock().unwrap().as_mut() {
+    if let Some(cfg) = state.config.lock().unwrap().as_mut() {
         cfg.api.key = key;
     }
     // Un client entier neuf (plutôt que la seule clé) : le canal watch porte
@@ -394,7 +423,7 @@ pub fn clear_run(state: State<'_, AppState>) {
 
 #[tauri::command]
 pub async fn generate_output(state: State<'_, AppState>) -> Result<String, String> {
-    let (base, cfg) = state.current_config()?;
+    let (_, cfg) = state.current_config()?;
     let input = state.input_path()?;
     let store = state.store.clone();
     // Tout le corps est bloquant (scan CSV, load_map SQLite, écriture CSV) :
@@ -406,12 +435,16 @@ pub async fn generate_output(state: State<'_, AppState>) -> Result<String, Strin
         // seule Connection SQLite). Alternative future si ça pique : une 2e
         // connexion lecture seule (le WAL permet lectures // écritures).
         let resolutions = store.lock().unwrap().load_map(&pids)?;
-        // Répertoire vide : celui du fichier d'entrée. Sinon, résolu
-        // relativement au YAML chargé, comme le fichier d'entrée.
-        let out_dir = match (cfg.output.dir.as_str(), &base) {
-            ("", _) => input.parent().unwrap_or(Path::new(".")).to_path_buf(),
-            (dir, Some(b)) => config::resolve_relative(&b.join("x.yaml"), dir),
-            (dir, None) => PathBuf::from(dir),
+        // Le répertoire vient des réglages (superpopaul.yaml), plus d'un YAML
+        // chargé : un chemin relatif (ou vide) se résout contre le dossier du
+        // fichier d'entrée — join("") le laisse tel quel.
+        let out_dir = {
+            let d = Path::new(&cfg.output.dir);
+            if d.is_absolute() {
+                d.to_path_buf()
+            } else {
+                input.parent().unwrap_or(Path::new(".")).join(d)
+            }
         };
         let out = out_dir.join(output::out_file_name(&input, &cfg.output.suffix));
         let stamp = cfg
