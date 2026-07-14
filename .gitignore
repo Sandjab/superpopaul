@@ -1,3 +1,6 @@
-src-tauri/target/
+client/src-tauri/target/
 *.db
-/app-icon.png
+/client/app-icon.png
+__pycache__/
+*.pyc
+docs/.swagger-build/

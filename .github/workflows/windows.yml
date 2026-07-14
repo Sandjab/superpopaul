@@ -8,11 +8,13 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+    defaults:
+      run: { working-directory: client }
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-        with: { workspaces: "src-tauri" }
+        with: { workspaces: "client/src-tauri" }
       - name: Install tauri-cli
         uses: taiki-e/install-action@v2
         with: { tool: tauri-cli }
@@ -31,8 +33,8 @@ jobs:
         with:
           name: SuperPopaul-windows
           path: |
-            src-tauri/target/release/superpopaul.exe
-            src-tauri/target/release/bundle/nsis/*.exe
+            client/src-tauri/target/release/superpopaul.exe
+            client/src-tauri/target/release/bundle/nsis/*.exe
 
   # Publication GitHub Release sur tag uniquement. Job séparé : le build
   # reste en contents: read, seul ce job a le droit d'écriture.
