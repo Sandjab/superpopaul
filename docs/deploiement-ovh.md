@@ -31,6 +31,13 @@ CPU/RAM quasi nulle (serveur `http.server` stdlib + un peu de parsing XML/cert).
 Le facteur limitant est la latence amont et le rate-limit Peppol, **pas** la
 taille du VPS. Conclusion : **le plus petit VPS du catalogue suffit largement.**
 
+> **Nuance sous rafale** : à forte concurrence (bench, c=32-64), le plafond
+> devient le CPU — mesuré ~66 req/s sur 2 vCPU, dont ~15 ms de bytecode Python
+> **GIL-bound** par résolution (parsing XML, X.509, JSON). Des vCPU
+> supplémentaires ne lèvent **pas** ce plafond : le serveur est mono-processus,
+> seul un passage en multi-processus (prefork) en tirerait parti. Monter en
+> gamme pour le débit est donc inutile en l'état.
+
 ### Gamme OVH VPS 2027
 
 La gamme 2027 s'appelle **VPS-1 à VPS-4** (stockage SSD NVMe, 1 IPv4 dédiée +
