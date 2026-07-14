@@ -380,14 +380,14 @@ $("btn-test-api").addEventListener("click", async () => {
 
 // --- Banc d'essai du calibrage : une colonne par palier, hauteurs re-échelonnées
 // sur le meilleur débit vu (le backend n'envoie que des adr/s absolus).
-const bench = { cols: new Map(), max: 0, steps: [] };
+const bench = { el: null, statusEl: null, cols: new Map(), max: 0, steps: [] };
 
-function benchReset() {
-  $("calibrate-bench").replaceChildren();
+function benchReset(el) {
+  bench.el = el;
+  el.replaceChildren();
   bench.cols.clear();
   bench.max = 0;
   bench.steps = [];
-  $("calibrate-bench").classList.remove("hidden");
 }
 
 function benchRescale() {
@@ -399,15 +399,18 @@ function benchRescale() {
 }
 
 listen("calibrate-step", (e) => {
+  if (!bench.el) return; // événement orphelin (modale déjà fermée)
   const s = e.payload;
   bench.steps.push(s);
   if (s.status === "measuring") {
+    if (bench.statusEl)
+      bench.statusEl.textContent = `palier ${s.level} session${s.level > 1 ? "s" : ""} — mesure…`;
     const val = h("span", { class: "cal-val" }, "");
     const bar = h("div", { class: "cal-bar measuring" });
     const col = h("div", { class: "cal-col" }, val, bar,
       h("span", { class: "cal-lab" }, String(s.level)));
     bench.cols.set(s.level, { col, bar, val });
-    $("calibrate-bench").append(col);
+    bench.el.append(col);
     return;
   }
   const entry = bench.cols.get(s.level);
@@ -455,34 +458,102 @@ function benchDimLosers() {
   }
 }
 
-$("btn-calibrate").addEventListener("click", async () => {
+/** Flux complet de calibration dans la modale partagée. L'application de la
+ *  concurrence est EXPLICITE (bouton Appliquer) — plus d'écriture automatique. */
+async function runCalibration() {
   apiButtons().forEach((b) => { b.disabled = true; });
   syncSettingsForm();
   const out = $("calibrate-result");
-  out.textContent = "calibrage en cours…";
+  out.textContent = "calibration en cours…";
+  const backdrop = $("modal-backdrop");
+  let onBackdrop = null;
+  let onKeydown = null;
+  const cleanup = () => {
+    if (onBackdrop) backdrop.removeEventListener("click", onBackdrop);
+    if (onKeydown) document.removeEventListener("keydown", onKeydown);
+    closeModal();
+    bench.el = null;
+    bench.statusEl = null;
+    apiButtons().forEach((b) => { b.disabled = false; });
+  };
   try {
     await invoke("set_config", { cfg: state.config });
     await ensureProxyCreds();
-    benchReset();
+    // La modale ne s'ouvre qu'une fois les prérequis franchis côté UI ; une
+    // erreur de garde backend (invoke rejeté) la referme dans le catch.
+    const title = h("h3", {}, "Calibration en cours…");
+    const benchEl = h("div", {
+      id: "calibrate-bench",
+      title: "Débit mesuré (adr/s) par nombre de sessions. Vert : retenu · rouge : gain < 15 % (arrêt) · jaune : rate-limité (arrêt).",
+    });
+    const status = h("div", { id: "calibrate-status" }, "démarrage…");
+    const btns = h("div", { class: "modal-btns" });
+    modal(title, benchEl, status, btns);
+    benchReset(benchEl);
+    bench.statusEl = status;
+    const stopBtn = h("button", {
+      class: "btn-stop",
+      onclick: () => {
+        stopBtn.disabled = true;
+        stopBtn.textContent = "arrêt en cours…";
+        invoke("cancel_calibration");
+      },
+    }, "■ Arrêter");
+    btns.append(stopBtn);
+
     const r = await invoke("calibrate_api");
-    $("api-conc").value = r.best_concurrency;
-    $("direct-conc").value = r.best_concurrency; // champs miroirs
-    state.config.api.concurrency = r.best_concurrency;
     benchDimLosers();
-    out.textContent = `→ ${r.best_concurrency} sessions, ~${Math.round(r.addr_per_s)} adr/s` +
+    const verdict = `→ ${r.best_concurrency} sessions, ~${Math.round(r.addr_per_s)} adr/s` +
       ` · ${r.addr_sent} adressages consommés` + benchStopReason(r);
+    // Un rapport sans aucun palier complet (annulation immédiate) ne doit
+    // pas être applicable : best vaudrait (1, 0.0) par défaut.
+    const hasComplete = bench.steps.some((s) => s.status !== "measuring");
+    if (r.cancelled) {
+      title.textContent = "Calibration arrêtée";
+      const last = bench.steps[bench.steps.length - 1];
+      status.textContent = (last ? `arrêtée au palier ${last.level} · ` : "") +
+        `meilleur mesuré : ${r.best_concurrency} sessions, ~${Math.round(r.addr_per_s)} adr/s` +
+        ` · ${r.addr_sent} adressages consommés`;
+    } else {
+      title.textContent = "Calibration terminée";
+      status.textContent = verdict;
+      status.classList.add("done");
+    }
+    const finish = (applied) => {
+      out.textContent = verdict + (applied ? " — appliquée" : "");
+      cleanup();
+    };
+    const ignore = () => finish(false);
+    onBackdrop = (e) => { if (e.target === backdrop) ignore(); };
+    onKeydown = (e) => { if (e.key === "Escape") ignore(); };
+    backdrop.addEventListener("click", onBackdrop);
+    document.addEventListener("keydown", onKeydown);
+    const applyBtn = h("button", {
+      class: "btn-apply",
+      onclick: () => {
+        $("api-conc").value = r.best_concurrency;
+        $("direct-conc").value = r.best_concurrency; // champs miroirs
+        state.config.api.concurrency = r.best_concurrency;
+        finish(true);
+      },
+    }, `✓ Appliquer ${r.best_concurrency} sessions`);
+    applyBtn.disabled = !hasComplete;
+    btns.replaceChildren(
+      h("button", { class: "btn-retry", onclick: () => { cleanup(); runCalibration(); } }, "↻ Retenter"),
+      h("button", { onclick: ignore }, "Ignorer"),
+      applyBtn,
+    );
   } catch (err) {
-    $("calibrate-bench").classList.add("hidden");
-    if (err && err.proxyCancelled) out.textContent = "Calibrage annulé.";
+    cleanup();
+    if (err && err.proxyCancelled) out.textContent = "Calibration annulée.";
     else {
       // Échec d'auth proxy probable : re-demander les identifiants au prochain clic.
       if (/407|proxy/i.test(String(err))) proxyCredsGiven = false;
       out.textContent = `❌ ${err}`;
     }
-  } finally {
-    apiButtons().forEach((b) => { b.disabled = false; });
   }
-});
+}
+$("btn-calibrate").addEventListener("click", runCalibration);
 
 /** Si un proxy est configuré et les identifiants pas encore saisis dans cette
  *  session — ou saisis pour une autre URL de proxy —, les demander (mémoire

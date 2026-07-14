@@ -246,3 +246,13 @@ footer .logo a:hover { color: var(--blue); text-decoration: underline; }
 .cal-col.win .cal-val { color: var(--green); }
 .cal-col.reject .cal-val { color: var(--red); }
 .cal-col.ratelimited .cal-val { color: var(--amber); }
+
+/* --- Modale de calibration ------------------------------------------------------
+   Boutons de fin : Appliquer = action principale (vert plein), Retenter et
+   Arrêter en couleur de bordure seulement. */
+.modal-btns { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
+.btn-stop { border-color: var(--red); color: var(--red); }
+.btn-retry { border-color: var(--blue); color: var(--blue); }
+.btn-apply { background: #238636; border-color: var(--green); color: #fff; font-weight: 600; }
+#calibrate-status { font-size: 12px; color: var(--muted); margin-top: 6px; }
+#calibrate-status.done { color: var(--green); }
