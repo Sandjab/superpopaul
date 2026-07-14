@@ -64,44 +64,50 @@
       </div>
       <p id="run-mode-hint" class="field-hint"></p>
       <div id="cockpit" class="hidden">
-        <div id="ring-block">
-          <div id="ring"><div id="ring-center"><b id="ring-pct">0%</b><span id="ring-abs" class="muted"></span></div></div>
-          <p id="ring-state" class="hidden">terminé</p>
-          <p id="eta-line" title="Temps restant estimé d'après le débit courant."><span id="eta-label">ETA</span> <b id="eta">—</b></p>
-          <p id="avg-rate" class="muted hidden" title="Adressages résolus par seconde en moyenne sur la durée active."></p>
-        </div>
-        <div id="tiles">
-          <div class="tile" title="Présents dans l'annuaire Peppol — % des résolus ; absolus en adressages et en lignes de fichier.">🎯 Dans Peppol
-            <div class="mini-ring-row">
-              <div class="mini-ring" id="ring-exists"><div class="mini-ring-center"><b id="t-exists">—</b></div></div>
+        <!-- Bandeau métier : progression + les deux réponses qu'on est venu
+             chercher, en grand. La plomberie vit dans <details> en dessous. -->
+        <div id="biz-band">
+          <div id="ring-block">
+            <div id="ring"><div id="ring-center"><b id="ring-pct">0%</b><span id="ring-abs" class="muted"></span></div></div>
+            <p id="ring-state" class="hidden">terminé</p>
+            <p id="eta-line" title="Temps restant estimé d'après le débit courant."><span id="eta-label">ETA</span> <b id="eta">—</b></p>
+            <p id="avg-rate" class="muted hidden" title="Adressages résolus par seconde en moyenne sur la durée active."></p>
+            <p id="fail-line" class="zero" title="Adressages en erreur définitive — motifs dans Télémétrie, Top erreurs.">—</p>
+          </div>
+          <div class="biz-metric" title="Présents dans l'annuaire Peppol — % des résolus ; absolus en adressages et en lignes de fichier.">
+            <div class="mini-ring" id="ring-exists"><div class="mini-ring-center"><b id="t-exists">—</b></div></div>
+            <div>
+              <h3>🎯 Dans Peppol</h3>
               <div class="ring-abs">
                 <div><b id="t-exists-abs">—</b> <span class="muted">adressages</span></div>
                 <div><b id="t-exists-lines">—</b> <span class="muted">lignes</span> <span class="muted" id="t-exists-lines-pct"></span></div>
               </div>
             </div>
           </div>
-          <div class="tile" title="Éligibles à la facturation électronique française (France Invoice UBL Extension, ex-CTC-FR).">🇫🇷 France Invoice UBL Extension
-            <div class="mini-ring-row">
-              <div class="mini-ring" id="ring-ctc"><div class="mini-ring-center"><b id="t-ctc">—</b></div></div>
+          <div class="biz-metric" title="Éligibles à la facturation électronique française (France Invoice UBL Extension, ex-CTC-FR).">
+            <div class="mini-ring" id="ring-ctc"><div class="mini-ring-center"><b id="t-ctc">—</b></div></div>
+            <div>
+              <h3>🇫🇷 France Invoice UBL Extension</h3>
               <div class="ring-abs">
                 <div><b id="t-ctc-abs">—</b> <span class="muted">adressages</span></div>
                 <div><b id="t-ctc-lines">—</b> <span class="muted">lignes</span> <span class="muted" id="t-ctc-lines-pct"></span></div>
               </div>
+              <p class="ctc-gap muted" title="Dans Peppol mais sans l'extension : le reste à convertir.">dans Peppol sans l'extension : <b id="t-ctc-gap">—</b> adr · <b id="t-ctc-gap-lines">—</b> lignes</p>
             </div>
-            <p class="ctc-gap muted" title="Dans Peppol mais sans l'extension : le reste à convertir.">dans Peppol sans l'extension : <b id="t-ctc-gap">—</b> adr · <b id="t-ctc-gap-lines">—</b> lignes</p>
           </div>
-          <div class="tile" title="Adressages résolus par seconde (courbe) ; req/s : requêtes API.">Débit<div id="rate-spark" class="spark"></div><div id="t-rate" class="hbar-legend">—</div></div>
-          <div class="tile" title="Concurrence effective / plafond — s'adapte aux 429 (AIMD) · échecs définitifs.">Concurrence / échecs<br><b id="t-misc">—</b></div>
-          <div class="tile tile-span2" title="Motifs d'échec les plus fréquents.">Top erreurs<div id="top-errors"></div></div>
         </div>
-        <div class="wide">
-          <div class="tile" title="Appels API par famille de code — survoler une ligne pour le détail.">Codes HTTP<div id="http-hist"></div></div>
-          <div class="tile" title="Temps de réponse API — p50 en vert, p90 en ambre.">Latence (ms)<div id="lat-spark" class="spark"></div><div id="latency" class="hbar-legend"></div></div>
-          <div class="tile" title="Appels par tranche de latence, cumulés depuis le début du run.">Distribution (ms)<div id="lat-hist"></div></div>
-        </div>
-        <div class="wide">
-          <div class="tile" title="PA découvertes, classées par nombre d'adressages routés.">PA<div id="pa-grid"></div></div>
-        </div>
+        <details id="telemetry">
+          <summary>Télémétrie — débit, latences, codes HTTP, erreurs, PA</summary>
+          <div class="tel-grid">
+            <div class="tel-cell" title="Adressages résolus par seconde (courbe) ; req/s : requêtes API."><h4>Débit</h4><div id="rate-spark" class="spark"></div><div id="t-rate" class="hbar-legend">—</div></div>
+            <div class="tel-cell" title="Temps de réponse API — p50 en vert, p90 en ambre."><h4>Latence (ms)</h4><div id="lat-spark" class="spark"></div><div id="latency" class="hbar-legend"></div></div>
+            <div class="tel-cell" title="Appels par tranche de latence, cumulés depuis le début du run."><h4>Distribution (ms)</h4><div id="lat-hist"></div></div>
+            <div class="tel-cell" title="Concurrence effective / plafond — s'adapte aux 429 (AIMD)."><h4>Concurrence</h4><b id="t-misc">—</b></div>
+            <div class="tel-cell" title="Appels API par famille de code — survoler une ligne pour le détail."><h4>Codes HTTP</h4><div id="http-hist"></div></div>
+            <div class="tel-cell" title="Motifs d'échec les plus fréquents."><h4>Top erreurs</h4><div id="top-errors"></div></div>
+            <div class="tel-cell tel-span" title="PA découvertes, classées par nombre d'adressages routés."><h4>PA</h4><div id="pa-grid"></div></div>
+          </div>
+        </details>
       </div>
       <p id="run-result" class="hidden"></p>
     </section>

@@ -53,10 +53,19 @@ function showStep(i) {
     if (j <= i) btn.disabled = false;
   });
   $("btn-prev").classList.toggle("hidden", i === 0);
-  $("btn-next").classList.toggle("hidden", i === STEPS.length - 1);
+  syncNextBtn();
   if (STEPS[i] === "columns") renderOutPreview(); // columns.js
   if (STEPS[i] === "run") enterRunStep();          // cockpit.js
 }
+
+/** « Suivant » n'apparaît à l'étape Fichier qu'une fois un fichier chargé —
+ *  avant, il n'y a pas d'étape suivante atteignable. */
+function syncNextBtn() {
+  const hide = current === STEPS.length - 1
+    || (STEPS[current] === "file" && !state.inputPath);
+  $("btn-next").classList.toggle("hidden", hide);
+}
+syncNextBtn(); // état initial : étape Fichier, aucun fichier
 
 /** Message d'erreur si l'étape courante est incomplète, sinon null. */
 function validateStep() {
@@ -138,6 +147,7 @@ async function pickInput(path) {
 
 function renderFilePanel() {
   const p = state.preview;
+  syncNextBtn(); // un fichier vient d'être chargé : « Suivant » devient utile
   $("file-info").classList.remove("hidden");
   $("file-meta").textContent =
     `${state.inputPath} — séparateur « ${p.delimiter} », encodage ${p.encoding}`;
@@ -693,5 +703,6 @@ $("btn-load-cfg").addEventListener("click", async () => {
     banner("warn", `Profil chargé, mais le fichier d'entrée ${path} est introuvable — ` +
       "re-sélectionne-le à l'étape 1.");
     showStep(0);
+    syncNextBtn(); // showStep(0) early-return si on y était déjà
   }
 });

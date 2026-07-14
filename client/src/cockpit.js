@@ -244,9 +244,11 @@ listen("telemetry", (e) => {
   $("t-rate").textContent = `${s.req_per_s.toFixed(1)} req/s · ${Math.round(s.addr_per_s)} adr/s`;
   rateSeries.push({ adr: s.addr_per_s });
   renderSpark("rate-spark", rateSeries.hist, [["adr", "var(--blue)"]]);
+  // Échecs = info métier, sous l'anneau ; la concurrence reste en télémétrie.
+  $("fail-line").textContent = `${fmt(s.failed)} échec${s.failed > 1 ? "s" : ""}`;
+  $("fail-line").classList.toggle("zero", s.failed === 0);
   $("t-misc").textContent = s.concurrency_max
-    ? `${s.concurrency_allowed}/${s.concurrency_max} · ${fmt(s.failed)} échecs`
-    : `${fmt(s.failed)} échecs`;
+    ? `${s.concurrency_allowed} / ${s.concurrency_max}` : "—";
   renderHttpBars(s.http);
   renderTopErrors(s.errors);
   renderPaGrid(s.pa, s.total);
