@@ -724,17 +724,20 @@ pub struct CalibrationReport {
 
 /// Salves à concurrence croissante (1, 2, 4, … ≤ max) : mesure le débit de
 /// chaque palier, s'arrête au premier 429 ou quand le gain devient < 15 %.
+/// `progress` est appelée 2× par palier : Measuring puis verdict.
 pub async fn calibrate(
     client: &ApiClient,
     sample: &[String],
     batch_size: usize,
     max_concurrency: u32,
+    mut progress: impl FnMut(CalibrationStep),
 ) -> CalibrationReport {
     let mut best = (1u32, 0.0f64);
     let mut rate_limited = false;
     let mut addr_sent = 0u64;
     let mut level = 1u32;
     while level <= max_concurrency {
+        progress(CalibrationStep::Measuring { level });
         let t0 = std::time::Instant::now();
         let mut handles = Vec::new();
         for i in 0..level {
@@ -760,13 +763,11 @@ pub async fn calibrate(
             }
         }
         let throughput = ok as f64 / t0.elapsed().as_secs_f64().max(0.001);
-        if throughput > best.1 * 1.15 {
-            best = (level, throughput);
-        } else {
-            break; // le palier n'apporte plus assez : on garde le précédent
-        }
-        if rate_limited {
-            break;
+        let step = palier_verdict(level, throughput, best.1, rate_limited);
+        progress(step);
+        match step {
+            CalibrationStep::Retained { .. } => best = (level, throughput),
+            _ => break, // Rejected ou RateLimited : le calibrage s'arrête là
         }
         level *= 2;
     }
@@ -1329,6 +1330,73 @@ mod tests_calibrate {
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
+    fn level_of(s: &CalibrationStep) -> u32 {
+        match s {
+            CalibrationStep::Measuring { level, .. }
+            | CalibrationStep::Retained { level, .. }
+            | CalibrationStep::Rejected { level, .. }
+            | CalibrationStep::RateLimited { level, .. } => *level,
+        }
+    }
+
+    // La cadence des mocks n'est pas déterministe : on vérifie la STRUCTURE
+    // de la séquence (paires Measuring→verdict, niveaux qui doublent), pas
+    // le nombre exact de paliers.
+    #[tokio::test]
+    async fn calibrate_emet_measuring_puis_verdict_par_palier() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/resolve/batch"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_delay(std::time::Duration::from_millis(50))
+                    .set_body_json(serde_json::json!({"results": [
+                        {"participant_id": "a::1", "exists": true}
+                    ]})),
+            )
+            .mount(&server)
+            .await;
+        let c = ApiClient::new(&server.uri(), "K", None, None).unwrap();
+        let sample: Vec<String> = (0..8).map(|i| format!("0009:{i}")).collect();
+        let mut steps = Vec::new();
+        let rep = calibrate(&c, &sample, 1, 8, |s| steps.push(s)).await;
+
+        assert!(steps.len() >= 2 && steps.len() % 2 == 0, "paires attendues : {steps:?}");
+        let mut expected = 1u32;
+        for pair in steps.chunks(2) {
+            assert!(matches!(pair[0], CalibrationStep::Measuring { .. }), "{pair:?}");
+            assert!(!matches!(pair[1], CalibrationStep::Measuring { .. }), "{pair:?}");
+            assert_eq!(level_of(&pair[0]), expected);
+            assert_eq!(level_of(&pair[1]), expected);
+            expected *= 2;
+        }
+        // Cohérence avec le rapport : si le dernier verdict est Retained
+        // (arrêt par plafond), c'est lui le gagnant.
+        if let Some(CalibrationStep::Retained { level, .. }) = steps.last() {
+            assert_eq!(*level, rep.best_concurrency);
+        }
+    }
+
+    #[tokio::test]
+    async fn calibrate_stoppe_en_jaune_sur_429() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/resolve/batch"))
+            .respond_with(ResponseTemplate::new(429).insert_header("Retry-After", "1"))
+            .mount(&server)
+            .await;
+        let c = ApiClient::new(&server.uri(), "K", None, None).unwrap();
+        let sample: Vec<String> = (0..4).map(|i| format!("0009:{i}")).collect();
+        let mut steps = Vec::new();
+        let rep = calibrate(&c, &sample, 1, 8, |s| steps.push(s)).await;
+
+        assert!(rep.rate_limited);
+        match steps.last() {
+            Some(CalibrationStep::RateLimited { level: 1, .. }) => {}
+            other => panic!("attendu RateLimited niveau 1, obtenu {other:?}"),
+        }
+    }
+
     #[tokio::test]
     async fn calibrate_renvoie_un_debit_et_une_concurrence() {
         let server = MockServer::start().await;
@@ -1345,7 +1413,7 @@ mod tests_calibrate {
             .await;
         let c = ApiClient::new(&server.uri(), "K", None, None).unwrap();
         let sample: Vec<String> = (0..8).map(|i| format!("0009:{i}")).collect();
-        let rep = calibrate(&c, &sample, 1, 8).await;
+        let rep = calibrate(&c, &sample, 1, 8, |_| {}).await;
         assert!(rep.best_concurrency >= 1);
         assert!(rep.addr_per_s > 0.0);
         assert!(!rep.rate_limited);
@@ -1369,7 +1437,7 @@ mod tests_calibrate {
             .await;
         let c = ApiClient::new(&server.uri(), "K", None, None).unwrap();
         let sample: Vec<String> = (0..8).map(|i| format!("0009:{i}")).collect();
-        let rep = calibrate(&c, &sample, 2, 4).await;
+        let rep = calibrate(&c, &sample, 2, 4, |_| {}).await;
         let requests = server.received_requests().await.unwrap();
         assert!(rep.addr_sent > 0);
         assert_eq!(rep.addr_sent, (requests.len() * 2) as u64);
@@ -1380,7 +1448,7 @@ mod tests_calibrate {
     #[test]
     fn verdict_retenu_si_gain_suffisant() {
         match palier_verdict(4, 50.0, 40.0, false) {
-            CalibrationStep::Retained { level: 4, .. } => {}
+            CalibrationStep::Retained { level: 4, addr_per_s } => assert_eq!(addr_per_s, 50.0),
             other => panic!("attendu Retained niveau 4, obtenu {other:?}"),
         }
     }
@@ -1401,5 +1469,15 @@ mod tests_calibrate {
             CalibrationStep::RateLimited { level: 8, .. } => {}
             other => panic!("attendu RateLimited niveau 8, obtenu {other:?}"),
         }
+    }
+
+    // L'UI (événement `calibrate-step`) se fie à cette forme JSON exacte :
+    // tag interne `status` en snake_case, champs à plat.
+    #[test]
+    fn calibration_step_serialise_avec_tag_status() {
+        let v = serde_json::to_value(CalibrationStep::RateLimited { level: 2, addr_per_s: 5.0 }).unwrap();
+        assert_eq!(v, serde_json::json!({"status": "rate_limited", "level": 2, "addr_per_s": 5.0}));
+        let m = serde_json::to_value(CalibrationStep::Measuring { level: 1 }).unwrap();
+        assert_eq!(m, serde_json::json!({"status": "measuring", "level": 1}));
     }
 }

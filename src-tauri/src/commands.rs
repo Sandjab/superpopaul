@@ -294,6 +294,7 @@ pub async fn calibrate_api(state: State<'_, AppState>) -> Result<CalibrationRepo
         &sample,
         cfg.api.batch_size as usize,
         cfg.api.concurrency.max(16),
+        |_| {},
     )
     .await)
 }
