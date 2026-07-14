@@ -685,6 +685,34 @@ impl Engine {
     }
 }
 
+/// Un pas de progression du calibrage, sérialisé tel quel vers l'UI
+/// (événement `calibrate-step`). Tag interne : `{"status":"measuring","level":1}`.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum CalibrationStep {
+    Measuring { level: u32 },
+    Retained { level: u32, addr_per_s: f64 },
+    Rejected { level: u32, addr_per_s: f64 },
+    RateLimited { level: u32, addr_per_s: f64 },
+}
+
+/// Verdict d'un palier mesuré. Le jaune (RateLimited) prime sur le rouge :
+/// une mesure traversée par un 429 n'est pas fiable, quel que soit son gain.
+fn palier_verdict(
+    level: u32,
+    throughput: f64,
+    best_throughput: f64,
+    rate_limited: bool,
+) -> CalibrationStep {
+    if rate_limited {
+        CalibrationStep::RateLimited { level, addr_per_s: throughput }
+    } else if throughput > best_throughput * 1.15 {
+        CalibrationStep::Retained { level, addr_per_s: throughput }
+    } else {
+        CalibrationStep::Rejected { level, addr_per_s: throughput }
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct CalibrationReport {
     pub best_concurrency: u32,
@@ -1345,5 +1373,33 @@ mod tests_calibrate {
         let requests = server.received_requests().await.unwrap();
         assert!(rep.addr_sent > 0);
         assert_eq!(rep.addr_sent, (requests.len() * 2) as u64);
+    }
+
+    // Le verdict d'un palier encode la sémantique des couleurs de la spec :
+    // jaune (429) prime sur tout, vert = gain > 15 %, rouge = le reste.
+    #[test]
+    fn verdict_retenu_si_gain_suffisant() {
+        match palier_verdict(4, 50.0, 40.0, false) {
+            CalibrationStep::Retained { level: 4, .. } => {}
+            other => panic!("attendu Retained niveau 4, obtenu {other:?}"),
+        }
+    }
+
+    #[test]
+    fn verdict_rejete_si_gain_insuffisant() {
+        // 45 < 40 × 1,15 = 46 : c'est le palier qui arrête le calibrage.
+        match palier_verdict(16, 45.0, 40.0, false) {
+            CalibrationStep::Rejected { level: 16, .. } => {}
+            other => panic!("attendu Rejected niveau 16, obtenu {other:?}"),
+        }
+    }
+
+    #[test]
+    fn verdict_jaune_prime_sur_le_gain() {
+        // Un 429 pendant la mesure rend le débit non fiable, même excellent.
+        match palier_verdict(8, 100.0, 10.0, true) {
+            CalibrationStep::RateLimited { level: 8, .. } => {}
+            other => panic!("attendu RateLimited niveau 8, obtenu {other:?}"),
+        }
     }
 }

@@ -34,7 +34,7 @@ Règles :
 - `resolver::calibrate()` prend un paramètre de progression supplémentaire
   (closure `Fn(CalibrationStep)`), appelée **2× par palier** :
   1. début de mesure : `{ level, status: Measuring }`
-  2. fin de mesure : `{ level, addr_per_s, status: Measured | Retained | Rejected | RateLimited }`
+  2. fin de mesure : `{ level, addr_per_s, status: Retained | Rejected | RateLimited }`
 
   Nota : `Retained` est provisoire — un palier retenu peut être dépassé par le
   suivant. À l'écran : le palier `Retained` passe vert et le vert précédent
@@ -63,6 +63,6 @@ Règles :
 - Rust d'abord : la séquence de pas émise par `calibrate()` est capturée par la
   closure dans les tests wiremock existants (`tests_calibrate`) et vérifiée pour
   les 3 causes d'arrêt : gain insuffisant → dernier pas `Rejected` ; 429 → dernier
-  pas `RateLimited` ; plafond → dernier pas `Measured`/`Retained`, pas de pas d'arrêt.
+  pas `RateLimited` ; plafond → dernier pas `Retained`, pas de pas d'arrêt.
 - Rendu JS : validation Chromium (stub `__TAURI__`, événements simulés), captures
   aux phases mesure et verdict.
