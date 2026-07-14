@@ -1,12 +1,19 @@
 # Super Popaul — conventions du projet
 
 - Projet **indépendant**, issu du monorepo peppolstat (split du 2026-07-14).
-  La parité stricte avec le client CLI `popaul.py` est abandonnée : la
-  canonicalisation et le format API évoluent ici librement, couverts par
-  les tests Rust existants (`pid`, `api`).
+  Trois composants séparés : `client/` (app graphique Tauri), `server/`
+  (API REST Python), `cli/` (clients batch `popaul.py` / `popaul.ps1`).
+- **Parité de canonicalisation** : `client/src-tauri/src/pid.rs::canonical`
+  et `cli/popaul.py::canonical` doivent rester identiques — tests miroir
+  `pid::tests` ↔ `cli/tests/test_popaul.py`, toute évolution d'un côté est
+  reportée de l'autre. (Les copies Python restées dans le repo privé
+  peppolstat divergent librement ; la référence de parité est ICI.)
+- Python : serveur sans framework (`http.server` threadé), dépendances
+  limitées à `server/requirements.txt` ; `cli/popaul.py` stdlib pure.
+  Tests : `python3 -m unittest discover -s tests` depuis `server/` ou `cli/`.
 - Rust : modules étanches (`pid`, `config`, `store`, `modes`, `csv_io`, `api`,
   `telemetry`, `resolver`, `output`, `commands`). Toute logique métier est
-  testable sans UI (`cargo test` dans `src-tauri/`).
+  testable sans UI (`cargo test` dans `client/src-tauri/`).
 - Frontend : vanilla HTML/CSS/JS, **pas de bundler ni de framework**.
   L'UI n'a aucune logique métier : elle invoque des commandes et affiche
   des événements.

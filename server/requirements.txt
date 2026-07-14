@@ -1,0 +1,2 @@
+cryptography>=42
+dnspython>=2.4

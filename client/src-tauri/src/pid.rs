@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 pub const DEFAULT_SCHEME: &str = "iso6523-actorid-upis";
 pub const DEFAULT_ICD: &str = "0225";
 
-/// Forme canonique du participant_id, identique à popaul.py.
+/// Forme canonique du participant_id, identique à cli/popaul.py (parité testée).
 /// - "scheme::icd:x" : déjà canonique, inchangé ;
 /// - "icd:x" : scheme par défaut ajouté ;
 /// - adressage brut sans « : » (SIREN, SIREN_SIRET, SIREN_SIRET_CODEROUTAGE,
