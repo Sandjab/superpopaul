@@ -27,6 +27,16 @@ pub fn field_name(f: PeppolField) -> &'static str {
 }
 
 /// Insère `_<stamp>` avant l'extension.
+/// Nom du fichier de sortie : `<nom de l'entrée><suffixe>.csv`
+/// (clients.csv + « _enrichi » → clients_enrichi.csv).
+pub fn out_file_name(input_path: &Path, suffix: &str) -> String {
+    let stem = input_path
+        .file_stem()
+        .and_then(|x| x.to_str())
+        .unwrap_or("sortie");
+    format!("{stem}{suffix}.csv")
+}
+
 pub fn with_stamp(path: &Path, stamp: Option<&str>) -> PathBuf {
     match stamp {
         None => path.to_path_buf(),
@@ -44,8 +54,8 @@ pub fn with_stamp(path: &Path, stamp: Option<&str>) -> PathBuf {
 /// Écrit le CSV de sortie : une ligne par ligne d'entrée, colonnes selon le
 /// mapping, infos Peppol lues dans `resolutions` (la base). Encodage et
 /// séparateur selon `output` (`Auto` = séparateur sniffé sur l'entrée) ;
-/// `output.path`/`timestamp_suffix` sont ignorés ici — l'appelant fournit
-/// `out_path` (résolu relativement au YAML) et `stamp` déjà calculés.
+/// `output.dir`/`suffix`/`timestamp_suffix` sont ignorés ici — l'appelant
+/// fournit `out_path` (résolu relativement au YAML) et `stamp` déjà calculés.
 ///
 /// Écriture atomique (comme `config::save`) : tout passe par `<final>.tmp`
 /// dans le même répertoire, renommé vers la cible seulement après le flush —
@@ -61,6 +71,16 @@ pub fn generate(
     stamp: Option<&str>,
 ) -> Result<PathBuf, String> {
     let final_path = with_stamp(out_path, stamp);
+    // Suffixe vide + même répertoire + pas de date/heure : la sortie porterait
+    // le nom de l'entrée. Comparaison lexicale (les deux chemins sortent de la
+    // même résolution dans commands.rs) — garde-fou, pas une preuve d'unicité.
+    if final_path == input_path {
+        return Err(format!(
+            "la sortie {} écraserait le fichier d'entrée — change le suffixe, \
+             le répertoire ou active la date/heure",
+            final_path.display()
+        ));
+    }
     let mut tmp_os = final_path.clone().into_os_string();
     tmp_os.push(".tmp");
     let tmp_path = PathBuf::from(tmp_os);
@@ -247,10 +267,12 @@ mod tests {
     use std::io::Write;
 
     /// OutputConfig de test : défauts historiques (UTF-8+BOM, séparateur de
-    /// l'entrée). `path`/`timestamp_suffix` sont ignorés par generate (résolus
-    /// par l'appelant).
+    /// l'entrée). `dir`/`suffix`/`timestamp_suffix` sont ignorés par generate
+    /// (résolus par l'appelant).
     fn out_cfg(columns: Vec<ColumnSpec>) -> OutputConfig {
         OutputConfig {
+            dir: String::new(),
+            suffix: "_enrichi".into(),
             path: String::new(),
             timestamp_suffix: false,
             encoding: OutputEncoding::Utf8Bom,
@@ -275,6 +297,34 @@ mod tests {
             },
         );
         m
+    }
+
+    #[test]
+    fn out_file_name_derive_du_nom_de_l_entree() {
+        use std::path::Path;
+        assert_eq!(out_file_name(Path::new("/x/clients.csv"), "_enrichi"), "clients_enrichi.csv");
+        // L'extension de sortie est toujours .csv, même pour une entrée .txt.
+        assert_eq!(out_file_name(Path::new("data.txt"), "_peppol"), "data_peppol.csv");
+        assert_eq!(out_file_name(Path::new("/x/clients.csv"), ""), "clients.csv");
+    }
+
+    #[test]
+    fn generate_refuse_d_ecraser_le_fichier_d_entree() {
+        // Suffixe vide + même répertoire + pas de date/heure : sans cette
+        // garde, la sortie détruirait silencieusement le fichier source.
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("in.csv");
+        std::fs::File::create(&input)
+            .unwrap()
+            .write_all(b"siren\n0009:1\n")
+            .unwrap();
+        let meta = CsvMeta { delimiter: b';', encoding: "utf-8" };
+        let cols = vec![ColumnSpec::Input { name: "siren".into() }];
+        let err = generate(&input, &meta, "siren", &out_cfg(cols), &resolutions(), &input, None)
+            .unwrap_err();
+        assert!(err.contains("écraserait"), "{err}");
+        // Le fichier d'entrée est intact.
+        assert_eq!(std::fs::read_to_string(&input).unwrap(), "siren\n0009:1\n");
     }
 
     #[test]

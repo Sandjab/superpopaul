@@ -8,7 +8,7 @@ use crate::resolver::{calibrate, CalibrationReport, Engine, EngineEvent, EngineP
 use crate::store::Store;
 use serde::Serialize;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, State};
 
@@ -406,10 +406,14 @@ pub async fn generate_output(state: State<'_, AppState>) -> Result<String, Strin
         // seule Connection SQLite). Alternative future si ça pique : une 2e
         // connexion lecture seule (le WAL permet lectures // écritures).
         let resolutions = store.lock().unwrap().load_map(&pids)?;
-        let out = match &base {
-            Some(dir) => config::resolve_relative(&dir.join("x.yaml"), &cfg.output.path),
-            None => PathBuf::from(&cfg.output.path),
+        // Répertoire vide : celui du fichier d'entrée. Sinon, résolu
+        // relativement au YAML chargé, comme le fichier d'entrée.
+        let out_dir = match (cfg.output.dir.as_str(), &base) {
+            ("", _) => input.parent().unwrap_or(Path::new(".")).to_path_buf(),
+            (dir, Some(b)) => config::resolve_relative(&b.join("x.yaml"), dir),
+            (dir, None) => PathBuf::from(dir),
         };
+        let out = out_dir.join(output::out_file_name(&input, &cfg.output.suffix));
         let stamp = cfg
             .output
             .timestamp_suffix

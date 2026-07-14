@@ -63,6 +63,14 @@ fn dns_concurrency_is_default(v: &u32) -> bool {
     *v == dns_concurrency_default()
 }
 
+fn suffix_default() -> String {
+    "_enrichi".into()
+}
+
+fn suffix_is_default(v: &String) -> bool {
+    *v == suffix_default()
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProxyConfig {
@@ -102,6 +110,19 @@ pub struct InputConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OutputConfig {
+    /// Répertoire de sortie. Vide : répertoire du fichier d'entrée.
+    /// Le nom du fichier est dérivé de l'entrée + `suffix` (le chemin
+    /// complet n'est plus saisi depuis la page Réglages).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub dir: String,
+    /// Suffixe ajouté au nom du fichier d'entrée (clients.csv →
+    /// clients_enrichi.csv). Absent des YAML d'avant l'option → défaut,
+    /// et non écrit à la valeur par défaut (comme dns_concurrency).
+    #[serde(default = "suffix_default", skip_serializing_if = "suffix_is_default")]
+    pub suffix: String,
+    /// Legacy : chemin de sortie complet des YAML d'avant la page Réglages.
+    /// Toléré en lecture (`from_yaml` le migre en `dir`), plus jamais écrit.
+    #[serde(default, skip_serializing)]
     pub path: String,
     pub timestamp_suffix: bool,
     /// Les défauts reproduisent le comportement historique (UTF-8+BOM,
@@ -173,6 +194,9 @@ impl Config {
         if self.output.columns.is_empty() {
             return Err("output.columns ne doit pas être vide".into());
         }
+        if self.output.suffix.contains(['/', '\\']) {
+            return Err("le suffixe de sortie ne doit pas contenir / ou \\".into());
+        }
         Ok(())
     }
 }
@@ -182,7 +206,17 @@ pub fn to_yaml(cfg: &Config) -> Result<String, String> {
 }
 
 pub fn from_yaml(s: &str) -> Result<Config, String> {
-    serde_yaml::from_str(s).map_err(|e| e.to_string())
+    let mut cfg: Config = serde_yaml::from_str(s).map_err(|e| e.to_string())?;
+    // Migration des YAML d'avant la page Réglages : output.path (chemin
+    // complet) n'en garde que le répertoire — le nom du fichier est désormais
+    // dérivé de l'entrée + suffixe. Un path sans répertoire (« b.csv ») laisse
+    // dir vide = répertoire du fichier d'entrée.
+    if cfg.output.dir.is_empty() && !cfg.output.path.is_empty() {
+        if let Some(parent) = Path::new(&cfg.output.path).parent() {
+            cfg.output.dir = parent.to_string_lossy().into_owned();
+        }
+    }
+    Ok(cfg)
 }
 
 pub fn load(path: &Path) -> Result<Config, String> {
@@ -240,7 +274,9 @@ mod tests {
                 pid_column: "siren".into(),
             },
             output: OutputConfig {
-                path: "./clients_enrichis.csv".into(),
+                dir: "./sorties".into(),
+                suffix: "_enrichi".into(),
+                path: String::new(),
                 timestamp_suffix: true,
                 encoding: OutputEncoding::Utf8Bom,
                 separator: OutputSeparator::Auto,
@@ -396,6 +432,43 @@ mod tests {
          input:\n  path: ./a.csv\n  delimiter: \";\"\n  encoding: utf-8\n  pid_column: siren\n\
          output:\n  path: ./b.csv\n  timestamp_suffix: true\n  columns:\n    \
          - source: input\n      name: siren\n"
+    }
+
+    #[test]
+    fn output_path_legacy_migre_en_dir() {
+        // Un YAML d'avant la page Réglages porte un chemin de sortie complet :
+        // on n'en garde que le répertoire, le nom du fichier étant désormais
+        // dérivé de l'entrée + suffixe (défaut _enrichi).
+        let cfg = from_yaml(yaml_ancien()).unwrap();
+        assert_eq!(cfg.output.dir, ".");
+        assert_eq!(cfg.output.suffix, "_enrichi");
+    }
+
+    #[test]
+    fn output_path_legacy_plus_jamais_ecrit() {
+        let yaml = to_yaml(&config_exemple()).unwrap();
+        let v: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
+        assert!(v["output"].get("path").is_none());
+        assert_eq!(v["output"]["dir"].as_str(), Some("./sorties"));
+        // Suffixe à la valeur par défaut : non écrit (comme dns_concurrency).
+        assert!(v["output"].get("suffix").is_none());
+        let mut cfg = config_exemple();
+        cfg.output.suffix = "_peppol".into();
+        let v: serde_yaml::Value =
+            serde_yaml::from_str(&to_yaml(&cfg).unwrap()).unwrap();
+        assert_eq!(v["output"]["suffix"].as_str(), Some("_peppol"));
+    }
+
+    #[test]
+    fn validate_rejette_suffixe_avec_separateur() {
+        // Un suffixe « ../x » déplacerait la sortie hors du répertoire choisi.
+        let mut cfg = config_exemple();
+        cfg.output.suffix = "../x".into();
+        assert!(cfg.validate().is_err());
+        cfg.output.suffix = "a\\b".into();
+        assert!(cfg.validate().is_err());
+        cfg.output.suffix = String::new(); // vide : autorisé (date/heure ou autre répertoire)
+        assert!(cfg.validate().is_ok());
     }
 
     #[test]
