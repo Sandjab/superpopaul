@@ -7,7 +7,10 @@
 body {
   margin: 0; background: var(--bg); color: var(--fg);
   font: 14px/1.5 -apple-system, "Segoe UI", system-ui, sans-serif;
-  display: flex; flex-direction: column; min-height: 100vh;
+  display: flex; flex-direction: column;
+  /* Hauteur FIXE (pas min-) : un contenu haut fait défiler main (qui a son
+     ascenseur), au lieu d'agrandir la page — header et footer restent visibles. */
+  height: 100vh; overflow: hidden;
 }
 h1, h2 { font-weight: 600; }
 button {
@@ -50,7 +53,15 @@ header {
 .step.active { background: var(--blue); color: #fff; border-color: var(--blue); }
 .step.done { color: var(--green); }
 
-main { flex: 1; padding: 18px; overflow-y: auto; }
+/* min-height 0 : sans lui, l'item flex refuse de rétrécir sous la hauteur de
+   son contenu (min-height:auto) et l'ascenseur n'apparaît jamais. */
+main { flex: 1; min-height: 0; padding: 18px; overflow-y: auto; }
+/* Ascenseur visible en permanence quand ça déborde (macOS le masque hors
+   défilement par défaut) — n'apparaît pas si le contenu tient. */
+main::-webkit-scrollbar { width: 10px; }
+main::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; }
+main::-webkit-scrollbar-thumb:hover { background: #4b535d; }
+main::-webkit-scrollbar-track { background: transparent; }
 .panel { max-width: 900px; margin: 0 auto; }
 fieldset { border: 1px solid var(--border); border-radius: 8px; margin: 12px 0; }
 
