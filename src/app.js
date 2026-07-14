@@ -332,6 +332,8 @@ document.addEventListener("keydown", (e) => {
 // --- Splash + réglages au démarrage ---------------------------------------------------
 window.addEventListener("DOMContentLoaded", async () => {
   setTimeout(() => $("splash").classList.add("fade"), 2000);
+  // Version du programme dans le pied de page (celle de tauri.conf.json).
+  window.__TAURI__.app?.getVersion().then((v) => { $("app-version").textContent = `v${v}`; });
   // Réglages auto-persistés : lus au démarrage (premier lancement : défauts).
   try {
     const s = await invoke("load_settings");
@@ -340,6 +342,13 @@ window.addEventListener("DOMContentLoaded", async () => {
     banner("warn", `Réglages illisibles — valeurs par défaut appliquées. (${e})`);
   }
   fillSettingsForm();
+});
+
+// Lien externe : toujours via le navigateur par défaut du système (opener),
+// jamais dans la webview — un <a href> nu y naviguerait l'app elle-même.
+$("brand-link").addEventListener("click", (e) => {
+  e.preventDefault();
+  window.__TAURI__.opener?.openUrl("https://github.com/Sandjab");
 });
 
 // --- Réglages : test API et calibrage -----------------------------------------

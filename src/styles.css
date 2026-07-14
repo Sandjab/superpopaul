@@ -183,7 +183,17 @@ body > .drag-fallback {
 footer {
   display: flex; justify-content: space-between; padding: 10px 18px;
   border-top: 1px solid var(--border);
+  position: relative; /* ancre le bloc marque centré en absolu */
 }
+/* Marque centrée indépendamment de la largeur des boutons Précédent/Suivant
+   (un centrage flex dériverait quand « Précédent » est masqué à l'étape 1). */
+footer .logo {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  font-size: 12px; white-space: nowrap;
+}
+footer .logo img { height: 16px; }
+footer .logo a { color: var(--muted); text-decoration: none; }
+footer .logo a:hover { color: var(--blue); text-decoration: underline; }
 /* « Suivant » reste à droite même quand « Précédent » est masqué (étape 1) :
    space-between colle un enfant unique à gauche, margin-left auto le pousse
    à droite dans tous les cas. */
