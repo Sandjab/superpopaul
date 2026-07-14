@@ -32,6 +32,10 @@ struct Inner {
     lines: LineWeights,        // mêmes compteurs, pondérés en lignes de fichier
     latencies_ms: Vec<u32>,
     calls: VecDeque<(Instant, u32)>, // (instant, adressages traités par l'appel)
+    /// Temps actif cumulé (pauses utilisateur et suspensions système exclues),
+    /// échantillonné par `tick_active` — voir le superviseur du moteur.
+    active: std::time::Duration,
+    last_tick: Instant,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -98,6 +102,8 @@ pub struct Snapshot {
     pub req_per_s: f64,
     pub addr_per_s: f64,
     pub eta_s: Option<u64>,
+    /// Durée active du run en secondes (pauses et suspensions exclues).
+    pub active_s: f64,
 }
 
 impl Telemetry {
@@ -115,8 +121,25 @@ impl Telemetry {
                 lines: LineWeights::default(),
                 latencies_ms: Vec::new(),
                 calls: VecDeque::new(),
+                active: std::time::Duration::ZERO,
+                last_tick: Instant::now(),
             }),
         }
+    }
+
+    /// Échantillonne le temps actif : ajoute l'intervalle écoulé depuis le
+    /// tick précédent si le moteur était actif (ni pause utilisateur, ni
+    /// suspension système) sur cet intervalle. Appelé 4×/s par le
+    /// superviseur, plus un tick final à l'émission de Finished pour ne pas
+    /// perdre la dernière tranche (un run éclair n'aurait sinon aucun tick).
+    pub fn tick_active(&self, active: bool) {
+        let mut i = self.inner.lock().unwrap();
+        let now = Instant::now();
+        if active {
+            let delta = now - i.last_tick;
+            i.active += delta;
+        }
+        i.last_tick = now;
     }
 
     /// Un appel HTTP abouti (200) : addr adressages traités, dont `exists`
@@ -183,7 +206,7 @@ impl Telemetry {
         // Sous le verrou : purge de la fenêtre + copies. Le tri des latences
         // (coûteux à grand volume) se fait HORS verrou pour ne pas bloquer
         // les record_call des workers.
-        let (done, exists, ctc, failed, http, pa, errors, lines, latencies, req_per_s, addr_per_s) = {
+        let (done, exists, ctc, failed, http, pa, errors, lines, latencies, req_per_s, addr_per_s, active_s) = {
             let mut i = self.inner.lock().unwrap();
             let now = Instant::now();
             while let Some((t, _)) = i.calls.front() {
@@ -215,6 +238,7 @@ impl Telemetry {
                 i.latencies_ms.clone(),
                 req_per_s,
                 addr_per_s,
+                i.active.as_secs_f64(),
             )
         }; // verrou relâché ici
         // Classement par représentativité (BTreeMap garantit déjà l'ordre
@@ -253,6 +277,7 @@ impl Telemetry {
             req_per_s,
             addr_per_s,
             eta_s,
+            active_s,
         }
     }
 }
@@ -310,6 +335,24 @@ mod tests {
 
     fn vide() -> BTreeMap<String, u32> {
         BTreeMap::new()
+    }
+
+    #[test]
+    fn temps_actif_exclut_les_periodes_suspendues() {
+        // La durée affichée en fin de run ne doit compter que le temps où le
+        // moteur travaille : un intervalle échantillonné inactif (pause ou
+        // suspension) n'ajoute RIEN au cumul.
+        let t = Telemetry::new(10);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        t.tick_active(true);
+        let apres_actif = t.snapshot().active_s;
+        assert!(apres_actif >= 0.015, "{apres_actif}");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        t.tick_active(false); // période suspendue
+        assert_eq!(t.snapshot().active_s, apres_actif);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        t.tick_active(true); // le cumul repart après la suspension
+        assert!(t.snapshot().active_s > apres_actif);
     }
 
     #[test]

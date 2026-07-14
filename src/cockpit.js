@@ -115,6 +115,13 @@ async function startRun() {
     $("rate-spark").replaceChildren();
     $("cockpit").classList.remove("hidden");
     $("run-result").classList.add("hidden");
+    // Efface l'affichage de fin du run précédent : l'ETA reprend sa place
+    // (« — » jusqu'au premier tick de télémétrie).
+    $("ring-state").classList.add("hidden");
+    $("avg-rate").classList.add("hidden");
+    $("eta-label").textContent = "ETA";
+    $("eta").textContent = "—";
+    $("eta-line").title = "Temps restant estimé d'après le débit courant.";
     $("btn-start").classList.add("hidden");
     $("btn-pause").classList.remove("hidden");
     $("btn-stop").classList.remove("hidden");
@@ -405,12 +412,21 @@ listen("run-suspended", (e) => {
 listen("run-resumed", hideBanner);
 
 listen("run-finished", async (e) => {
-  const { done, failed, stopped } = e.payload;
+  const { done, failed, stopped, active_s } = e.payload;
   running = false;
   // Fige l'anneau sur sa valeur finale : un run complet passe ainsi à 100 %
   // (done == total) au lieu de rester sur le dernier tick de télémétrie ; un
-  // run arrêté reflète sa progression réelle. ETA sans objet à la fin.
-  renderRing(done, lastTotal || done, "—");
+  // run arrêté reflète sa progression réelle. À la place de l'ETA : la durée
+  // active du run (pauses et suspensions exclues), et en dessous la moyenne.
+  renderRing(done, lastTotal || done,
+    active_s >= 0.5 ? fmtDuration(Math.round(active_s)) : "< 1 s");
+  $("ring-state").classList.remove("hidden");
+  $("eta-label").textContent = "Durée";
+  $("eta-line").title = "Durée totale du run, pauses et suspensions exclues.";
+  const avg = active_s > 0 ? done / active_s : 0;
+  $("avg-rate").textContent =
+    `≈ ${avg.toLocaleString("fr-FR", { maximumFractionDigits: avg < 10 ? 1 : 0 })} adr/s en moyenne`;
+  $("avg-rate").classList.remove("hidden");
   await invoke("clear_run");
   $("btn-start").classList.remove("hidden");
   $("btn-pause").classList.add("hidden");

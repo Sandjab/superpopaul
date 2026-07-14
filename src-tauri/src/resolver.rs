@@ -152,6 +152,8 @@ pub enum EngineEvent {
         done: u64,
         failed: u64,
         stopped: bool,
+        /// Durée active du run en secondes (pauses et suspensions exclues).
+        active_s: f64,
     },
 }
 
@@ -620,27 +622,41 @@ impl Engine {
         // Superviseur : télémétrie 4×/s, détection de fin.
         {
             let (telemetry, tx, stop) = (telemetry.clone(), tx.clone(), stop.clone());
+            let (user_paused, suspended) = (user_paused.clone(), suspended.clone());
             tokio::spawn(async move {
                 for w in workers {
                     let _ = w.await;
                 }
+                // Tick final : sans lui, un run plus court que la période du
+                // superviseur (250 ms) aurait une durée active nulle.
+                telemetry.tick_active(
+                    !user_paused.load(Ordering::Relaxed) && !suspended.load(Ordering::Relaxed),
+                );
                 let s = telemetry.snapshot();
                 let _ = tx
                     .send(EngineEvent::Finished {
                         done: s.done,
                         failed: s.failed,
                         stopped: stop.load(Ordering::Relaxed),
+                        active_s: s.active_s,
                     })
                     .await;
             });
         }
         {
             let (telemetry, tx, stop) = (telemetry.clone(), tx, stop.clone());
+            let (user_paused, suspended) = (user_paused.clone(), suspended.clone());
             let aimd = aimd.clone();
             let concurrency_max = params.concurrency.max(1);
             tokio::spawn(async move {
                 loop {
                     tokio::time::sleep(Duration::from_millis(250)).await;
+                    // Échantillonnage du temps actif : la boucle tourne aussi
+                    // pendant les pauses/suspensions, l'intervalle n'est alors
+                    // pas compté (durée affichée en fin de run).
+                    telemetry.tick_active(
+                        !user_paused.load(Ordering::Relaxed) && !suspended.load(Ordering::Relaxed),
+                    );
                     // La concurrence vit dans le moteur, pas dans la
                     // télémétrie : on complète le snapshot à l'émission.
                     let mut s = telemetry.snapshot();
@@ -811,7 +827,12 @@ mod tests_engine {
     async fn wait_finished(rx: &mut tokio::sync::mpsc::Receiver<EngineEvent>) -> (u64, u64) {
         loop {
             match tokio::time::timeout(std::time::Duration::from_secs(10), rx.recv()).await {
-                Ok(Some(EngineEvent::Finished { done, failed, .. })) => return (done, failed),
+                Ok(Some(EngineEvent::Finished { done, failed, active_s, .. })) => {
+                    // Tick final : même un run éclair (< 250 ms de superviseur)
+                    // doit porter une durée active non nulle.
+                    assert!(active_s > 0.0, "durée active nulle : {active_s}");
+                    return (done, failed);
+                }
                 Ok(Some(_)) => continue,
                 other => panic!("Finished attendu, obtenu {other:?}"),
             }

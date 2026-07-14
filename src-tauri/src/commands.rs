@@ -356,11 +356,13 @@ pub async fn start_run(
                     done,
                     failed,
                     stopped,
+                    active_s,
                 } => {
                     let _ = app.emit(
                         "run-finished",
                         serde_json::json!({
-                            "done": done, "failed": failed, "stopped": stopped
+                            "done": done, "failed": failed, "stopped": stopped,
+                            "active_s": active_s
                         }),
                     );
                     break;

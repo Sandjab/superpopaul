@@ -123,6 +123,10 @@ body > .drag-fallback {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
 }
 #ring-pct { font-size: 26px; }
+/* Fin de run : « terminé » sous l'anneau, durée à la place de l'ETA, moyenne
+   en dessous — marges resserrées pour former un seul bloc. */
+#ring-state { margin: 8px 0 -10px; font-weight: 600; color: var(--green); }
+#avg-rate { margin: -12px 0 0; font-size: 12px; }
 #tiles { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .tile { background: var(--card); border-radius: 8px; padding: 10px 14px; }
 .tile b { font-size: 18px; }

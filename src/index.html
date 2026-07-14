@@ -66,7 +66,9 @@
       <div id="cockpit" class="hidden">
         <div id="ring-block">
           <div id="ring"><div id="ring-center"><b id="ring-pct">0%</b><span id="ring-abs" class="muted"></span></div></div>
-          <p title="Temps restant estimé d'après le débit courant.">ETA <b id="eta">—</b></p>
+          <p id="ring-state" class="hidden">terminé</p>
+          <p id="eta-line" title="Temps restant estimé d'après le débit courant."><span id="eta-label">ETA</span> <b id="eta">—</b></p>
+          <p id="avg-rate" class="muted hidden" title="Adressages résolus par seconde en moyenne sur la durée active du run."></p>
         </div>
         <div id="tiles">
           <div class="tile" title="Présents dans l'annuaire Peppol — % des adressages résolus dans l'anneau ; à côté, les absolus en adressages et en lignes de fichier (avec le % des lignes couvertes).">🎯 Dans Peppol
