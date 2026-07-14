@@ -254,5 +254,6 @@ footer .logo a:hover { color: var(--blue); text-decoration: underline; }
 .btn-stop { border-color: var(--red); color: var(--red); }
 .btn-retry { border-color: var(--blue); color: var(--blue); }
 .btn-apply { background: #238636; border-color: var(--green); color: #fff; font-weight: 600; }
+.btn-apply:disabled { background: #21262d; color: var(--muted); border-color: var(--border); }
 #calibrate-status { font-size: 12px; color: var(--muted); margin-top: 6px; }
 #calibrate-status.done { color: var(--green); }

@@ -496,18 +496,21 @@ async function runCalibration() {
       onclick: () => {
         stopBtn.disabled = true;
         stopBtn.textContent = "arrêt en cours…";
-        invoke("cancel_calibration");
+        invoke("cancel_calibration").catch(() => {}); // fire-and-forget assumé
       },
     }, "■ Arrêter");
     btns.append(stopBtn);
 
     const r = await invoke("calibrate_api");
     benchDimLosers();
-    const verdict = `→ ${r.best_concurrency} sessions, ~${Math.round(r.addr_per_s)} adr/s` +
+    const verdict = (r.cancelled ? "arrêtée · " : "") +
+      `→ ${r.best_concurrency} sessions, ~${Math.round(r.addr_per_s)} adr/s` +
       ` · ${r.addr_sent} adressages consommés` + benchStopReason(r);
-    // Un rapport sans aucun palier complet (annulation immédiate) ne doit
-    // pas être applicable : best vaudrait (1, 0.0) par défaut.
-    const hasComplete = bench.steps.some((s) => s.status !== "measuring");
+    // Le rapport fait autorité (le dernier calibrate-step peut perdre la
+    // course contre la résolution de l'invoke) : un best par défaut (1, 0.0)
+    // — annulation immédiate ou palier 1 à zéro réussite — ne doit pas être
+    // applicable.
+    const hasComplete = r.addr_per_s > 0;
     if (r.cancelled) {
       title.textContent = "Calibration arrêtée";
       const last = bench.steps[bench.steps.length - 1];
