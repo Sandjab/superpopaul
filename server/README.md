@@ -158,6 +158,27 @@ Flags réseau : `--test` (SMK), `--proxy`, `--ca-bundle`, `--insecure`,
 CA bundle, indispensable derrière un proxy d'entreprise qui bloque le DNS
 sortant ou ne propage pas les NAPTR externes).
 
+## Déploiement VPS
+
+Script d'installation **idempotent** [`../deploy/install.sh`](../deploy/install.sh)
+qui automate durcissement → déploiement → systemd → nginx → TLS. Bootstrap en un
+seul `curl` (le script fait ensuite un **clone partiel + sparse** : seuls
+`server/` et `deploy/` descendent, pas tout le dépôt) :
+
+```bash
+# Connecté en 'debian' (images Debian OVH) : sudo + env pour passer les variables.
+curl -fsSL https://raw.githubusercontent.com/Sandjab/superpopaul/main/deploy/install.sh -o install.sh
+sudo env DOMAIN=peppol.mondomaine.fr EMAIL=vous@exemple.fr bash install.sh
+# (sans DOMAIN/EMAIL dans l'environnement, le script les demande interactivement)
+```
+
+Fichiers de référence dans [`../deploy/`](../deploy/) — `peppol-api.service`
+(écoute locale, clés en fichier `600`, durcissement systemd),
+`nginx-peppol-api.conf` (HTTPS + redirection 80→443 + rate-limit de bordure),
+`peppol-api.keys.example`. Mode opératoire complet pas-à-pas pour un VPS
+OVHcloud (commande, DNS, TLS Let's Encrypt) :
+[`../docs/deploiement-ovh.md`](../docs/deploiement-ovh.md).
+
 ## Tests
 
 ```bash

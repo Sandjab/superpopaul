@@ -1,0 +1,63 @@
+# systemd unit pour l'API Peppol Resolver (Super Popaul).
+#
+# Installation :
+#   sudo useradd --system --home /opt/superpopaul --shell /usr/sbin/nologin peppol
+#   sudo cp -r . /opt/superpopaul && sudo chown -R peppol:peppol /opt/superpopaul
+#   python3 -m venv /opt/superpopaul/.venv
+#   /opt/superpopaul/.venv/bin/pip install -r /opt/superpopaul/server/requirements.txt
+#   # créer le fichier de clés (une spec par ligne : 'label=CLE [rate] [burst]') :
+#   /opt/superpopaul/.venv/bin/python /opt/superpopaul/server/peppol_api.py --gen-key
+#   sudo install -m 600 -o peppol -g peppol deploy/peppol-api.keys.example /etc/peppol-api.keys
+#   #   puis y remplacer les clés d'exemple (voir le fichier pour le format :
+#   #   rate/burst optionnels par clé, sinon défaut PEPPOL_API_RATE_LIMIT)
+#   sudo cp deploy/peppol-api.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now peppol-api
+#
+# Logs :  journalctl -u peppol-api -f
+
+[Unit]
+Description=Peppol Resolver REST API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=peppol
+Group=peppol
+WorkingDirectory=/opt/superpopaul
+
+# Le serveur n'écoute qu'en local : nginx (TLS) fait le front (voir nginx-peppol-api.conf).
+Environment=PEPPOL_API_HOST=127.0.0.1
+Environment=PEPPOL_API_PORT=8080
+Environment=PEPPOL_API_KEYS_FILE=/etc/peppol-api.keys
+Environment=PEPPOL_API_RATE_LIMIT=60
+# 64 fetchs SMP simultanés ; la rafale DNS, elle, est bornée à 16 par le
+# sémaphore de peppol_resolver (RRL de l'autoritaire SML, incident 2026-07-13).
+Environment=PEPPOL_API_MAX_CONCURRENCY=64
+# Résolveur public plutôt que celui du VPS : sous rafale NAPTR, le résolveur
+# local défaillait (SERVFAIL/timeouts) puis empoisonnait son cache négatif.
+# 8.8.8.8 en principal depuis le banc du 2026-07-14 (3 000 NAPTR, c=64 depuis
+# le VPS) : ~1,6× le débit de 1.1.1.1 (694 vs 434 req/s) et queue plus courte.
+Environment=PEPPOL_API_DNS_SERVER=8.8.8.8
+# Secours sur un AUTRE cache quand le principal échoue après retries (son
+# cache négatif peut rester empoisonné 15 min — TTL SOA CEF, incident 2026-07-13).
+Environment=PEPPOL_API_DNS_FALLBACK=1.1.1.1
+
+ExecStart=/opt/superpopaul/.venv/bin/python /opt/superpopaul/server/peppol_api.py
+Restart=on-failure
+RestartSec=3
+
+# Durcissement.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=true
+MemoryDenyWriteExecute=false
+
+[Install]
+WantedBy=multi-user.target

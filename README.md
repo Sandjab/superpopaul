@@ -11,7 +11,8 @@ superpopaul/
 ├── client/    # app graphique Tauri 2 (Windows + macOS, Rust + vanilla JS)
 ├── server/    # peppol_api.py — API REST (résolveur SML+SMP derrière une clé)
 ├── cli/       # popaul.py / popaul.ps1 — clients batch en ligne de commande
-└── docs/      # specs, plans, capture Swagger
+├── deploy/    # installation VPS du serveur (install.sh, systemd, nginx)
+└── docs/      # specs, plans, capture Swagger, déploiement OVH
 ```
 
 La parité de canonicalisation `cli/popaul.py` ↔ `client/…/pid.rs` est
@@ -94,6 +95,10 @@ résolveur : `--proxy`, `--ca-bundle`, `--insecure`, `--dns-server`, `--doh`.
 
 `peppol_resolver.py` sert aussi de résolveur unitaire de debug en CLI
 (pipeline complet en direct, flags `--full`, `--ap-only`, `--debug`, `--test`).
+
+**Déploiement VPS** : script idempotent [`deploy/install.sh`](deploy/install.sh)
+(durcissement, systemd, nginx, TLS) ; mode opératoire OVHcloud pas-à-pas :
+[`docs/deploiement-ovh.md`](docs/deploiement-ovh.md).
 
 ## `cli/` — `popaul.py` / `popaul.ps1`, clients batch ([README détaillé](cli/README.md))
 

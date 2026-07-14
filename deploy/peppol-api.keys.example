@@ -1,0 +1,25 @@
+# Fichier de clés de l'API Peppol Resolver (exemple).
+#
+# Installez-le en 600, propriété du user de service :
+#   sudo install -m 600 -o peppol -g peppol deploy/peppol-api.keys.example /etc/peppol-api.keys
+# puis remplacez les clés ci-dessous par les vôtres (python server/peppol_api.py --gen-key).
+#
+# Format d'une ligne (champs séparés par des espaces) :
+#   label=CLE [rate] [burst]
+#     label : nom du client, pour les logs (optionnel ; 'CLE' seule fonctionne)
+#     rate  : requêtes/min PROPRES à cette clé ; omis ou '-' = défaut global
+#             (PEPPOL_API_RATE_LIMIT / --rate-limit) ; 0 = illimité pour la clé
+#     burst : pic autorisé ; omis = égal au rate de la clé
+#   '#' en début de ligne = commentaire ; lignes vides ignorées.
+
+# Client courant : hérite du rate-limit par défaut.
+monclient=REMPLACEZ_MOI_1
+
+# Partenaire premium : 600 req/min, pic 100, propres à cette clé.
+partenaire=REMPLACEZ_MOI_2   600   100
+
+# Sonde interne / monitoring : illimitée.
+interne=REMPLACEZ_MOI_3      0
+
+# Audit : garde le rate par défaut mais un pic réduit à 5.
+audit=REMPLACEZ_MOI_4        -     5
