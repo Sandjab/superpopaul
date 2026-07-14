@@ -720,6 +720,8 @@ pub struct CalibrationReport {
     pub rate_limited: bool,
     /// Adressages envoyés pendant le calibrage — c'est du quota consommé.
     pub addr_sent: u64,
+    /// L'utilisateur a demandé l'arrêt (le rapport peut être partiel).
+    pub cancelled: bool,
 }
 
 /// Salves à concurrence croissante (1, 2, 4, … ≤ max) : mesure le débit de
@@ -730,6 +732,7 @@ pub async fn calibrate(
     sample: &[String],
     batch_size: usize,
     max_concurrency: u32,
+    cancel: &std::sync::atomic::AtomicBool,
     mut progress: impl FnMut(CalibrationStep),
 ) -> CalibrationReport {
     let mut best = (1u32, 0.0f64);
@@ -737,6 +740,11 @@ pub async fn calibrate(
     let mut addr_sent = 0u64;
     let mut level = 1u32;
     while level <= max_concurrency {
+        // Annulation coopérative : constatée entre les paliers, le palier en
+        // cours se termine toujours (son verdict reste exploitable).
+        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            break;
+        }
         progress(CalibrationStep::Measuring { level });
         let t0 = std::time::Instant::now();
         let mut handles = Vec::new();
@@ -776,6 +784,7 @@ pub async fn calibrate(
         addr_per_s: best.1,
         rate_limited,
         addr_sent,
+        cancelled: cancel.load(std::sync::atomic::Ordering::Relaxed),
     }
 }
 
@@ -1358,8 +1367,9 @@ mod tests_calibrate {
             .await;
         let c = ApiClient::new(&server.uri(), "K", None, None).unwrap();
         let sample: Vec<String> = (0..8).map(|i| format!("0009:{i}")).collect();
+        let cancel = std::sync::atomic::AtomicBool::new(false);
         let mut steps = Vec::new();
-        let rep = calibrate(&c, &sample, 1, 8, |s| steps.push(s)).await;
+        let rep = calibrate(&c, &sample, 1, 8, &cancel, |s| steps.push(s)).await;
 
         assert!(steps.len() >= 2 && steps.len() % 2 == 0, "paires attendues : {steps:?}");
         let mut expected = 1u32;
@@ -1387,8 +1397,9 @@ mod tests_calibrate {
             .await;
         let c = ApiClient::new(&server.uri(), "K", None, None).unwrap();
         let sample: Vec<String> = (0..4).map(|i| format!("0009:{i}")).collect();
+        let cancel = std::sync::atomic::AtomicBool::new(false);
         let mut steps = Vec::new();
-        let rep = calibrate(&c, &sample, 1, 8, |s| steps.push(s)).await;
+        let rep = calibrate(&c, &sample, 1, 8, &cancel, |s| steps.push(s)).await;
 
         assert!(rep.rate_limited);
         match steps.last() {
@@ -1398,6 +1409,7 @@ mod tests_calibrate {
         // Seul chemin où le rapport sort le défaut (1, 0.0) sans aucun Retained émis.
         assert_eq!(rep.best_concurrency, 1);
         assert_eq!(rep.addr_per_s, 0.0);
+        assert!(!rep.cancelled);
     }
 
     #[tokio::test]
@@ -1416,7 +1428,8 @@ mod tests_calibrate {
             .await;
         let c = ApiClient::new(&server.uri(), "K", None, None).unwrap();
         let sample: Vec<String> = (0..8).map(|i| format!("0009:{i}")).collect();
-        let rep = calibrate(&c, &sample, 1, 8, |_| {}).await;
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let rep = calibrate(&c, &sample, 1, 8, &cancel, |_| {}).await;
         assert!(rep.best_concurrency >= 1);
         assert!(rep.addr_per_s > 0.0);
         assert!(!rep.rate_limited);
@@ -1440,10 +1453,62 @@ mod tests_calibrate {
             .await;
         let c = ApiClient::new(&server.uri(), "K", None, None).unwrap();
         let sample: Vec<String> = (0..8).map(|i| format!("0009:{i}")).collect();
-        let rep = calibrate(&c, &sample, 2, 4, |_| {}).await;
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let rep = calibrate(&c, &sample, 2, 4, &cancel, |_| {}).await;
         let requests = server.received_requests().await.unwrap();
         assert!(rep.addr_sent > 0);
         assert_eq!(rep.addr_sent, (requests.len() * 2) as u64);
+    }
+
+    #[tokio::test]
+    async fn calibrate_annule_avant_demarrage_n_emet_rien() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/resolve/batch"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({"results": [{"participant_id": "a::1", "exists": true}]}),
+            ))
+            .mount(&server)
+            .await;
+        let c = ApiClient::new(&server.uri(), "K", None, None).unwrap();
+        let sample: Vec<String> = (0..4).map(|i| format!("0009:{i}")).collect();
+        let cancel = std::sync::atomic::AtomicBool::new(true);
+        let mut steps = Vec::new();
+        let rep = calibrate(&c, &sample, 1, 8, &cancel, |s| steps.push(s)).await;
+        assert!(rep.cancelled);
+        assert!(steps.is_empty(), "{steps:?}");
+        assert_eq!(rep.addr_sent, 0);
+    }
+
+    // L'annulation est coopérative : armée pendant le palier 1 (ici au moment
+    // de son verdict), elle laisse ce palier se terminer et empêche le suivant.
+    #[tokio::test]
+    async fn calibrate_annule_apres_un_palier_le_conserve() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/resolve/batch"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({"results": [{"participant_id": "a::1", "exists": true}]}),
+            ))
+            .mount(&server)
+            .await;
+        let c = ApiClient::new(&server.uri(), "K", None, None).unwrap();
+        let sample: Vec<String> = (0..4).map(|i| format!("0009:{i}")).collect();
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let mut steps = Vec::new();
+        let rep = calibrate(&c, &sample, 1, 8, &cancel, |s| {
+            steps.push(s);
+            if !matches!(s, CalibrationStep::Measuring { .. }) {
+                cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        })
+        .await;
+        assert!(rep.cancelled);
+        // Palier 1 : Measuring + verdict (Retained garanti : best initial 0.0),
+        // puis annulation constatée en tête du palier 2.
+        assert_eq!(steps.len(), 2, "{steps:?}");
+        assert!(matches!(steps[1], CalibrationStep::Retained { level: 1, .. }), "{steps:?}");
+        assert_eq!(rep.best_concurrency, 1); // le partiel reste proposable
     }
 
     // Le verdict d'un palier encode la sémantique des couleurs de la spec :

@@ -292,11 +292,14 @@ pub async fn calibrate_api(
     if sample.is_empty() {
         return Err("Aucun adressage dans le fichier d'entrée.".into());
     }
+    // Provisoire : la Task 2 branchera le vrai flag d'annulation (AppState).
+    let cancel = std::sync::atomic::AtomicBool::new(false);
     Ok(calibrate(
         &client,
         &sample,
         cfg.api.batch_size as usize,
         cfg.api.concurrency.max(16),
+        &cancel,
         |step| {
             let _ = app.emit("calibrate-step", &step);
         },
