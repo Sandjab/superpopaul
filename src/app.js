@@ -382,6 +382,7 @@ $("btn-calibrate").addEventListener("click", async () => {
     $("direct-conc").value = r.best_concurrency; // champs miroirs
     state.config.api.concurrency = r.best_concurrency;
     out.textContent = `→ ${r.best_concurrency} sessions, ~${Math.round(r.addr_per_s)} adr/s` +
+      ` · ${r.addr_sent} adressages consommés` +
       (r.rate_limited ? " (clé rate-limitée)" : "");
   } catch (err) {
     if (err && err.proxyCancelled) out.textContent = "Calibrage annulé.";

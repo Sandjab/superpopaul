@@ -247,6 +247,27 @@ pub async fn analyze_input(state: State<'_, AppState>) -> Result<InputStats, Str
     .map_err(|e| e.to_string())?
 }
 
+/// Prérequis du calibrage (mode API) : une clé et un fichier d'entrée.
+/// Le message liste TOUT ce qui manque — l'utilisateur ne doit pas découvrir
+/// le second prérequis après avoir corrigé le premier.
+fn calibration_prerequisites(key: &str, input_path: &str) -> Result<(), String> {
+    let missing: Vec<&str> = [
+        (key.trim().is_empty(), "une clé API"),
+        (
+            input_path.trim().is_empty(),
+            "un fichier d'entrée (l'échantillon vient de vos adressages)",
+        ),
+    ]
+    .iter()
+    .filter_map(|&(absent, label)| absent.then_some(label))
+    .collect();
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("Calibrage impossible : il manque {}.", missing.join(" et ")))
+    }
+}
+
 #[tauri::command]
 pub async fn calibrate_api(state: State<'_, AppState>) -> Result<CalibrationReport, String> {
     let (_, cfg) = state.current_config()?;
@@ -255,6 +276,7 @@ pub async fn calibrate_api(state: State<'_, AppState>) -> Result<CalibrationRepo
         // sens (et serait impoli) : il n'y a pas de serveur unique à calibrer.
         return Err("Calibration sans objet en mode direct (SMP distribués).".into());
     }
+    calibration_prerequisites(&cfg.api.key, &cfg.input.path)?;
     let client = state.client()?;
     let input = state.input_path()?;
     let pid_column = cfg.input.pid_column.clone();
@@ -467,4 +489,35 @@ pub async fn generate_output(state: State<'_, AppState>) -> Result<String, Strin
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[cfg(test)]
+mod tests_calibration_prerequisites {
+    use super::*;
+
+    #[test]
+    fn tout_present_passe() {
+        assert!(calibration_prerequisites("K", "data.csv").is_ok());
+    }
+
+    #[test]
+    fn cle_manquante_le_dit_sans_parler_du_fichier() {
+        let e = calibration_prerequisites("  ", "data.csv").unwrap_err();
+        assert!(e.contains("clé API"), "{e}");
+        assert!(!e.contains("fichier"), "{e}");
+    }
+
+    #[test]
+    fn fichier_manquant_le_dit_sans_parler_de_la_cle() {
+        let e = calibration_prerequisites("K", "").unwrap_err();
+        assert!(e.contains("fichier d'entrée"), "{e}");
+        assert!(!e.contains("clé"), "{e}");
+    }
+
+    #[test]
+    fn les_deux_manquants_listent_les_deux() {
+        let e = calibration_prerequisites("", " ").unwrap_err();
+        assert!(e.contains("clé API"), "{e}");
+        assert!(e.contains("fichier d'entrée"), "{e}");
+    }
 }

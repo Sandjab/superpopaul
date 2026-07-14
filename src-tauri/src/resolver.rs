@@ -690,6 +690,8 @@ pub struct CalibrationReport {
     pub best_concurrency: u32,
     pub addr_per_s: f64,
     pub rate_limited: bool,
+    /// Adressages envoyés pendant le calibrage — c'est du quota consommé.
+    pub addr_sent: u64,
 }
 
 /// Salves à concurrence croissante (1, 2, 4, … ≤ max) : mesure le débit de
@@ -702,6 +704,7 @@ pub async fn calibrate(
 ) -> CalibrationReport {
     let mut best = (1u32, 0.0f64);
     let mut rate_limited = false;
+    let mut addr_sent = 0u64;
     let mut level = 1u32;
     while level <= max_concurrency {
         let t0 = std::time::Instant::now();
@@ -715,6 +718,7 @@ pub async fn calibrate(
                 .take(batch_size)
                 .cloned()
                 .collect();
+            addr_sent += chunk.len() as u64;
             handles.push(tokio::spawn(
                 async move { client.resolve_batch(&chunk).await },
             ));
@@ -742,6 +746,7 @@ pub async fn calibrate(
         best_concurrency: best.0,
         addr_per_s: best.1,
         rate_limited,
+        addr_sent,
     }
 }
 
@@ -1316,5 +1321,29 @@ mod tests_calibrate {
         assert!(rep.best_concurrency >= 1);
         assert!(rep.addr_per_s > 0.0);
         assert!(!rep.rate_limited);
+    }
+
+    // Le calibrage consomme du quota réel : le rapport doit dire combien
+    // d'adressages sont partis (batch_size par requête reçue par le serveur).
+    #[tokio::test]
+    async fn calibrate_compte_les_adressages_envoyes() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/resolve/batch"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_delay(std::time::Duration::from_millis(50))
+                    .set_body_json(serde_json::json!({"results": [
+                        {"participant_id": "a::1", "exists": true}
+                    ]})),
+            )
+            .mount(&server)
+            .await;
+        let c = ApiClient::new(&server.uri(), "K", None, None).unwrap();
+        let sample: Vec<String> = (0..8).map(|i| format!("0009:{i}")).collect();
+        let rep = calibrate(&c, &sample, 2, 4).await;
+        let requests = server.received_requests().await.unwrap();
+        assert!(rep.addr_sent > 0);
+        assert_eq!(rep.addr_sent, (requests.len() * 2) as u64);
     }
 }
