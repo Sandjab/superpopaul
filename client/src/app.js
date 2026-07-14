@@ -492,7 +492,7 @@ async function runCalibration() {
     benchReset(benchEl);
     bench.statusEl = status;
     const stopBtn = h("button", {
-      class: "btn-stop",
+      class: "btn-danger",
       onclick: () => {
         stopBtn.disabled = true;
         stopBtn.textContent = "arrêt en cours…";
@@ -532,7 +532,7 @@ async function runCalibration() {
     backdrop.addEventListener("click", onBackdrop);
     document.addEventListener("keydown", onKeydown);
     const applyBtn = h("button", {
-      class: "btn-apply",
+      class: "btn-primary",
       onclick: () => {
         $("api-conc").value = r.best_concurrency;
         $("direct-conc").value = r.best_concurrency; // champs miroirs
@@ -600,6 +600,7 @@ function ensureProxyCreds(force = false) {
       h("p", { class: "muted" }, "Conservés en mémoire uniquement, jamais enregistrés."),
       user, pass, msg,
       h("button", {
+        class: "btn-primary",
         onclick: async () => {
           if (!user.value.trim()) { msg.textContent = "Le login est obligatoire."; return; }
           await invoke("set_proxy_creds", { username: user.value, password: pass.value });

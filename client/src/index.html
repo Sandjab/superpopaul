@@ -15,7 +15,7 @@
       <button data-step="run"     class="step" disabled>3. Run</button>
     </nav>
     <span class="cfg-btns">
-      <button id="btn-settings" title="Réglages — sortie, API, proxy… Appliqués et enregistrés automatiquement à la fermeture.">⚙</button>
+      <button id="btn-settings" class="btn-ghost" title="Réglages — sortie, API, proxy… Appliqués et enregistrés automatiquement à la fermeture.">⚙</button>
       <button id="btn-load-cfg" title="Charger un profil (fichier, colonne des adressages, colonnes de sortie) — reprend directement à l'étape Run.">Charger…</button>
       <button id="btn-save-cfg" title="Sauvegarder le profil de chargement du fichier en YAML (fichier, colonne des adressages, colonnes de sortie).">Sauvegarder…</button>
     </span>
@@ -57,9 +57,9 @@
             <option value="reprise-retry">Reprise + re-tenter les échecs</option>
             <option value="refresh">Refresh — manquants + périmés</option>
           </select>
-          <button id="btn-start">▶ Lancer</button>
+          <button id="btn-start" class="btn-primary">▶ Lancer</button>
           <button id="btn-pause" class="hidden">⏸ Pause</button>
-          <button id="btn-stop" class="hidden">■ Stop</button>
+          <button id="btn-stop" class="hidden btn-danger">■ Stop</button>
         </span>
       </div>
       <div id="cockpit" class="hidden">
@@ -111,7 +111,7 @@
     <span class="logo"><img src="logo.png" alt=""> Super Popaul <span id="app-version" class="muted"></span>
       <span class="muted">·</span>
       <a id="brand-link" href="https://github.com/Sandjab" title="Ouvre le profil GitHub dans le navigateur.">Proudly clauded by @Sandjab, July 2026</a></span>
-    <button id="btn-next">Suivant →</button>
+    <button id="btn-next" class="btn-primary">Suivant →</button>
   </footer>
 
   <!-- Réglages : overlay dédié (pas #modal — la modale proxy déclenchée par
@@ -121,7 +121,7 @@
     <section id="settings">
       <div id="settings-head">
         <h2>Réglages</h2>
-        <button id="btn-settings-close" title="Fermer — les réglages sont appliqués.">✕</button>
+        <button id="btn-settings-close" class="btn-ghost" title="Fermer — les réglages sont appliqués.">✕</button>
       </div>
       <fieldset><legend>Fichier de sortie</legend>
         <p><label for="out-dir" title="Répertoire où écrire le fichier enrichi. Le nom est celui du fichier d'entrée suivi du suffixe.">Répertoire</label>

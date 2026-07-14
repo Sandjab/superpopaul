@@ -40,7 +40,7 @@ function renderRing(done, total, etaText) {
 }
 
 /** État affiché sous l'anneau et bascule ETA ↔ durée + moyenne.
- *  "running" : rouge clignotant, ETA normale, moyenne cachée.
+ *  "running" : « en cours » bleu à pulsation douce, ETA normale, moyenne cachée.
  *  "suspended" : « suspendu » orange, durée active et moyenne provisoires
  *  (italique) — l'état vient de la télémétrie (s.halted), source unique :
  *  les reprises anticipées et update_api_key n'émettent pas de Resumed.
@@ -50,7 +50,7 @@ function setRunState(st) {
   el.classList.toggle("running", st === "running");
   el.classList.toggle("suspended", st === "suspended");
   el.classList.remove("hidden");
-  el.textContent = st === "running" ? "running"
+  el.textContent = st === "running" ? "en cours"
     : st === "suspended" ? "suspendu" : "terminé";
   const halted = st !== "running";
   $("eta-label").textContent = halted ? "Durée" : "ETA";
