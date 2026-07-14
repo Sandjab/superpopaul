@@ -17,7 +17,7 @@ superpopaul/
 La parité de canonicalisation `cli/popaul.py` ↔ `client/…/pid.rs` est
 maintenue par tests miroir.
 
-## `client/` — application graphique
+## `client/` — application graphique ([README détaillé](client/README.md))
 
 - **Wizard 3 étapes** : fichier d'entrée → colonnes de sortie → run. La sortie
   (répertoire + suffixe), l'API et le proxy se règlent dans le panneau ⚙.
@@ -48,7 +48,7 @@ cargo tauri build   # binaire de distribution
 `NOTICE-OUVERTURE.md`. macOS : build local. Windows : GitHub Actions
 (`.github/workflows/windows.yml`, déclenché par les tags `v*`).
 
-## `server/` — `peppol_api.py`, l'API REST
+## `server/` — `peppol_api.py`, l'API REST ([README détaillé](server/README.md))
 
 Expose le résolveur SML → SMP → cert X.509 (`peppol_resolver.py`, aucune API
 tierce) derrière une petite API HTTP protégée par **clé d'API**. Serveur
@@ -67,7 +67,7 @@ curl -H "X-API-Key: MA_CLE" \
      http://127.0.0.1:8080/resolve/0225:000122308              # réponse simple
 curl -X POST -H "X-API-Key: MA_CLE" -H "Content-Type: application/json" \
      -d '{"participants":["0225:000122308","0225:931153688"]}' \
-     http://127.0.0.1:8080/resolve/batch                       # batch (≤ 50)
+     http://127.0.0.1:8080/resolve/batch                       # batch (≤ 500)
 ```
 
 | Endpoint | Auth | Rôle |
@@ -77,7 +77,7 @@ curl -X POST -H "X-API-Key: MA_CLE" -H "Content-Type: application/json" \
 | `GET /docs` | non | **Swagger UI** interactive |
 | `GET /resolve/{participant}` | clé | réponse simple (`?test=1`, `?detail=full`) |
 | `GET /resolve?participant={id}` | clé | idem, PID en query |
-| `POST /resolve/batch` | clé | résout une liste (≤ 50), erreurs isolées par item |
+| `POST /resolve/batch` | clé | résout une liste (≤ 500), erreurs isolées par item |
 
 ![Swagger UI de peppol_api.py](docs/swagger.png)
 
@@ -95,10 +95,11 @@ résolveur : `--proxy`, `--ca-bundle`, `--insecure`, `--dns-server`, `--doh`.
 `peppol_resolver.py` sert aussi de résolveur unitaire de debug en CLI
 (pipeline complet en direct, flags `--full`, `--ap-only`, `--debug`, `--test`).
 
-## `cli/` — `popaul.py` / `popaul.ps1`, clients batch
+## `cli/` — `popaul.py` / `popaul.ps1`, clients batch ([README détaillé](cli/README.md))
 
 Client léger (stdlib pure) qui résout une liste d'adressages par fournées via
-`POST /resolve/batch` et écrit un CSV. Découpe en paquets ≤ 50, gère la clé
+`POST /resolve/batch` et écrit un CSV. Découpe en fournées (50 par défaut,
+≤ 500 côté serveur), gère la clé
 d'API (`--key` ou `PEPPOL_API_KEY`), les **429** (retry + backoff,
 `Retry-After` respecté), `--resume`, et une barre de progression.
 
