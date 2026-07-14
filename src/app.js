@@ -120,8 +120,8 @@ async function pickInput(path) {
     if (state.config.output.columns.length === 0 || headersChanged) {
       state.config.output.columns = [
         ...p.headers.map((name) => ({ source: "input", name })),
-        { source: "peppol", field: "exists" },
-        { source: "peppol", field: "extended_ctc_fr" },
+        { source: "peppol", field: "in_peppol" },
+        { source: "peppol", field: "ubl_extended" },
       ];
     }
     // output.dir vide = « dossier du fichier d'entrée » (résolu côté Rust) :

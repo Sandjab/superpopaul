@@ -170,14 +170,20 @@ pub enum ColumnSpec {
     Peppol { field: PeppolField },
 }
 
+/// Champs dynamiques calculés par la résolution. Les noms sérialisés
+/// (snake_case) sont AUSSI les en-têtes du CSV de sortie (output::field_name).
+/// Alias : noms d'avant la normalisation du 2026-07-14 — les profils et
+/// configs sauvegardés avec restent lisibles, plus jamais écrits.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum PeppolField {
-    Exists,
+    #[serde(alias = "exists")]
+    InPeppol,
     PaCode,
     PaName,
     PaCountry,
-    ExtendedCtcFr,
+    #[serde(alias = "extended_ctc_fr")]
+    UblExtended,
 }
 
 /// Bornes des paramètres API — partagées entre la config runtime (set_config)
@@ -414,7 +420,7 @@ mod tests {
                         name: "siren".into(),
                     },
                     ColumnSpec::Peppol {
-                        field: PeppolField::Exists,
+                        field: PeppolField::InPeppol,
                     },
                     ColumnSpec::Peppol {
                         field: PeppolField::PaCode,
@@ -610,6 +616,22 @@ mod tests {
         assert_eq!(p.input.path, "./a.csv");
         assert_eq!(p.input.pid_column, "siren");
         assert_eq!(p.columns.len(), 1);
+    }
+
+    #[test]
+    fn champs_peppol_anciens_noms_lus_via_alias() {
+        // exists / extended_ctc_fr : noms d'avant la normalisation
+        // (in_peppol, ubl_extended) — les fichiers sauvegardés avec restent
+        // lisibles, et les nouveaux écrits portent les noms normalisés.
+        let mut p = profile_exemple();
+        p.columns.push(ColumnSpec::Peppol { field: PeppolField::UblExtended });
+        let yaml = serde_yaml::to_string(&p).unwrap();
+        assert!(yaml.contains("in_peppol") && yaml.contains("ubl_extended"));
+        let ancien = yaml
+            .replace("in_peppol", "exists")
+            .replace("ubl_extended", "extended_ctc_fr");
+        let (back, _) = profile_from_yaml(&ancien).unwrap();
+        assert_eq!(back.columns, p.columns);
     }
 
     #[test]

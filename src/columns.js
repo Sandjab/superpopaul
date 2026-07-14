@@ -5,11 +5,11 @@
 // Source de vérité : state.config.output.columns (la zone est calculée).
 
 const PEPPOL_FIELDS = [
-  ["exists", "existe"], ["pa_code", "code PA"], ["pa_name", "nom PA"],
-  ["pa_country", "pays PA"], ["extended_ctc_fr", "CTC-FR"],
+  ["in_peppol", "existe"], ["pa_code", "code PA"], ["pa_name", "nom PA"],
+  ["pa_country", "pays PA"], ["ubl_extended", "CTC-FR"],
 ];
-const PEPPOL_SAMPLE = { exists: "true", pa_code: "PA0042", pa_name: "ACME PA",
-                        pa_country: "FR", extended_ctc_fr: "false" };
+const PEPPOL_SAMPLE = { in_peppol: "true", pa_code: "PA0042", pa_name: "ACME PA",
+                        pa_country: "FR", ubl_extended: "false" };
 
 // SortableJS (vendor/Sortable.min.js) en mode forceFallback : le
 // drag-and-drop HTML5 est avalé par le handler drag-drop natif de la webview

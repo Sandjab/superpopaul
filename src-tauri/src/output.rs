@@ -18,11 +18,11 @@ fn fmt_bool(b: Option<bool>) -> &'static str {
 
 pub fn field_name(f: PeppolField) -> &'static str {
     match f {
-        PeppolField::Exists => "exists",
+        PeppolField::InPeppol => "in_peppol",
         PeppolField::PaCode => "pa_code",
         PeppolField::PaName => "pa_name",
         PeppolField::PaCountry => "pa_country",
-        PeppolField::ExtendedCtcFr => "extended_ctc_fr",
+        PeppolField::UblExtended => "ubl_extended",
     }
 }
 
@@ -243,11 +243,11 @@ fn write_output(
                 ColumnSpec::Peppol { field } => match res {
                     None => "",
                     Some(r) => match field {
-                        PeppolField::Exists => fmt_bool(r.exists_in_peppol),
+                        PeppolField::InPeppol => fmt_bool(r.exists_in_peppol),
                         PeppolField::PaCode => r.pa_code.as_deref().unwrap_or(""),
                         PeppolField::PaName => r.pa_name.as_deref().unwrap_or(""),
                         PeppolField::PaCountry => r.pa_country.as_deref().unwrap_or(""),
-                        PeppolField::ExtendedCtcFr => fmt_bool(r.extended_ctc_fr),
+                        PeppolField::UblExtended => fmt_bool(r.extended_ctc_fr),
                     },
                 },
             })
@@ -362,7 +362,7 @@ mod tests {
         let cols = vec![
             ColumnSpec::Input { name: "nom".into() },
             ColumnSpec::Peppol {
-                field: PeppolField::Exists,
+                field: PeppolField::InPeppol,
             },
             ColumnSpec::Peppol {
                 field: PeppolField::PaCode,
@@ -387,7 +387,7 @@ mod tests {
         let content = content.trim_start_matches('\u{feff}');
         let lines: Vec<&str> = content.lines().collect();
         assert_eq!(lines.len(), 4); // entête + 3 lignes (autant que l'entrée)
-        assert_eq!(lines[0], "nom;exists;pa_code");
+        assert_eq!(lines[0], "nom;in_peppol;pa_code");
         assert_eq!(lines[1], "ACME;true;PA0042");
         assert_eq!(lines[2], "GLOBEX;;"); // non résolu : colonnes vides
         assert_eq!(lines[3], "ACME BIS;true;PA0042"); // même PID → mêmes infos (base)
@@ -408,7 +408,7 @@ mod tests {
         let cols = vec![
             ColumnSpec::Input { name: "nom".into() },
             ColumnSpec::Peppol {
-                field: PeppolField::Exists,
+                field: PeppolField::InPeppol,
             },
         ];
         let meta = CsvMeta {
@@ -511,7 +511,7 @@ mod tests {
         let mut cfg = out_cfg(vec![
             ColumnSpec::Input { name: "nom".into() },
             ColumnSpec::Peppol {
-                field: PeppolField::Exists,
+                field: PeppolField::InPeppol,
             },
         ]);
         cfg.separator = OutputSeparator::Comma;
@@ -523,7 +523,7 @@ mod tests {
         let content = std::fs::read_to_string(&written).unwrap();
         let content = content.trim_start_matches('\u{feff}');
         let lines: Vec<&str> = content.lines().collect();
-        assert_eq!(lines[0], "nom,exists");
+        assert_eq!(lines[0], "nom,in_peppol");
         assert_eq!(lines[1], "ACME,true");
     }
 
