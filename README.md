@@ -92,11 +92,8 @@ bornée** (`--max-concurrency`). Config par CLI ou env (`PEPPOL_API_HOST`,
 `PEPPOL_API_RATE_BURST`, `PEPPOL_API_MAX_CONCURRENCY`) ; passe-plats réseau du
 résolveur : `--proxy`, `--ca-bundle`, `--insecure`, `--dns-server`, `--doh`.
 
-Le serveur embarque aussi deux résolveurs unitaires de debug :
-`peppol_resolver.py` (pipeline complet en direct, flags `--full`, `--ap-only`,
-`--debug`, `--test`) et `peppol_resolver_rest.py` (même sortie via l'API REST
-publique de Helger, stdlib only — pratique derrière un proxy qui bloque
-UDP/53, mais rate-limitée : inspections ponctuelles seulement).
+`peppol_resolver.py` sert aussi de résolveur unitaire de debug en CLI
+(pipeline complet en direct, flags `--full`, `--ap-only`, `--debug`, `--test`).
 
 ## `cli/` — `popaul.py` / `popaul.ps1`, clients batch
 
