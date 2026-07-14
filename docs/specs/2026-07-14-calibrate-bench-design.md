@@ -14,11 +14,14 @@ hauteur = débit mesuré (adr/s).
 
 | Couleur | État du palier |
 |---|---|
-| bleu (`#5b8dee`) | mesure en cours |
-| gris (`#3a4150`) | mesuré, dépassé par un palier suivant (estompé au verdict) |
-| vert (`#34c98e`) | retenu (meilleure concurrence) |
-| rouge (`#e05b5b`) | rejeté : gain ≤ 15 % sur le meilleur — c'est lui qui arrête |
-| jaune (`#e0b25b`) | un 429 est survenu pendant sa mesure — arrêt rate-limit |
+| bleu (`--blue`) | mesure en cours |
+| gris (`--border`) | mesuré, dépassé par un palier suivant (estompé au verdict) |
+| vert (`--green`) | retenu (meilleure concurrence) |
+| rouge (`--red`) | rejeté : gain ≤ 15 % sur le meilleur — c'est lui qui arrête |
+| jaune (`--amber`) | un 429 est survenu pendant sa mesure — arrêt rate-limit |
+
+(Les hex de la maquette de brainstorming ont été remplacés à l'implémentation
+par les variables du thème de `styles.css` — sémantique identique.)
 
 Règles :
 - Au plus une barre rouge OU jaune (le palier d'arrêt), jamais les deux.
@@ -28,6 +31,8 @@ Règles :
   le verdict texte suffit.
 - Valeur adr/s affichée au-dessus de chaque barre mesurée ; celle du vert en vert,
   celle du rouge/jaune assortie.
+- Un palier d'arrêt à débit nul (ex. 429 dès la première requête) garde une barre
+  visible : plancher de 4 px (`min-height` sur `.cal-bar`).
 
 ## Backend (Rust)
 
