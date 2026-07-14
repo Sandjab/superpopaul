@@ -33,7 +33,7 @@ const rateSeries = makeSparkSeries();
  *  sans tick de télémétrie ultérieur, d'où un run complet affiché à 99 %. */
 function renderRing(done, total, etaText) {
   const pct = total ? (100 * done / total) : 0;
-  $("ring").style.background = `conic-gradient(var(--green) ${pct}%, #21262d ${pct}%)`;
+  $("ring").style.background = `conic-gradient(var(--green) ${pct}%, var(--track) ${pct}%)`;
   $("ring-pct").textContent = `${pct.toFixed(pct < 10 ? 1 : 0)}%`;
   $("ring-abs").textContent = `${fmt(done)} / ${fmt(total)}`;
   $("eta").textContent = etaText;
@@ -203,7 +203,7 @@ const HTTP_CATS = [
     help: "Erreurs serveur : retentées (disjoncteur, reprise automatique)." },
   { label: "réseau", color: "var(--muted)", match: (c) => c === 0,
     help: "Erreurs réseau (connexion, timeout) : retentées." },
-  { label: "autres", color: "var(--blue)", match: () => true, onlyIfPresent: true,
+  { label: "autres", color: "var(--gold)", match: () => true, onlyIfPresent: true,
     help: "Codes inattendus (1xx, 3xx, 2xx hors 200)." },
 ];
 
@@ -214,7 +214,7 @@ const HTTP_CATS = [
 function renderMiniRing(ring, count, outOf, lineCount, linesOutOf) {
   const pct = outOf ? (100 * count / outOf) : 0;
   $(`ring-${ring}`).style.background =
-    `conic-gradient(var(--green) ${pct}%, #21262d ${pct}%)`;
+    `conic-gradient(var(--green) ${pct}%, var(--track) ${pct}%)`;
   $(`t-${ring}`).textContent = outOf ? `${pct.toFixed(1)} %` : "—";
   $(`t-${ring}-abs`).textContent = outOf ? fmt(count) : "—";
   $(`t-${ring}-lines`).textContent = linesOutOf ? fmt(lineCount) : "—";
@@ -243,7 +243,7 @@ listen("telemetry", (e) => {
     s.done ? fmt(Math.max(0, s.exists_lines - s.ctc_lines)) : "—";
   $("t-rate").textContent = `${s.req_per_s.toFixed(1)} req/s · ${Math.round(s.addr_per_s)} adr/s`;
   rateSeries.push({ adr: s.addr_per_s });
-  renderSpark("rate-spark", rateSeries.hist, [["adr", "var(--blue)"]]);
+  renderSpark("rate-spark", rateSeries.hist, [["adr", "var(--gold)"]]);
   // Échecs = info métier, sous l'anneau ; la concurrence reste en télémétrie.
   $("fail-line").textContent = `${fmt(s.failed)} échec${s.failed > 1 ? "s" : ""}`;
   $("fail-line").classList.toggle("zero", s.failed === 0);

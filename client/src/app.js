@@ -366,7 +366,7 @@ window.addEventListener("DOMContentLoaded", async () => {
 // jamais dans la webview — un <a href> nu y naviguerait l'app elle-même.
 $("brand-link").addEventListener("click", (e) => {
   e.preventDefault();
-  window.__TAURI__.opener?.openUrl("https://github.com/Sandjab");
+  window.__TAURI__.opener?.openUrl("https://github.com/Sandjab/superpopaul");
 });
 
 // --- Réglages : test API et calibrage -----------------------------------------

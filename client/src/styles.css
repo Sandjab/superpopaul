@@ -1,7 +1,13 @@
+/* Palette « Bleu nuit & or », dérivée du splash et du logo : neutres bleu nuit,
+   or de l'emblème SP en accent signature (actions, focus, activité), vert
+   réservé au succès/progression, orange aux avertissements (distinct de l'or),
+   rouge aux erreurs. */
 :root {
-  --bg: #0d1117; --card: #161b22; --border: #30363d;
-  --fg: #e6edf3; --muted: #8b949e;
-  --green: #3fb950; --blue: #58a6ff; --amber: #d29922; --red: #f85149;
+  --bg: #0e1524; --card: #172136; --border: #2b3752;
+  --fg: #eae9e2; --muted: #939cb4;
+  --green: #4cc268; --gold: #d9a83f; --gold-hover: #e6bb5c; --on-gold: #241a02;
+  --amber: #e0873a; --red: #e5534b;
+  --btn2: #1b2740; --track: #223050;
 }
 * { box-sizing: border-box; }
 body {
@@ -14,22 +20,22 @@ body {
 }
 h1, h2 { font-weight: 600; }
 button {
-  background: #21262d; color: var(--fg); border: 1px solid var(--border);
+  background: var(--btn2); color: var(--fg); border: 1px solid var(--border);
   border-radius: 6px; padding: 5px 14px; cursor: pointer;
 }
-button:hover:not(:disabled) { border-color: var(--blue); }
+button:hover:not(:disabled) { border-color: var(--gold); }
 button:active:not(:disabled) { background: var(--bg); transform: translateY(1px); }
 button:disabled { opacity: .45; cursor: default; }
-button:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+button:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
 /* Hiérarchie des boutons : le style de base ci-dessus est le niveau secondaire ;
    primaire = l'action qui fait avancer (une seule par écran), danger = arrêt/
    destruction, ghost = boutons d'icône discrets. */
-.btn-primary { background: #238636; border-color: #2ea043; color: #fff; font-weight: 600; }
-.btn-primary:hover:not(:disabled) { background: #2ea043; border-color: var(--green); }
-.btn-primary:active:not(:disabled) { background: #1f7a2f; }
-.btn-primary:disabled { background: #21262d; color: var(--muted); border-color: var(--border); }
+.btn-primary { background: var(--gold); border-color: var(--gold-hover); color: var(--on-gold); font-weight: 600; }
+.btn-primary:hover:not(:disabled) { background: var(--gold-hover); border-color: var(--gold-hover); }
+.btn-primary:active:not(:disabled) { background: #c69434; }
+.btn-primary:disabled { background: var(--btn2); color: var(--muted); border-color: var(--border); }
 .btn-danger { border-color: var(--red); color: var(--red); }
-.btn-danger:hover:not(:disabled) { background: rgba(248, 81, 73, .12); border-color: var(--red); }
+.btn-danger:hover:not(:disabled) { background: rgba(229, 83, 75, .12); border-color: var(--red); }
 .btn-ghost { background: transparent; border-color: transparent; color: var(--muted); }
 .btn-ghost:hover:not(:disabled) { background: var(--card); color: var(--fg); border-color: transparent; }
 input, select {
@@ -65,7 +71,7 @@ header {
 .logo img { height: 22px; }
 #stepper { flex: 1; display: flex; gap: 6px; justify-content: center; }
 .step { border-radius: 14px; }
-.step.active { background: var(--blue); color: #fff; border-color: var(--blue); }
+.step.active { background: var(--gold); color: var(--on-gold); border-color: var(--gold); font-weight: 600; }
 .step.done { color: var(--green); }
 
 /* min-height 0 : sans lui, l'item flex refuse de rétrécir sous la hauteur de
@@ -75,7 +81,7 @@ main { flex: 1; min-height: 0; padding: 18px; overflow-y: auto; }
    défilement par défaut) — n'apparaît pas si le contenu tient. */
 main::-webkit-scrollbar { width: 10px; }
 main::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; }
-main::-webkit-scrollbar-thumb:hover { background: #4b535d; }
+main::-webkit-scrollbar-thumb:hover { background: #3c4a6b; }
 main::-webkit-scrollbar-track { background: transparent; }
 .panel { max-width: 900px; margin: 0 auto; }
 fieldset { border: 1px solid var(--border); border-radius: 8px; margin: 12px 0; }
@@ -84,26 +90,26 @@ fieldset { border: 1px solid var(--border); border-radius: 8px; margin: 12px 0; 
   padding: 10px 16px; font-weight: 600; display: flex; gap: 12px;
   align-items: center; justify-content: center;
 }
-#banner.error { background: #3d1214; color: var(--red); }
-#banner.warn { background: #3a2c10; color: var(--amber); }
+#banner.error { background: #331518; color: var(--red); }
+#banner.warn { background: #2e2010; color: var(--amber); }
 
 #dropzone {
   border: 2px dashed var(--border); border-radius: 10px; padding: 40px;
   text-align: center; color: var(--muted);
 }
-#dropzone.over { border-color: var(--blue); color: var(--fg); }
+#dropzone.over { border-color: var(--gold); color: var(--fg); }
 /* Colonne des adressages choisie : surbrillance à la couleur d'accent (même
    langage que th.peppol / td.temp de l'étape 2). */
-#preview-table th.pid-col { color: var(--blue); border-color: var(--blue); }
-#preview-table td.pid-col { background: rgba(88, 166, 255, .10); }
+#preview-table th.pid-col { color: var(--gold); border-color: var(--gold); }
+#preview-table td.pid-col { background: rgba(217, 168, 63, .10); }
 table { border-collapse: collapse; margin: 12px 0; width: 100%; }
 th, td { border: 1px solid var(--border); padding: 4px 10px; text-align: left; }
 th { background: var(--card); }
 #out-preview th { cursor: grab; user-select: none; white-space: nowrap; }
-#out-preview th.peppol { color: var(--blue); border-color: var(--blue); }
-/* Drag des colonnes (SortableJS forceFallback) : placeholder bleu translucide
+#out-preview th.peppol { color: var(--gold); border-color: var(--gold); }
+/* Drag des colonnes (SortableJS forceFallback) : placeholder or translucide
    dans le tableau, clone flottant ombré qui suit le curseur (fallbackOnBody). */
-#out-preview th.drag-ghost { opacity: .4; background: rgba(88, 166, 255, .16); }
+#out-preview th.drag-ghost { opacity: .4; background: rgba(217, 168, 63, .16); }
 body > .drag-fallback {
   opacity: .9; box-shadow: 0 8px 24px rgba(0, 0, 0, .6);
   border-radius: 4px; cursor: grabbing;
@@ -122,10 +128,12 @@ body > .drag-fallback {
   border: 1px solid var(--border); background: var(--card); border-radius: 14px;
   padding: 3px 12px; cursor: grab; user-select: none; white-space: nowrap;
 }
-.chip.peppol { color: var(--blue); border-color: var(--blue); }
-#out-preview td.temp { background: rgba(88, 166, 255, .10); }
+.chip.peppol { color: var(--gold); border-color: var(--gold); }
+#out-preview td.temp { background: rgba(217, 168, 63, .10); }
 
 #run-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+/* Chiffres à chasse fixe : pas de tremblement pendant les ticks de télémétrie. */
+#step-run { font-variant-numeric: tabular-nums; }
 /* Cockpit à deux niveaux : bandeau métier aéré (sans cartes, l'espacement fait
    la structure), télémétrie repliée dans <details> en dessous. */
 #biz-band { display: flex; flex-wrap: wrap; align-items: center;
@@ -142,7 +150,7 @@ body > .drag-fallback {
 #fail-line.zero { color: var(--muted); font-weight: 400; }
 #ring {
   width: 150px; height: 150px; border-radius: 50%;
-  background: conic-gradient(var(--green) 0%, #21262d 0%);
+  background: conic-gradient(var(--green) 0%, var(--track) 0%);
   display: flex; align-items: center; justify-content: center;
 }
 #ring-center {
@@ -150,12 +158,12 @@ body > .drag-fallback {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
 }
 #ring-pct { font-size: 26px; }
-/* État du run sous l'anneau : « en cours » bleu à pulsation douce (le rouge
-   reste réservé aux erreurs), « suspendu » orange (durée/moyenne provisoires
-   en italique), « terminé » vert avec durée à la place de l'ETA et moyenne
-   en dessous — marges resserrées. */
+/* État du run sous l'anneau : « en cours » or à pulsation douce (l'or est la
+   couleur d'activité, le rouge reste réservé aux erreurs), « suspendu » orange
+   (durée/moyenne provisoires en italique), « terminé » vert avec durée à la
+   place de l'ETA et moyenne en dessous — marges resserrées. */
 #ring-state { margin: 8px 0 -10px; font-weight: 600; color: var(--green); }
-#ring-state.running { color: var(--blue); animation: ring-pulse 2.4s ease-in-out infinite; }
+#ring-state.running { color: var(--gold); animation: ring-pulse 2.4s ease-in-out infinite; }
 #ring-state.suspended { color: var(--amber); }
 @keyframes ring-pulse { 50% { opacity: .55; } }
 @media (prefers-reduced-motion: reduce) { #ring-state.running { animation: none; } }
@@ -185,7 +193,7 @@ body > .drag-fallback {
 .http-count { min-width: 5ch; }
 .mini-ring {
   flex: none; width: 96px; height: 96px; border-radius: 50%;
-  background: conic-gradient(var(--green) 0%, #21262d 0%);
+  background: conic-gradient(var(--green) 0%, var(--track) 0%);
   display: flex; align-items: center; justify-content: center;
 }
 .mini-ring-center {
@@ -209,7 +217,7 @@ body > .drag-fallback {
   font-size: 10px; color: var(--muted); text-align: center;
 }
 .lat-bar-wrap { flex: 1; display: flex; align-items: flex-end; }
-.lat-bar { width: 100%; background: var(--blue); border-radius: 2px 2px 0 0; }
+.lat-bar { width: 100%; background: var(--gold); border-radius: 2px 2px 0 0; }
 #pa-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0 18px; margin-top: 8px; }
 .pa-col { display: flex; flex-direction: column; }
 .pa-row { display: flex; align-items: baseline; gap: 8px; font-size: 12px; padding: 2px 0; }
@@ -231,7 +239,7 @@ footer .logo {
 }
 footer .logo img { height: 16px; }
 footer .logo a { color: var(--muted); text-decoration: none; }
-footer .logo a:hover { color: var(--blue); text-decoration: underline; }
+footer .logo a:hover { color: var(--gold); text-decoration: underline; }
 /* « Suivant » reste à droite même quand « Précédent » est masqué (étape 1) :
    space-between colle un enfant unique à gauche, margin-left auto le pousse
    à droite dans tous les cas. */
@@ -273,7 +281,7 @@ footer .logo a:hover { color: var(--blue); text-decoration: underline; }
 #calibrate-bench { display: flex; align-items: flex-end; gap: 8px; height: 84px; margin: 2px 0 8px 2px; }
 .cal-col { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 3px; width: 34px; }
 .cal-bar { width: 100%; min-height: 4px; border-radius: 3px 3px 0 0; background: var(--border); transition: height .3s ease; }
-.cal-bar.measuring { background: var(--blue); height: 6px; animation: cal-pulse 1s ease-in-out infinite; }
+.cal-bar.measuring { background: var(--gold); height: 6px; animation: cal-pulse 1s ease-in-out infinite; }
 @keyframes cal-pulse { 50% { opacity: .45; } }
 .cal-bar.win { background: var(--green); }
 .cal-bar.reject { background: var(--red); }
@@ -290,8 +298,9 @@ footer .logo a:hover { color: var(--blue); text-decoration: underline; }
 
 /* --- Modale de calibration ------------------------------------------------------
    Boutons de fin : Appliquer = .btn-primary, Arrêter = .btn-danger,
-   Retenter garde sa bordure bleue (choix explicite), Ignorer = secondaire. */
+   Retenter garde sa bordure d'accent — or, le bleu ayant quitté la palette
+   (choix explicite) —, Ignorer = secondaire. */
 .modal-btns { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
-.btn-retry { border-color: var(--blue); color: var(--blue); }
+.btn-retry { border-color: var(--gold); color: var(--gold); }
 #calibrate-status { font-size: 12px; color: var(--muted); margin-top: 6px; }
 #calibrate-status.done { color: var(--green); }
