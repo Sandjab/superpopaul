@@ -332,6 +332,25 @@ function fmtDuration(s) {
   return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, "0")}`;
 }
 
+// --- Fermeture de la fenêtre pendant un run ---------------------------------------
+// Enregistrer un listener close-requested transfère la fermeture à l'UI : sans
+// preventDefault, l'API JS détruit la fenêtre (d'où core:window:allow-destroy
+// dans les capabilities). Pendant un run, on confirme d'abord — les adressages
+// déjà résolus sont en base, la reprise se propose au relancement.
+const appWindow = window.__TAURI__.window.getCurrentWindow();
+appWindow.onCloseRequested((event) => {
+  if (!running) return;
+  event.preventDefault();
+  modal(
+    h("h3", {}, "Run en cours"),
+    h("p", { class: "muted" },
+      "Les adressages déjà résolus sont conservés — le mode Reprise proposera " +
+      "de continuer au prochain lancement."),
+    h("button", { onclick: () => appWindow.destroy() }, "Quitter quand même"),
+    h("button", { onclick: closeModal }, "Continuer le run"),
+  );
+}).catch((e) => banner("error", `Garde de fermeture non installée : ${e}`));
+
 // --- Suspension / reprise / fin -------------------------------------------------
 listen("run-suspended", (e) => {
   const { reason, message, retry_in_s } = e.payload;
