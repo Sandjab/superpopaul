@@ -1,4 +1,6 @@
-# Super Popaul 🍿
+![Super Popaul](client/src/splash.jpg)
+
+# <img src="client/src/logo.png" width="32" alt="" align="top"> Super Popaul
 
 Résolution Peppol en masse : un CSV d'adressages en entrée, un CSV enrichi en
 sortie (existe dans Peppol, code PA, pays PA, support EXTENDED-CTC-FR).
@@ -12,10 +14,8 @@ superpopaul/
 └── docs/      # specs, plans, capture Swagger
 ```
 
-Historiquement développé dans le monorepo privé peppolstat ; les copies du
-serveur et des clients CLI qui y restent divergent librement. La parité de
-canonicalisation `cli/popaul.py` ↔ `client/…/pid.rs` est maintenue **ici**
-par tests miroir.
+La parité de canonicalisation `cli/popaul.py` ↔ `client/…/pid.rs` est
+maintenue par tests miroir.
 
 ## `client/` — application graphique
 

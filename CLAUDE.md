@@ -1,13 +1,11 @@
 # Super Popaul — conventions du projet
 
-- Projet **indépendant**, issu du monorepo peppolstat (split du 2026-07-14).
-  Trois composants séparés : `client/` (app graphique Tauri), `server/`
+- Projet **indépendant**. Trois composants séparés : `client/` (app graphique Tauri), `server/`
   (API REST Python), `cli/` (clients batch `popaul.py` / `popaul.ps1`).
 - **Parité de canonicalisation** : `client/src-tauri/src/pid.rs::canonical`
   et `cli/popaul.py::canonical` doivent rester identiques — tests miroir
   `pid::tests` ↔ `cli/tests/test_popaul.py`, toute évolution d'un côté est
-  reportée de l'autre. (Les copies Python restées dans le repo privé
-  peppolstat divergent librement ; la référence de parité est ICI.)
+  reportée de l'autre.
 - Python : serveur sans framework (`http.server` threadé), dépendances
   limitées à `server/requirements.txt` ; `cli/popaul.py` stdlib pure.
   Tests : `python3 -m unittest discover -s tests` depuis `server/` ou `cli/`.
