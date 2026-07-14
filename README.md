@@ -6,7 +6,8 @@ code PA, pays PA, support EXTENDED-CTC-FR), via l'API REST `peppol_api`
 (la même que le client CLI `popaul.py` à la racine du repo).
 
 ## Points clés
-- **Wizard 4 étapes** : fichier d'entrée → colonnes de sortie → sortie & API → run.
+- **Wizard 3 étapes** : fichier d'entrée → colonnes de sortie → run. La sortie
+  (répertoire + suffixe), l'API et le proxy se règlent dans le panneau ⚙.
 - **Cache SQLite global** (dossier données utilisateur) : chaque adressage unique
   est résolu une fois ; modes **full / reprise / refresh** (seuil d'ancienneté).
 - **Config YAML** sauvegardable/rechargeable (chemins relatifs au YAML).

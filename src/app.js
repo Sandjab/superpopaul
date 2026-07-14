@@ -28,22 +28,19 @@ const state = {
     api: { url: "https://peppol.gavini.cloud", key: "", mode: "api", resolver: null, dns_concurrency: 32,
            batch_size: 50, concurrency: 8, proxy: null, refresh_days: 30 },
     input: { path: "", delimiter: ";", encoding: "utf-8", pid_column: "" },
-    output: { path: "", timestamp_suffix: true, encoding: "utf-8-bom",
-              separator: "auto", columns: [] },
+    output: { dir: "", suffix: "_enrichi", timestamp_suffix: true,
+              encoding: "utf-8-bom", separator: "auto", columns: [] },
   },
 };
 
 // --- Wizard --------------------------------------------------------------------
-const STEPS = ["file", "columns", "output", "run"];
+const STEPS = ["file", "columns", "run"];
 let current = 0;
 
 function showStep(i) {
   // Cliquer l'onglet déjà actif ne doit rien faire (sinon ça re-affiche un
   // état périmé par-dessus des éditions non synchronisées).
   if (i === current) return;
-  // En quittant l'étape output (Suivant, Précédent ou stepper), persister le
-  // formulaire dans l'état pour ne pas perdre clé/URL modifiées.
-  if (STEPS[current] === "output" && i !== current) syncOutputForm();
   current = i;
   STEPS.forEach((s, j) => {
     $(`step-${s}`).classList.toggle("hidden", j !== i);
@@ -55,7 +52,6 @@ function showStep(i) {
   $("btn-prev").classList.toggle("hidden", i === 0);
   $("btn-next").classList.toggle("hidden", i === STEPS.length - 1);
   if (STEPS[i] === "columns") renderOutPreview(); // columns.js
-  if (STEPS[i] === "output") fillOutputForm(); // affiche le chemin suggéré par pickInput
   if (STEPS[i] === "run") enterRunStep();          // cockpit.js
 }
 
@@ -68,12 +64,8 @@ function validateStep() {
   }
   if (s === "columns" && state.config.output.columns.length === 0)
     return "Il faut au moins une colonne en sortie.";
-  if (s === "output") {
-    syncOutputForm();
-    if (!state.config.output.path) return "Indique le fichier de sortie.";
-    if (state.config.api.mode !== "direct" && !state.config.api.key)
-      return "Saisis la clé API (bouton Tester pour vérifier).";
-  }
+  // La clé API (mode api) est vérifiée au lancement du run (cockpit.js),
+  // les réglages n'étant plus une étape du wizard.
   return null;
 }
 
@@ -99,6 +91,12 @@ function modal(...nodes) {
   $("modal-backdrop").classList.remove("hidden");
 }
 function closeModal() { $("modal-backdrop").classList.add("hidden"); }
+
+/** Répertoire parent d'un chemin (séparateurs / ou \) ; vide si aucun. */
+function parentDir(p) {
+  const m = p.match(/^(.*)[\\/][^\\/]+$/);
+  return m ? m[1] : "";
+}
 
 // --- Étape 1 : fichier -----------------------------------------------------------
 async function pickInput(path) {
@@ -132,8 +130,7 @@ async function pickInput(path) {
         { source: "peppol", field: "extended_ctc_fr" },
       ];
     }
-    if (!state.config.output.path)
-      state.config.output.path = path.replace(/\.csv$/i, "") + "_enrichi.csv";
+    if (!state.config.output.dir) state.config.output.dir = parentDir(path);
     renderFilePanel();
     hideBanner();
   } catch (e) {
@@ -180,16 +177,17 @@ listen("tauri://drag-drop", (e) => {
   dz.classList.remove("over");
 });
 
-// --- Étape 3 : formulaire ↔ état ---------------------------------------------------
-function syncOutputForm() {
+// --- Réglages : formulaire ↔ état ---------------------------------------------------
+function syncSettingsForm() {
   const c = state.config;
-  c.output.path = $("out-path").value.trim();
+  c.output.dir = $("out-dir").value.trim();
+  c.output.suffix = $("out-suffix").value.trim();
   c.output.timestamp_suffix = $("out-stamp").checked;
   c.output.encoding = $("out-encoding").value;
   c.output.separator = $("out-sep").value;
+  c.api.mode = $("api-mode").value;
   c.api.url = $("api-url").value.trim();
   c.api.key = $("api-key").value.trim();
-  c.api.mode = $("api-mode").value;
   // Case DoH = aide de saisie : une IP cochée DoH est enregistrée sous sa
   // forme canonique https://<ip>/dns-query (l'interprétation du champ —
   // vide/IP/URL — reste côté Rust, dns_from_spec).
@@ -198,62 +196,99 @@ function syncOutputForm() {
     resolver = `https://${resolver}/dns-query`;
   c.api.resolver = resolver || null;
   c.api.dns_concurrency = +$("dns-conc").value || 32;
-  const proxyUrl = $("proxy-url").value.trim();
-  c.api.proxy = proxyUrl ? { url: proxyUrl } : null;
-  c.api.concurrency = +$("api-conc").value || 8;
+  // Deux champs Concurrence (un par bloc de mode), miroirs l'un de l'autre :
+  // on lit celui du mode courant.
+  c.api.concurrency =
+    +(c.api.mode === "direct" ? $("direct-conc") : $("api-conc")).value || 8;
   c.api.batch_size = +$("api-batch").value || 50;
+  const proxyUrl = $("proxy-url").value.trim();
+  c.api.proxy = $("proxy-on").checked && proxyUrl ? { url: proxyUrl } : null;
   c.api.refresh_days = +$("api-refresh").value || 30;
 }
-function fillOutputForm() {
+function fillSettingsForm() {
   const c = state.config;
-  $("out-path").value = c.output.path;
+  $("out-dir").value = c.output.dir;
+  $("out-suffix").value = c.output.suffix;
   $("out-stamp").checked = c.output.timestamp_suffix;
   $("out-encoding").value = c.output.encoding;
   $("out-sep").value = c.output.separator;
+  $("api-mode").value = c.api.mode || "api";
   $("api-url").value = c.api.url;
   $("api-key").value = c.api.key;
-  $("api-mode").value = c.api.mode || "api";
   $("dns-resolver").value = c.api.resolver || "";
   $("dns-doh").checked = (c.api.resolver || "").startsWith("https://");
   $("dns-conc").value = c.api.dns_concurrency || 32;
-  $("proxy-url").value = c.api.proxy ? c.api.proxy.url : "";
   $("api-conc").value = c.api.concurrency;
+  $("direct-conc").value = c.api.concurrency;
   $("api-batch").value = c.api.batch_size;
+  $("proxy-on").checked = !!c.api.proxy;
+  $("proxy-url").value = c.api.proxy ? c.api.proxy.url : "";
   $("api-refresh").value = c.api.refresh_days;
   syncModeUi();
+  syncProxyUi();
 }
 
-/** Active/désactive les champs selon le backend : en direct, URL/clé/Tester,
- *  taille de paquet et Calibrer sont sans objet ; le DoH ne sert qu'en direct. */
+/** Affiche le bloc de champs du backend choisi (API ou direct). */
 function syncModeUi() {
   const direct = $("api-mode").value === "direct";
-  for (const id of ["api-url", "api-key", "btn-test-api", "api-batch", "btn-calibrate"])
-    $(id).disabled = direct;
-  $("dns-resolver").disabled = !direct;
-  $("dns-doh").disabled = !direct;
-  $("dns-conc").disabled = !direct;
+  $("api-fields").classList.toggle("hidden", direct);
+  $("direct-fields").classList.toggle("hidden", !direct);
   if (direct) $("api-test-result").textContent = "";
 }
 $("api-mode").addEventListener("change", syncModeUi);
+
+/** Grise l'URL proxy tant que la case n'est pas cochée. */
+function syncProxyUi() {
+  $("proxy-url").disabled = !$("proxy-on").checked;
+}
+$("proxy-on").addEventListener("change", syncProxyUi);
+
+// Les deux champs Concurrence pilotent la même valeur : les garder miroirs
+// pour qu'un changement de mode ne fasse pas resurgir une ancienne saisie.
+$("api-conc").addEventListener("input", () => { $("direct-conc").value = $("api-conc").value; });
+$("direct-conc").addEventListener("input", () => { $("api-conc").value = $("direct-conc").value; });
+
 $("btn-out-browse").addEventListener("click", async () => {
-  const f = await save({ filters: [{ name: "CSV", extensions: ["csv"] }] });
-  if (f) $("out-path").value = f;
+  const d = await open({ directory: true });
+  if (d) $("out-dir").value = d;
+});
+
+// --- Réglages : ouverture / fermeture ------------------------------------------------
+function openSettings() {
+  fillSettingsForm();
+  $("settings-backdrop").classList.remove("hidden");
+}
+function closeSettings() {
+  syncSettingsForm();
+  $("settings-backdrop").classList.add("hidden");
+}
+$("btn-settings").addEventListener("click", openSettings);
+$("btn-settings-close").addEventListener("click", closeSettings);
+$("settings-backdrop").addEventListener("click", (e) => {
+  if (e.target === $("settings-backdrop")) closeSettings();
+});
+document.addEventListener("keydown", (e) => {
+  // Échap ferme les réglages — sauf si la modale (proxy) est ouverte au-dessus,
+  // auquel cas c'est son propre handler qui gère la touche.
+  if (e.key === "Escape"
+      && !$("settings-backdrop").classList.contains("hidden")
+      && $("modal-backdrop").classList.contains("hidden")) closeSettings();
 });
 
 // --- Splash --------------------------------------------------------------------------
 window.addEventListener("DOMContentLoaded", () => {
-  fillOutputForm();
+  fillSettingsForm();
   setTimeout(() => $("splash").classList.add("fade"), 2000);
 });
 
-// --- Étape 3 : test API et calibrage -----------------------------------------
+// --- Réglages : test API et calibrage -----------------------------------------
 // Les deux flux partagent la config et la modale proxy : chaque flux désactive
 // les DEUX boutons (exclusion mutuelle), pas seulement celui cliqué.
 const apiButtons = () => [$("btn-test-api"), $("btn-calibrate")];
 
 $("btn-test-api").addEventListener("click", async () => {
   apiButtons().forEach((b) => { b.disabled = true; });
-  syncOutputForm();
+  syncSettingsForm();
   const out = $("api-test-result");
   out.textContent = "test en cours…";
   try {
@@ -275,7 +310,7 @@ $("btn-test-api").addEventListener("click", async () => {
 
 $("btn-calibrate").addEventListener("click", async () => {
   apiButtons().forEach((b) => { b.disabled = true; });
-  syncOutputForm();
+  syncSettingsForm();
   const out = $("calibrate-result");
   out.textContent = "calibrage en cours…";
   try {
@@ -283,6 +318,7 @@ $("btn-calibrate").addEventListener("click", async () => {
     await ensureProxyCreds();
     const r = await invoke("calibrate_api");
     $("api-conc").value = r.best_concurrency;
+    $("direct-conc").value = r.best_concurrency; // champs miroirs
     state.config.api.concurrency = r.best_concurrency;
     out.textContent = `→ ${r.best_concurrency} sessions, ~${Math.round(r.addr_per_s)} adr/s` +
       (r.rate_limited ? " (clé rate-limitée)" : "");
@@ -356,14 +392,14 @@ function ensureProxyCreds(force = false) {
 
 // --- Config YAML : sauvegarde / chargement -------------------------------------
 $("btn-save-cfg").addEventListener("click", async () => {
-  // Le champ out-path n'est peuplé (fillOutputForm) qu'une fois l'étape
-  // Sortie & API atteinte — gating du stepper. Avant ça, synchroniser
-  // écraserait la config avec des champs de formulaire encore vides.
-  if ($("out-path").value) syncOutputForm();
-  // Pas de sauvegarde de config-squelette (décision produit) : sans fichier,
-  // colonne d'adressage ou sortie, le YAML ne serait pas rechargeable.
-  if (!state.inputPath || !state.config.input.pid_column || !state.config.output.path) {
-    banner("warn", "Complète d'abord la configuration (fichier, colonne d'adressage, sortie) " +
+  // Des éditions peuvent être en cours dans le panneau Réglages ouvert ;
+  // s'il est fermé, l'état est déjà à jour (synchronisé à la fermeture).
+  if (!$("settings-backdrop").classList.contains("hidden")) syncSettingsForm();
+  // Pas de sauvegarde de config-squelette (décision produit) : sans fichier ou
+  // colonne d'adressage, le YAML ne serait pas rechargeable. (Le répertoire et
+  // le suffixe de sortie, eux, ont toujours une valeur par défaut.)
+  if (!state.inputPath || !state.config.input.pid_column) {
+    banner("warn", "Complète d'abord la configuration (fichier, colonne d'adressage) " +
       "avant de sauvegarder.");
     return;
   }
@@ -387,7 +423,7 @@ $("btn-load-cfg").addEventListener("click", async () => {
     banner("error", `Chargement impossible : ${e}`);
     return;
   }
-  fillOutputForm();
+  fillSettingsForm();
   let path = state.config.input.path;
   try {
     // Recharge l'aperçu du fichier d'entrée SANS écraser le mapping du YAML.

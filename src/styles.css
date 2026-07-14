@@ -164,6 +164,20 @@ footer {
    space-between colle un enfant unique à gauche, margin-left auto le pousse
    à droite dans tous les cas. */
 #btn-next { margin-left: auto; }
+/* Panneau Réglages : overlay dédié, sous la modale (z-index 40 < 50) pour que
+   la saisie des identifiants proxy (« Tester ») s'empile au-dessus. */
+#settings-backdrop {
+  position: fixed; inset: 0; background: rgba(0, 0, 0, .6); z-index: 40;
+  display: flex; align-items: flex-start; justify-content: center;
+  overflow-y: auto; padding: 4vh 18px;
+}
+#settings {
+  background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+  padding: 2px 22px 16px; width: min(880px, 100%);
+}
+#settings-head { display: flex; justify-content: space-between; align-items: center; }
+#settings fieldset { background: var(--bg); }
+
 #modal-backdrop {
   position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 50;
   display: flex; align-items: center; justify-content: center;

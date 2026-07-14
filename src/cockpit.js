@@ -97,6 +97,13 @@ async function startRun() {
   if (btn.disabled) return;
   btn.disabled = true;
   try {
+    // La clé n'est plus exigée par une étape du wizard (les réglages sont un
+    // panneau ⚙) : c'est ici, au dernier moment, qu'on bloque un run API sans clé.
+    if (state.config.api.mode !== "direct" && !state.config.api.key) {
+      banner("warn", "Saisis la clé API avant de lancer. ",
+        h("button", { onclick: () => { hideBanner(); openSettings(); } }, "Ouvrir les réglages"));
+      return;
+    }
     await invoke("set_config", { cfg: state.config });
     await ensureProxyCreds();
     const total = await invoke("start_run", { mode: modeFromSelect() });

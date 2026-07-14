@@ -13,10 +13,10 @@
     <nav id="stepper">
       <button data-step="file"    class="step active">1. Fichier</button>
       <button data-step="columns" class="step" disabled>2. Colonnes</button>
-      <button data-step="output"  class="step" disabled>3. Sortie &amp; API</button>
       <button data-step="run"     class="step" disabled>▶ Run</button>
     </nav>
     <span class="cfg-btns">
+      <button id="btn-settings" title="Réglages — sortie, API, proxy…">⚙</button>
       <button id="btn-load-cfg" title="Charger une configuration YAML — reprend directement à l'étape Run.">Charger…</button>
       <button id="btn-save-cfg" title="Sauvegarder la configuration en YAML. Attention : la clé API y est stockée en clair.">Sauvegarder…</button>
     </span>
@@ -46,51 +46,7 @@
       <div id="col-zone"></div>
     </section>
 
-    <!-- Étape 3 : sortie & API -->
-    <section id="step-output" class="panel hidden">
-      <h2>Sortie &amp; API</h2>
-      <fieldset><legend>Fichier de sortie</legend>
-        <p><label for="out-path">Chemin</label> <input id="out-path" size="50"> <button id="btn-out-browse">…</button></p>
-        <label title="Ajoute la date/heure au nom du fichier pour ne jamais écraser une sortie précédente."><input type="checkbox" id="out-stamp" checked> Suffixer avec la date/heure</label>
-        <p><label for="out-encoding" title="Le défaut garantit les accents dans Excel FR. En Windows-1252, les caractères non représentables deviennent « ? ».">Encodage</label>
-           <select id="out-encoding" title="Le défaut garantit les accents dans Excel FR. En Windows-1252, les caractères non représentables deviennent « ? ».">
-             <option value="utf-8-bom">UTF-8 avec BOM (Excel FR)</option>
-             <option value="utf-8">UTF-8 sans BOM</option>
-             <option value="windows-1252">Windows-1252</option>
-           </select>
-           <label for="out-sep" title="Séparateur du fichier de sortie. « Identique à l'entrée » reprend celui détecté à l'étape 1.">Séparateur</label>
-           <select id="out-sep" title="Séparateur du fichier de sortie. « Identique à l'entrée » reprend celui détecté à l'étape 1.">
-             <option value="auto">Identique à l'entrée</option>
-             <option value=";">Point-virgule ;</option>
-             <option value=",">Virgule ,</option>
-             <option value="|">Pipe |</option>
-             <option value="&#9;">Tabulation</option>
-           </select></p>
-      </fieldset>
-      <fieldset><legend>API</legend>
-        <p><label for="api-mode" title="API Popaul : résolution en batch via le serveur (clé requise). Directe : SML + SMP interrogés depuis ce poste, sans clé ni serveur — un adressage à la fois.">Résolution</label>
-           <select id="api-mode" title="API Popaul : résolution en batch via le serveur (clé requise). Directe : SML + SMP interrogés depuis ce poste, sans clé ni serveur — un adressage à la fois.">
-             <option value="api">API Popaul (batch)</option>
-             <option value="direct">Directe — SML + SMP, sans clé</option>
-           </select>
-           <label for="dns-resolver" title="Mode direct uniquement. Vide : DNS système. Une IP (ex. 8.8.8.8) : DNS classique sur ce serveur — évite le rate-limiting du résolveur du FAI sur les gros volumes. Une URL https://… : DoH (RFC 8484), passe par le proxy.">Résolveur (optionnel)</label>
-           <input id="dns-resolver" size="24" placeholder="vide = système · IP · https://…" title="Mode direct uniquement. Vide : DNS système. Une IP (ex. 8.8.8.8) : DNS classique sur ce serveur — évite le rate-limiting du résolveur du FAI sur les gros volumes. Une URL https://… : DoH (RFC 8484), passe par le proxy.">
-           <label for="dns-doh" title="Utiliser l'IP saisie en DoH : elle devient https://<ip>/dns-query à l'enregistrement (fonctionne avec 1.1.1.1, 8.8.8.8… — le certificat du serveur doit couvrir l'IP). Sans objet si le champ contient déjà une URL."><input type="checkbox" id="dns-doh"> DoH</label>
-           <label for="dns-conc" title="Mode direct uniquement : lookups DNS simultanés, indépendant de la concurrence des workers. 32 ≈ 1 250 req/s, sous le rate-limit des résolveurs publics (~1 500 req/s par IP chez Google) — monter au-delà expose à des timeouts et ne fait rien gagner (le débit d'un run est dominé par les requêtes SMP).">Rafale DNS</label>
-           <input id="dns-conc" type="number" value="32" min="1" max="256" title="Mode direct uniquement : lookups DNS simultanés, indépendant de la concurrence des workers. 32 ≈ 1 250 req/s, sous le rate-limit des résolveurs publics (~1 500 req/s par IP chez Google) — monter au-delà expose à des timeouts et ne fait rien gagner (le débit d'un run est dominé par les requêtes SMP)."></p>
-        <p><label for="api-url" title="URL du service de résolution Peppol.">URL</label> <input id="api-url" size="40" value="https://peppol.gavini.cloud" title="URL du service de résolution Peppol.">
-           <label for="api-key" title="Clé d'authentification du service — bouton Tester pour la vérifier.">Clé</label> <input id="api-key" type="password" size="26" title="Clé d'authentification du service — bouton Tester pour la vérifier.">
-           <button id="btn-test-api" title="Envoie une requête de test pour vérifier l'URL, la clé et le proxy.">Tester</button> <span id="api-test-result"></span></p>
-        <p><label for="proxy-url">Proxy (optionnel)</label> <input id="proxy-url" size="30" placeholder="http://proxy:3128">
-           <span class="muted">identifiants demandés au lancement, jamais enregistrés</span></p>
-        <p><label for="api-conc" title="Nombre de requêtes simultanées vers l'API. « Calibrer » trouve la valeur optimale.">Concurrence</label> <input id="api-conc" type="number" value="8" min="1" max="256" title="Nombre de requêtes simultanées vers l'API. « Calibrer » trouve la valeur optimale.">
-           <label for="api-batch" title="Nombre d'adressages envoyés par requête API (500 max).">Taille de paquet</label> <input id="api-batch" type="number" value="50" min="1" max="500" title="Nombre d'adressages envoyés par requête API (500 max).">
-           <label for="api-refresh" title="Âge au-delà duquel un résultat en base est considéré périmé (utilisé par le mode Refresh).">Ancienneté refresh (jours)</label> <input id="api-refresh" type="number" value="30" min="1" title="Âge au-delà duquel un résultat en base est considéré périmé (utilisé par le mode Refresh).">
-           <button id="btn-calibrate" title="Mesure le débit à plusieurs niveaux de concurrence et applique le meilleur.">Calibrer</button> <span id="calibrate-result"></span></p>
-      </fieldset>
-    </section>
-
-    <!-- Étape 4 : cockpit -->
+    <!-- Étape 3 : cockpit -->
     <section id="step-run" class="panel hidden">
       <div id="run-header">
         <span id="run-title" class="muted"></span>
@@ -152,6 +108,72 @@
     <button id="btn-prev" class="hidden">← Précédent</button>
     <button id="btn-next">Suivant →</button>
   </footer>
+
+  <!-- Réglages : overlay dédié (pas #modal — la modale proxy déclenchée par
+       « Tester » doit pouvoir s'empiler au-dessus). Ouvert par ⚙, appliqué
+       à la fermeture. -->
+  <div id="settings-backdrop" class="hidden">
+    <section id="settings">
+      <div id="settings-head">
+        <h2>Réglages</h2>
+        <button id="btn-settings-close" title="Fermer — les réglages sont appliqués.">✕</button>
+      </div>
+      <fieldset><legend>Fichier de sortie</legend>
+        <p><label for="out-dir" title="Répertoire où écrire le fichier enrichi. Le nom est celui du fichier d'entrée suivi du suffixe.">Répertoire</label>
+           <input id="out-dir" size="42" title="Répertoire où écrire le fichier enrichi. Le nom est celui du fichier d'entrée suivi du suffixe."> <button id="btn-out-browse">…</button></p>
+        <p><label for="out-suffix" title="Ajouté au nom du fichier d'entrée : clients.csv → clients_enrichi.csv.">Suffixe</label>
+           <input id="out-suffix" size="12" value="_enrichi" title="Ajouté au nom du fichier d'entrée : clients.csv → clients_enrichi.csv.">
+           <label title="Ajoute la date/heure au nom du fichier pour ne jamais écraser une sortie précédente."><input type="checkbox" id="out-stamp" checked> Suffixer avec la date/heure</label></p>
+        <p><label for="out-encoding" title="Le défaut garantit les accents dans Excel FR. En Windows-1252, les caractères non représentables deviennent « ? ».">Encodage</label>
+           <select id="out-encoding" title="Le défaut garantit les accents dans Excel FR. En Windows-1252, les caractères non représentables deviennent « ? ».">
+             <option value="utf-8-bom">UTF-8 avec BOM (Excel FR)</option>
+             <option value="utf-8">UTF-8 sans BOM</option>
+             <option value="windows-1252">Windows-1252</option>
+           </select>
+           <label for="out-sep" title="Séparateur du fichier de sortie. « Identique à l'entrée » reprend celui détecté à l'étape 1.">Séparateur</label>
+           <select id="out-sep" title="Séparateur du fichier de sortie. « Identique à l'entrée » reprend celui détecté à l'étape 1.">
+             <option value="auto">Identique à l'entrée</option>
+             <option value=";">Point-virgule ;</option>
+             <option value=",">Virgule ,</option>
+             <option value="|">Pipe |</option>
+             <option value="&#9;">Tabulation</option>
+           </select></p>
+      </fieldset>
+      <fieldset><legend>API</legend>
+        <p><label for="api-mode" title="API Popaul : résolution en batch via le serveur (clé requise). Directe : SML + SMP interrogés depuis ce poste, sans clé ni serveur — un adressage à la fois.">Résolution</label>
+           <select id="api-mode" title="API Popaul : résolution en batch via le serveur (clé requise). Directe : SML + SMP interrogés depuis ce poste, sans clé ni serveur — un adressage à la fois.">
+             <option value="api">API Popaul (batch)</option>
+             <option value="direct">Directe — SML + SMP, sans clé</option>
+           </select></p>
+        <div id="api-fields">
+          <p><label for="api-url" title="URL du service de résolution Peppol.">URL</label> <input id="api-url" size="40" value="https://peppol.gavini.cloud" title="URL du service de résolution Peppol.">
+             <label for="api-key" title="Clé d'authentification du service — bouton Tester pour la vérifier.">Clé</label> <input id="api-key" type="password" size="26" title="Clé d'authentification du service — bouton Tester pour la vérifier.">
+             <button id="btn-test-api" title="Envoie une requête de test pour vérifier l'URL, la clé et le proxy.">Tester</button> <span id="api-test-result"></span></p>
+          <p><label for="api-conc" title="Nombre de requêtes simultanées vers l'API. « Calibrer » trouve la valeur optimale.">Concurrence</label> <input id="api-conc" type="number" value="8" min="1" max="256" title="Nombre de requêtes simultanées vers l'API. « Calibrer » trouve la valeur optimale.">
+             <label for="api-batch" title="Nombre d'adressages envoyés par requête API (500 max).">Taille de paquet</label> <input id="api-batch" type="number" value="50" min="1" max="500" title="Nombre d'adressages envoyés par requête API (500 max).">
+             <button id="btn-calibrate" title="Mesure le débit à plusieurs niveaux de concurrence et applique le meilleur.">Calibrer</button> <span id="calibrate-result"></span></p>
+        </div>
+        <div id="direct-fields" class="hidden">
+          <p><label for="dns-resolver" title="Vide : DNS système. Une IP (ex. 8.8.8.8) : DNS classique sur ce serveur — évite le rate-limiting du résolveur du FAI sur les gros volumes. Une URL https://… : DoH (RFC 8484), passe par le proxy.">Résolveur (optionnel)</label>
+             <input id="dns-resolver" size="24" placeholder="vide = système · IP · https://…" title="Vide : DNS système. Une IP (ex. 8.8.8.8) : DNS classique sur ce serveur — évite le rate-limiting du résolveur du FAI sur les gros volumes. Une URL https://… : DoH (RFC 8484), passe par le proxy.">
+             <label for="dns-doh" title="Utiliser l'IP saisie en DoH : elle devient https://<ip>/dns-query à l'enregistrement (fonctionne avec 1.1.1.1, 8.8.8.8… — le certificat du serveur doit couvrir l'IP). Sans objet si le champ contient déjà une URL."><input type="checkbox" id="dns-doh"> DoH</label></p>
+          <p><label for="dns-conc" title="Lookups DNS simultanés, indépendant de la concurrence des workers. 32 ≈ 1 250 req/s, sous le rate-limit des résolveurs publics (~1 500 req/s par IP chez Google) — monter au-delà expose à des timeouts et ne fait rien gagner (le débit d'un run est dominé par les requêtes SMP).">Rafale DNS</label>
+             <input id="dns-conc" type="number" value="32" min="1" max="256" title="Lookups DNS simultanés, indépendant de la concurrence des workers. 32 ≈ 1 250 req/s, sous le rate-limit des résolveurs publics (~1 500 req/s par IP chez Google) — monter au-delà expose à des timeouts et ne fait rien gagner (le débit d'un run est dominé par les requêtes SMP).">
+             <label for="direct-conc" title="Nombre de résolutions simultanées (workers SML + SMP).">Concurrence</label>
+             <input id="direct-conc" type="number" value="8" min="1" max="256" title="Nombre de résolutions simultanées (workers SML + SMP)."></p>
+        </div>
+      </fieldset>
+      <fieldset><legend>Proxy</legend>
+        <p><label title="Faire passer les requêtes (API ou DoH) par un proxy d'entreprise."><input type="checkbox" id="proxy-on"> Utiliser un proxy</label>
+           <label for="proxy-url">URL</label> <input id="proxy-url" size="30" placeholder="http://proxy:3128" disabled>
+           <span class="muted">identifiants demandés au lancement, jamais enregistrés</span></p>
+      </fieldset>
+      <fieldset><legend>Divers</legend>
+        <p><label for="api-refresh" title="Âge au-delà duquel un résultat en base est considéré périmé (utilisé par le mode Refresh).">Ancienneté refresh (jours)</label>
+           <input id="api-refresh" type="number" value="30" min="1" title="Âge au-delà duquel un résultat en base est considéré périmé (utilisé par le mode Refresh)."></p>
+      </fieldset>
+    </section>
+  </div>
 
   <div id="modal-backdrop" class="hidden"><div id="modal"></div></div>
 
