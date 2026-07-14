@@ -68,22 +68,59 @@ function renderAvg(done, activeS) {
     `≈ ${avg.toLocaleString("fr-FR", { maximumFractionDigits: avg < 10 ? 1 : 0 })} adr/s en moyenne`;
 }
 
-/** Aide visible sous le sélecteur de mode — remplace l'ancien tooltip.
- *  Recalculée à chaque changement (l'ancienneté refresh vient des réglages). */
+/** Aide visible sous le sélecteur de mode — chiffrée dès qu'une analyse du
+ *  fichier est disponible (« ce mode résoudra N adressages »), descriptive
+ *  sinon. Recalculée au changement de mode, à chaque analyse et à la
+ *  fermeture des réglages (l'ancienneté refresh en vient). */
+let lastStats = null; // dernier analyze_input (compteurs du pré-run)
 function updateRunModeHint() {
-  const hints = {
-    "full": "Re-résout tous les adressages, même ceux déjà en cache.",
-    "reprise": "Résout uniquement les adressages absents du cache — les résultats existants sont conservés.",
-    "reprise-retry": "Résout les absents du cache et re-tente les échecs précédents.",
-    "refresh": `Résout les absents, les échecs et les résultats plus vieux que ${state.config.api.refresh_days} jours (réglable dans ⚙).`,
-  };
-  $("run-mode-hint").textContent = hints[$("run-mode").value] ?? "";
+  const mode = $("run-mode").value, days = state.config.api.refresh_days;
+  const el = $("run-mode-hint");
+  if (!lastStats) {
+    const hints = {
+      "full": "Re-résout tous les adressages, même ceux déjà en cache.",
+      "reprise": "Résout uniquement les adressages absents du cache — les résultats existants sont conservés.",
+      "reprise-retry": "Résout les absents du cache et re-tente les échecs précédents.",
+      "refresh": `Résout les absents, les échecs et les résultats plus vieux que ${days} jours (réglable dans ⚙).`,
+    };
+    el.textContent = hints[mode] ?? "";
+    return;
+  }
+  const s = lastStats;
+  const parts = {
+    "full": ["Full re-résoudra la totalité : ", s.unique, " adressages (cache ignoré)."],
+    "reprise": ["Reprise résoudra ", s.missing, " adressages jamais résolus — le reste vient du cache."],
+    "reprise-retry": ["Reprise + échecs résoudra ", s.missing + s.failed, " adressages (jamais résolus + échecs)."],
+    "refresh": ["Refresh résoudra ", s.missing + s.failed + s.stale,
+      ` adressages (jamais résolus + échecs + périmés de plus de ${days} jours).`],
+  }[mode];
+  if (!parts) { el.textContent = ""; return; }
+  el.replaceChildren(parts[0], h("b", {}, fmt(parts[1])), parts[2]);
 }
 $("run-mode").addEventListener("change", updateRunModeHint);
 updateRunModeHint();
 
+/** Ligne de stats du pré-run, sous l'en-tête de l'étape. */
+function renderRunStats(s) {
+  const item = (n, label, alertClass) => {
+    const span = h("span", {}, h("b", {}, fmt(n)), ` ${label}`);
+    if (alertClass && n > 0) span.classList.add(alertClass);
+    return span;
+  };
+  $("run-stats").replaceChildren(
+    item(s.unique, "adressages uniques"),
+    item(s.resolved_ok, "déjà résolus"),
+    item(s.failed, "en échec", "err"),
+    item(s.stale, "périmés", "warn"),
+    item(s.missing, "jamais résolus"));
+  $("run-stats").classList.remove("hidden");
+}
+
 async function enterRunStep() {
-  $("run-title").textContent = state.inputPath ?? "";
+  // Titre : le nom du fichier seul, le chemin complet reste en tooltip.
+  const t = $("run-title");
+  t.textContent = (state.inputPath ?? "").split(/[\\/]/).pop() ?? "";
+  t.title = state.inputPath ?? "";
   // Pendant un run, revenir sur cet onglet ne relance ni set_config ni
   // analyze_input : le scan CSV + load_map disputerait le Mutex<Store> aux
   // workers, pour re-suggérer un mode qu'on ne peut pas changer.
@@ -94,11 +131,14 @@ async function enterRunStep() {
   // ce qui est trompeur avant que startRun() ne les réaffiche à jour.
   $("cockpit").classList.add("hidden");
   $("run-result").classList.add("hidden");
+  $("run-stats").classList.add("hidden");
+  lastStats = null;
   try {
     await invoke("set_config", { cfg: state.config });
     const s = await invoke("analyze_input");
-    $("run-title").textContent = `${state.inputPath} — ${fmt(s.unique)} adressages uniques`;
-    suggestMode(s);
+    lastStats = s;
+    renderRunStats(s);
+    suggestMode(s); // appelle updateRunModeHint() en sortie
   } catch (e) {
     banner("error", `${e}`);
   }
@@ -225,6 +265,7 @@ function renderMiniRing(ring, count, outOf, lineCount, linesOutOf) {
 listen("telemetry", (e) => {
   const s = e.payload;
   lastTotal = s.total;
+  lastSnap = s; // dernier instantané, réutilisé par « Copier le bilan »
   // Moteur à l'arrêt (pause ou suspension) : « suspendu » + durée active et
   // moyenne provisoires ; sinon « running » + ETA. Ne rien toucher après la
   // fin (running=false) : l'affichage définitif appartient à run-finished.
@@ -462,9 +503,30 @@ listen("run-suspended", (e) => {
 });
 listen("run-resumed", hideBanner);
 
+let lastRun = null; // bilan du dernier run (pour « Copier le bilan »)
+let lastSnap = null; // dernier Snapshot de télémétrie (pourcentages du bilan)
+const statPair = (v, label) => h("span", {}, h("b", {}, v), ` ${label}`);
+
+/** Bilan d'une ligne dans le presse-papiers, pour un mail ou un ticket. */
+function copyReport(btn) {
+  const name = (state.inputPath ?? "").split(/[\\/]/).pop();
+  const r = lastRun, s = lastSnap;
+  const pct = (a, b) => (b ? `${(100 * a / b).toFixed(1).replace(".", ",")} %` : "—");
+  const text = `Super Popaul — ${name} : ${fmt(r.done)} résolus, ${fmt(r.failed)} échecs` +
+    (s ? `, ${pct(s.exists, s.done)} dans Peppol, ${pct(s.ctc, s.done)} avec extension France` : "") +
+    `, durée ${fmtActive(r.active_s)}.`;
+  navigator.clipboard.writeText(text).then(
+    () => {
+      btn.textContent = "Copié ✓";
+      setTimeout(() => { btn.textContent = "Copier le bilan"; }, 1500);
+    },
+    () => { btn.textContent = "Copie impossible"; });
+}
+
 listen("run-finished", async (e) => {
   const { done, failed, stopped, active_s } = e.payload;
   running = false;
+  lastRun = { done, failed, active_s };
   // Fige l'anneau sur sa valeur finale : un run complet passe ainsi à 100 %
   // (done == total) au lieu de rester sur le dernier tick de télémétrie ; un
   // run arrêté reflète sa progression réelle. À la place de l'ETA : la durée
@@ -478,23 +540,50 @@ listen("run-finished", async (e) => {
   $("btn-stop").classList.add("hidden");
   $("btn-pause").textContent = "⏸ Pause";
   const res = $("run-result");
-  res.classList.remove("hidden");
+  res.classList.remove("hidden", "stopped", "failed");
+  const avg = active_s > 0 ? done / active_s : 0;
   if (stopped) {
+    res.classList.add("stopped");
     res.replaceChildren(
-      `Run arrêté : ${fmt(done)} résolus, rien n'est perdu (mode reprise pour continuer). `,
-      h("button", { onclick: writeOutput }, "Générer quand même le fichier"));
+      h("p", { class: "result-title" }, "Run arrêté — rien n'est perdu"),
+      h("div", { class: "result-stats" },
+        statPair(fmt(done), "résolus"),
+        statPair(fmtActive(active_s), "durée active")),
+      h("div", { class: "result-file" },
+        h("span", { class: "path" }, "mode reprise pour continuer plus tard"),
+        h("button", { onclick: writeOutput }, "Générer quand même le fichier")));
   } else {
-    res.textContent = `✅ Terminé : ${fmt(done)} résolus, ${fmt(failed)} échecs. Écriture du fichier…`;
+    res.replaceChildren(
+      h("p", { class: "result-title" }, "✅ Run terminé"),
+      h("div", { class: "result-stats" },
+        statPair(fmt(done), "résolus"),
+        statPair(fmt(failed), "échecs"),
+        statPair(fmtActive(active_s), "durée active"),
+        statPair(`≈ ${Math.round(avg)} adr/s`, "en moyenne")),
+      h("div", { class: "result-file" },
+        h("span", { class: "path" }, "écriture du fichier…")));
     await writeOutput();
   }
 });
 
 async function writeOutput() {
   const res = $("run-result");
+  const row = res.querySelector(".result-file");
   try {
     const path = await invoke("generate_output");
-    res.textContent = `✅ Fichier de sortie écrit : ${path}`;
+    const name = path.split(/[\\/]/).pop();
+    const dir = path.slice(0, path.length - name.length);
+    res.classList.remove("failed");
+    row.replaceChildren(
+      h("span", {}, "📄 ", h("b", {}, name)),
+      h("span", { class: "path", title: path }, dir),
+      h("button", { onclick: () => window.__TAURI__.opener?.revealItemInDir(path) },
+        "Afficher dans le dossier"),
+      h("button", { onclick: (ev) => copyReport(ev.currentTarget) }, "Copier le bilan"));
   } catch (err) {
-    res.textContent = `⚠️ Écriture du fichier impossible : ${err}`;
+    res.classList.add("failed");
+    row.replaceChildren(
+      h("span", { class: "path" }, `⚠️ Écriture du fichier impossible : ${err}`),
+      h("button", { onclick: writeOutput }, "Réessayer"));
   }
 }

@@ -49,7 +49,7 @@
     <!-- Étape 3 : cockpit -->
     <section id="step-run" class="panel hidden">
       <div id="run-header">
-        <span id="run-title" class="muted"></span>
+        <span id="run-title"></span>
         <span>
           <select id="run-mode">
             <option value="full">Full — tout résoudre</option>
@@ -62,6 +62,7 @@
           <button id="btn-stop" class="hidden btn-danger">■ Stop</button>
         </span>
       </div>
+      <div id="run-stats" class="hidden"></div>
       <p id="run-mode-hint" class="field-hint"></p>
       <div id="cockpit" class="hidden">
         <!-- Bandeau métier : progression + les deux réponses qu'on est venu
@@ -77,7 +78,7 @@
           <div class="biz-metric" title="Présents dans l'annuaire Peppol — % des résolus ; absolus en adressages et en lignes de fichier.">
             <div class="mini-ring" id="ring-exists"><div class="mini-ring-center"><b id="t-exists">—</b></div></div>
             <div>
-              <h3>🎯 Dans Peppol</h3>
+              <h3><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="8" cy="8" r="6.6"/><circle cx="8" cy="8" r="3.6"/><circle cx="8" cy="8" r="1" fill="currentColor" stroke="none"/></svg> Dans Peppol</h3>
               <div class="ring-abs">
                 <div><b id="t-exists-abs">—</b> <span class="muted">adressages</span></div>
                 <div><b id="t-exists-lines">—</b> <span class="muted">lignes</span> <span class="muted" id="t-exists-lines-pct"></span></div>
@@ -87,7 +88,7 @@
           <div class="biz-metric" title="Éligibles à la facturation électronique française (France Invoice UBL Extension, ex-CTC-FR).">
             <div class="mini-ring" id="ring-ctc"><div class="mini-ring-center"><b id="t-ctc">—</b></div></div>
             <div>
-              <h3>🇫🇷 France Invoice UBL Extension</h3>
+              <h3><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.2 L14 4.6 L14 11.4 L8 14.8 L2 11.4 L2 4.6 Z"/></svg> France Invoice UBL Extension</h3>
               <div class="ring-abs">
                 <div><b id="t-ctc-abs">—</b> <span class="muted">adressages</span></div>
                 <div><b id="t-ctc-lines">—</b> <span class="muted">lignes</span> <span class="muted" id="t-ctc-lines-pct"></span></div>
@@ -109,7 +110,7 @@
           </div>
         </details>
       </div>
-      <p id="run-result" class="hidden"></p>
+      <div id="run-result" class="hidden"></div>
     </section>
   </main>
 

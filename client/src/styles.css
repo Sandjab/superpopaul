@@ -38,6 +38,8 @@ button:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
 .btn-danger:hover:not(:disabled) { background: rgba(229, 83, 75, .12); border-color: var(--red); }
 .btn-ghost { background: transparent; border-color: transparent; color: var(--muted); }
 .btn-ghost:hover:not(:disabled) { background: var(--card); color: var(--fg); border-color: transparent; }
+/* L'engrenage : glyphe lisible, padding réduit pour garder la hauteur commune. */
+#btn-settings { font-size: 18px; padding: 2px 10px; line-height: 1.3; }
 input, select {
   background: var(--bg); color: var(--fg); border: 1px solid var(--border);
   border-radius: 6px; padding: 5px 8px;
@@ -98,6 +100,8 @@ fieldset { border: 1px solid var(--border); border-radius: 8px; margin: 12px 0; 
   text-align: center; color: var(--muted);
 }
 #dropzone.over { border-color: var(--gold); color: var(--fg); }
+/* Nom du fichier chargé : en évidence dans la ligne meta atténuée. */
+#file-meta b { color: var(--fg); }
 /* Colonne des adressages choisie : surbrillance à la couleur d'accent (même
    langage que th.peppol / td.temp de l'étape 2). */
 #preview-table th.pid-col { color: var(--gold); border-color: var(--gold); }
@@ -134,17 +138,41 @@ body > .drag-fallback {
 #run-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
 /* Chiffres à chasse fixe : pas de tremblement pendant les ticks de télémétrie. */
 #step-run { font-variant-numeric: tabular-nums; }
+#run-title { font-weight: 600; }
+/* Stats du pré-run (compteurs d'analyze_input) : échecs et périmés ne se
+   colorent que s'ils sont > 0. */
+#run-stats { display: flex; gap: 6px 22px; flex-wrap: wrap; margin: 10px 0 2px;
+             font-size: 12.5px; color: var(--muted); }
+#run-stats b { color: var(--fg); font-size: 14px; margin-right: 4px; }
+#run-stats .warn b { color: var(--amber); }
+#run-stats .err b { color: var(--red); }
+/* Bloc de fin de run : bilan + accès au fichier. Liseré vert (terminé),
+   orange (arrêté), rouge (écriture en échec). */
+#run-result { border: 1px solid var(--border); border-left: 3px solid var(--green);
+              border-radius: 8px; padding: 12px 16px; margin-top: 14px; }
+#run-result.stopped { border-left-color: var(--amber); }
+#run-result.failed { border-left-color: var(--red); }
+.result-title { font-weight: 600; color: var(--green); margin: 0 0 8px; }
+#run-result.stopped .result-title { color: var(--amber); }
+.result-stats { display: flex; gap: 6px 26px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); }
+.result-stats b { color: var(--fg); font-size: 14px; margin-right: 4px; }
+.result-file { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+               margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); font-size: 13px; }
+.result-file .path { color: var(--muted); font-size: 12px; overflow: hidden;
+                     text-overflow: ellipsis; white-space: nowrap; max-width: 46ch; }
 /* Cockpit à deux niveaux : bandeau métier aéré (sans cartes, l'espacement fait
    la structure), télémétrie repliée dans <details> en dessous. */
 #biz-band { display: flex; flex-wrap: wrap; align-items: center;
-            gap: 18px clamp(16px, 3vw, 36px); padding: 8px 4px 20px; }
+            gap: 18px 30px; padding: 8px 4px 20px; }
 #ring-block { text-align: center; }
-/* flex 1 1 240px : les deux métriques se partagent la largeur et laissent
-   leur texte replier, au lieu que flex-wrap ne les renvoie à la ligne
-   (les items wrappent à leur largeur naturelle avant de rétrécir). */
-.biz-metric { display: flex; gap: 16px; align-items: center; flex: 1 1 240px; min-width: 0; }
+/* flex 0 1 300px : les métriques restent regroupées près de l'anneau (pas
+   d'étirement) tout en pouvant rétrécir — la base < largeur naturelle évite
+   que flex-wrap ne les renvoie à la ligne. */
+.biz-metric { display: flex; gap: 16px; align-items: center; flex: 0 1 300px; min-width: 0; }
 .biz-metric > div:last-child { min-width: 0; }
-.biz-metric h3 { margin: 0 0 5px; font-size: 13px; font-weight: 600; color: var(--muted); }
+.biz-metric h3 { margin: 0 0 5px; font-size: 13px; font-weight: 600; color: var(--muted);
+                 display: flex; align-items: center; gap: 6px; }
+.biz-metric h3 svg { color: var(--gold); flex: none; }
 /* Échecs sous l'anneau : info métier, rouge dès qu'il y en a. */
 #fail-line { margin: 6px 0 0; font-size: 12.5px; font-weight: 600; color: var(--red); }
 #fail-line.zero { color: var(--muted); font-weight: 400; }

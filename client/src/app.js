@@ -149,8 +149,13 @@ function renderFilePanel() {
   const p = state.preview;
   syncNextBtn(); // un fichier vient d'être chargé : « Suivant » devient utile
   $("file-info").classList.remove("hidden");
-  $("file-meta").textContent =
-    `${state.inputPath} — séparateur « ${p.delimiter} », encodage ${p.encoding}`;
+  // Nom du fichier seul, en gras — le chemin complet reste en tooltip
+  // (même traitement que le titre de l'étape Run).
+  const meta = $("file-meta");
+  meta.replaceChildren(
+    h("b", {}, state.inputPath.split(/[\\/]/).pop() ?? ""),
+    ` — séparateur « ${p.delimiter} », encodage ${p.encoding}`);
+  meta.title = state.inputPath;
   $("preview-table").replaceChildren(
     h("tr", {}, ...p.headers.map((hd) => h("th", {}, hd))),
     ...p.rows.map((r) => h("tr", {}, ...r.map((c) => h("td", {}, c)))),
