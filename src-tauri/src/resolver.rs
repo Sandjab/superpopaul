@@ -1395,6 +1395,9 @@ mod tests_calibrate {
             Some(CalibrationStep::RateLimited { level: 1, .. }) => {}
             other => panic!("attendu RateLimited niveau 1, obtenu {other:?}"),
         }
+        // Seul chemin où le rapport sort le défaut (1, 0.0) sans aucun Retained émis.
+        assert_eq!(rep.best_concurrency, 1);
+        assert_eq!(rep.addr_per_s, 0.0);
     }
 
     #[tokio::test]
@@ -1479,5 +1482,9 @@ mod tests_calibrate {
         assert_eq!(v, serde_json::json!({"status": "rate_limited", "level": 2, "addr_per_s": 5.0}));
         let m = serde_json::to_value(CalibrationStep::Measuring { level: 1 }).unwrap();
         assert_eq!(m, serde_json::json!({"status": "measuring", "level": 1}));
+        let r = serde_json::to_value(CalibrationStep::Retained { level: 4, addr_per_s: 54.0 }).unwrap();
+        assert_eq!(r, serde_json::json!({"status": "retained", "level": 4, "addr_per_s": 54.0}));
+        let j = serde_json::to_value(CalibrationStep::Rejected { level: 16, addr_per_s: 56.0 }).unwrap();
+        assert_eq!(j, serde_json::json!({"status": "rejected", "level": 16, "addr_per_s": 56.0}));
     }
 }

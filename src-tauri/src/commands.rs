@@ -269,7 +269,10 @@ fn calibration_prerequisites(key: &str, input_path: &str) -> Result<(), String> 
 }
 
 #[tauri::command]
-pub async fn calibrate_api(state: State<'_, AppState>) -> Result<CalibrationReport, String> {
+pub async fn calibrate_api(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<CalibrationReport, String> {
     let (_, cfg) = state.current_config()?;
     if cfg.api.mode == ApiMode::Direct {
         // Marteler les SMP distribués pour trouver un plafond n'a pas de
@@ -294,7 +297,9 @@ pub async fn calibrate_api(state: State<'_, AppState>) -> Result<CalibrationRepo
         &sample,
         cfg.api.batch_size as usize,
         cfg.api.concurrency.max(16),
-        |_| {},
+        |step| {
+            let _ = app.emit("calibrate-step", &step);
+        },
     )
     .await)
 }
