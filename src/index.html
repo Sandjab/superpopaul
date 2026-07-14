@@ -155,6 +155,8 @@
           <p><label for="api-conc" title="Nombre de requêtes simultanées vers l'API. « Calibrer » trouve la valeur optimale.">Concurrence</label> <input id="api-conc" type="number" value="8" min="1" max="256" title="Nombre de requêtes simultanées vers l'API. « Calibrer » trouve la valeur optimale.">
              <label for="api-batch" title="Nombre d'adressages envoyés par requête API (500 max).">Taille de paquet</label> <input id="api-batch" type="number" value="50" min="1" max="500" title="Nombre d'adressages envoyés par requête API (500 max).">
              <button id="btn-calibrate" title="Mesure le débit à plusieurs niveaux de concurrence et applique le meilleur. Prérequis : une clé API et un fichier d'entrée (l'échantillon vient de vos adressages). Consomme du quota.">Calibrer</button> <span id="calibrate-result"></span></p>
+          <div id="calibrate-bench" class="hidden"
+               title="Débit mesuré (adr/s) par nombre de sessions. Vert : retenu · rouge : gain < 15 % (arrêt) · jaune : rate-limité (arrêt)."></div>
         </div>
         <div id="direct-fields" class="hidden">
           <p><label for="dns-resolver" title="Vide : DNS système. Une IP (ex. 8.8.8.8) : DNS classique sur ce serveur — évite le rate-limiting du résolveur du FAI sur les gros volumes. Une URL https://… : DoH (RFC 8484), passe par le proxy.">Résolveur (optionnel)</label>

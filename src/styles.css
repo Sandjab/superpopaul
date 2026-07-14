@@ -218,3 +218,21 @@ footer {
   padding: 22px; max-width: 460px;
 }
 #modal input { display: block; margin: 8px 0; width: 100%; }
+
+/* --- Banc d'essai du calibrage (panneau ⚙) ------------------------------------
+   Une colonne par palier : valeur (adr/s), barre, label (nb de sessions).
+   Hauteurs pilotées par app.js (normalisées sur le meilleur débit vu). */
+#calibrate-bench { display: flex; align-items: flex-end; gap: 8px; height: 84px; margin: 2px 0 8px 2px; }
+.cal-col { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 3px; width: 34px; }
+.cal-bar { width: 100%; border-radius: 3px 3px 0 0; background: var(--border); transition: height .3s ease; }
+.cal-bar.measuring { background: var(--blue); height: 6px; animation: cal-pulse 1s ease-in-out infinite; }
+@keyframes cal-pulse { 50% { opacity: .45; } }
+.cal-bar.win { background: var(--green); }
+.cal-bar.reject { background: var(--red); }
+.cal-bar.ratelimited { background: var(--amber); }
+.cal-bar.dim { opacity: .35; }
+.cal-val, .cal-lab { font-size: 10px; color: var(--muted); }
+.cal-val { height: 12px; }
+.cal-col.win .cal-val { color: var(--green); }
+.cal-col.reject .cal-val { color: var(--red); }
+.cal-col.ratelimited .cal-val { color: var(--amber); }
