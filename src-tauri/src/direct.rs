@@ -118,7 +118,14 @@ impl Dns {
             Dns::System(resolver) => {
                 use hickory_proto::rr::{RData, RecordType};
                 use hickory_resolver::error::ResolveErrorKind;
-                match resolver.lookup(host, RecordType::NAPTR).await {
+                // Point final = FQDN absolu, sinon hickory tente aussi les
+                // search domains système (ex. « home » dérivé du hostname
+                // derrière une box) : dès que le résolveur rate-limite la
+                // requête principale (REFUSED sous rafale), le NXDOMAIN du
+                // routeur sur <host>.home devenait un faux « absent »
+                // silencieux (constaté le 2026-07-14 : 8 751 faux négatifs
+                // sur 51 092).
+                match resolver.lookup(format!("{host}."), RecordType::NAPTR).await {
                     Ok(answers) => {
                         let records: Vec<(String, String)> = answers
                             .iter()
