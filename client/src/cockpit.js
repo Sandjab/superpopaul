@@ -68,6 +68,20 @@ function renderAvg(done, activeS) {
     `≈ ${avg.toLocaleString("fr-FR", { maximumFractionDigits: avg < 10 ? 1 : 0 })} adr/s en moyenne`;
 }
 
+/** Aide visible sous le sélecteur de mode — remplace l'ancien tooltip.
+ *  Recalculée à chaque changement (l'ancienneté refresh vient des réglages). */
+function updateRunModeHint() {
+  const hints = {
+    "full": "Re-résout tous les adressages, même ceux déjà en cache.",
+    "reprise": "Résout uniquement les adressages absents du cache — les résultats existants sont conservés.",
+    "reprise-retry": "Résout les absents du cache et re-tente les échecs précédents.",
+    "refresh": `Résout les absents, les échecs et les résultats plus vieux que ${state.config.api.refresh_days} jours (réglable dans ⚙).`,
+  };
+  $("run-mode-hint").textContent = hints[$("run-mode").value] ?? "";
+}
+$("run-mode").addEventListener("change", updateRunModeHint);
+updateRunModeHint();
+
 async function enterRunStep() {
   $("run-title").textContent = state.inputPath ?? "";
   // Pendant un run, revenir sur cet onglet ne relance ni set_config ni
@@ -108,6 +122,7 @@ function suggestMode(s) {
     banner("warn", `Tous les adressages sont déjà en base (${fmt(s.stale)} périmés, ` +
       `${fmt(s.failed)} en échec) — mode refresh présélectionné.`);
   }
+  updateRunModeHint(); // la présélection change la valeur sans événement change
 }
 
 function modeFromSelect() {

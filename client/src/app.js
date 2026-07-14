@@ -242,11 +242,17 @@ function fillSettingsForm() {
   syncDnsUi();
 }
 
-/** Affiche le bloc de champs du backend choisi (API ou direct). */
+/** Affiche le bloc de champs du backend choisi (API ou direct), et l'aide
+ *  visible correspondante (l'info de décision ne vit pas en tooltip). */
+const API_MODE_HINTS = {
+  api: "Résolution en lots via le serveur Popaul — clé d'API requise.",
+  direct: "SML + SMP interrogés depuis ce poste, sans clé ni serveur — un adressage à la fois.",
+};
 function syncModeUi() {
   const direct = $("api-mode").value === "direct";
   $("api-fields").classList.toggle("hidden", direct);
   $("direct-fields").classList.toggle("hidden", !direct);
+  $("api-mode-hint").textContent = API_MODE_HINTS[$("api-mode").value] ?? "";
   if (direct) $("api-test-result").textContent = "";
 }
 $("api-mode").addEventListener("change", syncModeUi);
@@ -315,6 +321,8 @@ async function closeSettings() {
     return;
   }
   $("settings-backdrop").classList.add("hidden");
+  // L'ancienneté refresh a pu changer : l'aide du mode de run la cite.
+  window.updateRunModeHint?.();
 }
 $("btn-settings").addEventListener("click", openSettings);
 $("btn-settings-close").addEventListener("click", closeSettings);
@@ -482,13 +490,16 @@ async function runCalibration() {
     // La modale ne s'ouvre qu'une fois les prérequis franchis côté UI ; une
     // erreur de garde backend (invoke rejeté) la referme dans le catch.
     const title = h("h3", {}, "Calibration en cours…");
-    const benchEl = h("div", {
-      id: "calibrate-bench",
-      title: "Débit mesuré (adr/s) par nombre de sessions. Vert : retenu · rouge : gain < 15 % (arrêt) · jaune : rate-limité (arrêt).",
-    });
+    const benchEl = h("div", { id: "calibrate-bench" });
+    // Légende visible sous le banc (pas en tooltip : c'est elle qui explique
+    // les couleurs pendant la mesure).
+    const legend = h("p", { class: "cal-legend" }, "adr/s par nombre de sessions —",
+      h("span", { class: "dot", style: "background:var(--green)" }), "retenu",
+      h("span", { class: "dot", style: "background:var(--red)" }), "gain < 15 %",
+      h("span", { class: "dot", style: "background:var(--amber)" }), "rate-limité");
     const status = h("div", { id: "calibrate-status" }, "démarrage…");
     const btns = h("div", { class: "modal-btns" });
-    modal(title, benchEl, status, btns);
+    modal(title, benchEl, legend, status, btns);
     benchReset(benchEl);
     bench.statusEl = status;
     const stopBtn = h("button", {

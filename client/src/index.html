@@ -15,9 +15,9 @@
       <button data-step="run"     class="step" disabled>3. Run</button>
     </nav>
     <span class="cfg-btns">
-      <button id="btn-settings" class="btn-ghost" title="Réglages — sortie, API, proxy… Appliqués et enregistrés automatiquement à la fermeture.">⚙</button>
-      <button id="btn-load-cfg" title="Charger un profil (fichier, colonne des adressages, colonnes de sortie) — reprend directement à l'étape Run.">Charger…</button>
-      <button id="btn-save-cfg" title="Sauvegarder le profil de chargement du fichier en YAML (fichier, colonne des adressages, colonnes de sortie).">Sauvegarder…</button>
+      <button id="btn-settings" class="btn-ghost" title="Réglages — appliqués et enregistrés à la fermeture.">⚙</button>
+      <button id="btn-load-cfg" title="Charger un profil YAML — reprend directement à l'étape Run.">Charger…</button>
+      <button id="btn-save-cfg" title="Sauvegarder le profil (fichier, colonne des adressages, colonnes de sortie) en YAML.">Sauvegarder…</button>
     </span>
   </header>
 
@@ -31,7 +31,7 @@
       <div id="file-info" class="hidden">
         <p id="file-meta" class="muted"></p>
         <table id="preview-table"></table>
-        <p><label for="pid-column" title="Colonne contenant les identifiants Peppol à résoudre (ex. SIREN/SIRET).">Colonne des adressages :</label> <select id="pid-column" title="Colonne contenant les identifiants Peppol à résoudre (ex. SIREN/SIRET)."></select>
+        <p><label for="pid-column">Colonne des adressages :</label> <select id="pid-column" title="Colonne contenant les adressages Peppol à résoudre (ex. SIREN/SIRET)."></select>
            <span id="pid-hint" class="muted"></span></p>
       </div>
     </section>
@@ -51,7 +51,7 @@
       <div id="run-header">
         <span id="run-title" class="muted"></span>
         <span>
-          <select id="run-mode" title="Full : tout re-résoudre · Reprise : seulement les manquants · Refresh : manquants + périmés.">
+          <select id="run-mode">
             <option value="full">Full — tout résoudre</option>
             <option value="reprise">Reprise — seulement les manquants</option>
             <option value="reprise-retry">Reprise + re-tenter les échecs</option>
@@ -62,15 +62,16 @@
           <button id="btn-stop" class="hidden btn-danger">■ Stop</button>
         </span>
       </div>
+      <p id="run-mode-hint" class="field-hint"></p>
       <div id="cockpit" class="hidden">
         <div id="ring-block">
           <div id="ring"><div id="ring-center"><b id="ring-pct">0%</b><span id="ring-abs" class="muted"></span></div></div>
           <p id="ring-state" class="hidden">terminé</p>
           <p id="eta-line" title="Temps restant estimé d'après le débit courant."><span id="eta-label">ETA</span> <b id="eta">—</b></p>
-          <p id="avg-rate" class="muted hidden" title="Adressages résolus par seconde en moyenne sur la durée active du run."></p>
+          <p id="avg-rate" class="muted hidden" title="Adressages résolus par seconde en moyenne sur la durée active."></p>
         </div>
         <div id="tiles">
-          <div class="tile" title="Présents dans l'annuaire Peppol — % des adressages résolus dans l'anneau ; à côté, les absolus en adressages et en lignes de fichier (avec le % des lignes couvertes).">🎯 Dans Peppol
+          <div class="tile" title="Présents dans l'annuaire Peppol — % des résolus ; absolus en adressages et en lignes de fichier.">🎯 Dans Peppol
             <div class="mini-ring-row">
               <div class="mini-ring" id="ring-exists"><div class="mini-ring-center"><b id="t-exists">—</b></div></div>
               <div class="ring-abs">
@@ -79,7 +80,7 @@
               </div>
             </div>
           </div>
-          <div class="tile" title="Éligibles à la facturation électronique française — France Invoice UBL Extension (ex-CTC-FR). % des adressages résolus dans l'anneau ; à côté, les absolus en adressages et en lignes de fichier (avec le % des lignes couvertes).">🇫🇷 France Invoice UBL Extension
+          <div class="tile" title="Éligibles à la facturation électronique française (France Invoice UBL Extension, ex-CTC-FR).">🇫🇷 France Invoice UBL Extension
             <div class="mini-ring-row">
               <div class="mini-ring" id="ring-ctc"><div class="mini-ring-center"><b id="t-ctc">—</b></div></div>
               <div class="ring-abs">
@@ -87,19 +88,19 @@
                 <div><b id="t-ctc-lines">—</b> <span class="muted">lignes</span> <span class="muted" id="t-ctc-lines-pct"></span></div>
               </div>
             </div>
-            <p class="ctc-gap muted" title="Présents dans l'annuaire Peppol mais sans l'extension France Invoice UBL : le reste à convertir.">dans Peppol sans l'extension : <b id="t-ctc-gap">—</b> adr · <b id="t-ctc-gap-lines">—</b> lignes</p>
+            <p class="ctc-gap muted" title="Dans Peppol mais sans l'extension : le reste à convertir.">dans Peppol sans l'extension : <b id="t-ctc-gap">—</b> adr · <b id="t-ctc-gap-lines">—</b> lignes</p>
           </div>
-          <div class="tile" title="Adressages résolus par seconde au fil du run (courbe bleue) ; req/s : requêtes API.">Débit<div id="rate-spark" class="spark"></div><div id="t-rate" class="hbar-legend">—</div></div>
-          <div class="tile" title="Concurrence effective / plafond configuré — l'AIMD réduit après un 429 et remonte progressivement. Échecs = adressages en erreur définitive.">Concurrence / échecs<br><b id="t-misc">—</b></div>
-          <div class="tile tile-span2" title="Motifs d'échec les plus fréquents : erreurs item renvoyées par l'API dans les réponses 200, et échecs HTTP définitifs (HTTP 4xx).">Top erreurs<div id="top-errors"></div></div>
+          <div class="tile" title="Adressages résolus par seconde (courbe) ; req/s : requêtes API.">Débit<div id="rate-spark" class="spark"></div><div id="t-rate" class="hbar-legend">—</div></div>
+          <div class="tile" title="Concurrence effective / plafond — s'adapte aux 429 (AIMD) · échecs définitifs.">Concurrence / échecs<br><b id="t-misc">—</b></div>
+          <div class="tile tile-span2" title="Motifs d'échec les plus fréquents.">Top erreurs<div id="top-errors"></div></div>
         </div>
         <div class="wide">
-          <div class="tile" title="Appels API par famille de code HTTP — survoler chaque ligne pour l'explication et le détail des codes.">Codes HTTP<div id="http-hist"></div></div>
-          <div class="tile" title="Temps de réponse API au fil du run — p50 en vert, p90 en ambre. Percentiles cumulés en légende.">Latence (ms)<div id="lat-spark" class="spark"></div><div id="latency" class="hbar-legend"></div></div>
-          <div class="tile" title="Répartition des appels API par tranche de latence (ms), cumulée depuis le début du run.">Distribution (ms)<div id="lat-hist"></div></div>
+          <div class="tile" title="Appels API par famille de code — survoler une ligne pour le détail.">Codes HTTP<div id="http-hist"></div></div>
+          <div class="tile" title="Temps de réponse API — p50 en vert, p90 en ambre.">Latence (ms)<div id="lat-spark" class="spark"></div><div id="latency" class="hbar-legend"></div></div>
+          <div class="tile" title="Appels par tranche de latence, cumulés depuis le début du run.">Distribution (ms)<div id="lat-hist"></div></div>
         </div>
         <div class="wide">
-          <div class="tile" title="PA découvertes, classées par représentativité — rang 1 en haut à gauche, de haut en bas puis de gauche à droite : rang, nom, adressages routés vers cette PA, % du total d'adressages uniques.">PA<div id="pa-grid"></div></div>
+          <div class="tile" title="PA découvertes, classées par nombre d'adressages routés.">PA<div id="pa-grid"></div></div>
         </div>
       </div>
       <p id="run-result" class="hidden"></p>
@@ -124,19 +125,19 @@
         <button id="btn-settings-close" class="btn-ghost" title="Fermer — les réglages sont appliqués.">✕</button>
       </div>
       <fieldset><legend>Fichier de sortie</legend>
-        <p><label for="out-dir" title="Répertoire où écrire le fichier enrichi. Le nom est celui du fichier d'entrée suivi du suffixe.">Répertoire</label>
-           <input id="out-dir" size="42" placeholder="vide = dossier du fichier d'entrée" title="Répertoire où écrire le fichier enrichi. Le nom est celui du fichier d'entrée suivi du suffixe."> <button id="btn-out-browse">…</button></p>
-        <p><label for="out-suffix" title="Ajouté au nom du fichier d'entrée : clients.csv → clients_enrichi.csv.">Suffixe</label>
-           <input id="out-suffix" size="12" value="_enrichi" title="Ajouté au nom du fichier d'entrée : clients.csv → clients_enrichi.csv.">
-           <label title="Ajoute la date/heure au nom du fichier pour ne jamais écraser une sortie précédente."><input type="checkbox" id="out-stamp" checked> Suffixer avec la date/heure</label></p>
-        <p><label for="out-encoding" title="Le défaut garantit les accents dans Excel FR. En Windows-1252, les caractères non représentables deviennent « ? ».">Encodage</label>
-           <select id="out-encoding" title="Le défaut garantit les accents dans Excel FR. En Windows-1252, les caractères non représentables deviennent « ? ».">
+        <p><label for="out-dir">Répertoire</label>
+           <input id="out-dir" size="42" placeholder="vide = dossier du fichier d'entrée"> <button id="btn-out-browse">…</button></p>
+        <p><label for="out-suffix">Suffixe</label>
+           <input id="out-suffix" size="12" value="_enrichi" title="clients.csv → clients_enrichi.csv.">
+           <label title="Évite d'écraser une sortie précédente."><input type="checkbox" id="out-stamp" checked> Suffixer avec la date/heure</label></p>
+        <p><label for="out-encoding">Encodage</label>
+           <select id="out-encoding" title="UTF-8 avec BOM garantit les accents dans Excel FR.">
              <option value="utf-8-bom">UTF-8 avec BOM (Excel FR)</option>
              <option value="utf-8">UTF-8 sans BOM</option>
              <option value="windows-1252">Windows-1252</option>
            </select>
-           <label for="out-sep" title="Séparateur du fichier de sortie. « Identique à l'entrée » reprend celui détecté à l'étape 1.">Séparateur</label>
-           <select id="out-sep" title="Séparateur du fichier de sortie. « Identique à l'entrée » reprend celui détecté à l'étape 1.">
+           <label for="out-sep">Séparateur</label>
+           <select id="out-sep" title="« Identique à l'entrée » reprend le séparateur détecté à l'étape 1.">
              <option value="auto">Identique à l'entrée</option>
              <option value=";">Point-virgule ;</option>
              <option value=",">Virgule ,</option>
@@ -145,29 +146,31 @@
            </select></p>
       </fieldset>
       <fieldset><legend>API</legend>
-        <p><label for="api-mode" title="API Popaul : résolution en batch via le serveur (clé requise). Directe : SML + SMP interrogés depuis ce poste, sans clé ni serveur — un adressage à la fois.">Résolution</label>
-           <select id="api-mode" title="API Popaul : résolution en batch via le serveur (clé requise). Directe : SML + SMP interrogés depuis ce poste, sans clé ni serveur — un adressage à la fois.">
+        <p><label for="api-mode">Résolution</label>
+           <select id="api-mode">
              <option value="api">API Popaul (batch)</option>
              <option value="direct">Directe — SML + SMP, sans clé</option>
            </select></p>
+        <p id="api-mode-hint" class="field-hint"></p>
         <div id="api-fields">
-          <p><label for="api-url" title="URL du service de résolution Peppol.">URL</label> <input id="api-url" size="40" value="https://peppol.gavini.cloud" title="URL du service de résolution Peppol.">
-             <label for="api-key" title="Clé d'authentification du service — bouton Tester pour la vérifier.">Clé</label> <input id="api-key" type="password" size="26" title="Clé d'authentification du service — bouton Tester pour la vérifier.">
-             <button id="btn-test-api" title="Envoie une requête de test pour vérifier l'URL, la clé et le proxy.">Tester</button> <span id="api-test-result"></span></p>
-          <p><label for="api-conc" title="Nombre de requêtes simultanées vers l'API. « Calibrer » trouve la valeur optimale.">Concurrence</label> <input id="api-conc" type="number" value="8" min="1" max="256" title="Nombre de requêtes simultanées vers l'API. « Calibrer » trouve la valeur optimale.">
-             <label for="api-batch" title="Nombre d'adressages envoyés par requête API (500 max).">Taille de paquet</label> <input id="api-batch" type="number" value="50" min="1" max="500" title="Nombre d'adressages envoyés par requête API (500 max).">
-             <button id="btn-calibrate" title="Mesure le débit à plusieurs niveaux de concurrence et propose la meilleure — « Appliquer » l'écrit dans les réglages. Prérequis : une clé API et un fichier d'entrée (l'échantillon vient de vos adressages). Consomme du quota.">Calibrer</button> <span id="calibrate-result"></span></p>
+          <p><label for="api-url">URL</label> <input id="api-url" size="40" value="https://peppol.gavini.cloud">
+             <label for="api-key">Clé</label> <input id="api-key" type="password" size="26" title="Clé d'API du service — vérifiable avec « Tester ».">
+             <button id="btn-test-api" title="Vérifie l'URL, la clé et le proxy.">Tester</button> <span id="api-test-result"></span></p>
+          <p><label for="api-conc">Concurrence</label> <input id="api-conc" type="number" value="8" min="1" max="256" title="Requêtes simultanées — « Calibrer » trouve l'optimum.">
+             <label for="api-batch">Taille de paquet</label> <input id="api-batch" type="number" value="50" min="1" max="500" title="Adressages par requête (max 500).">
+             <button id="btn-calibrate" title="Mesure le débit et propose la meilleure concurrence.">Calibrer</button> <span id="calibrate-result"></span></p>
+          <p class="field-hint">La calibration teste vos adressages contre l'API réelle : clé et fichier d'entrée requis, quota consommé.</p>
         </div>
         <div id="direct-fields" class="hidden">
-          <p><label for="dns-resolver" title="Vide : DNS système. Une IP (ex. 8.8.8.8) : DNS classique sur ce serveur — évite le rate-limiting du résolveur du FAI sur les gros volumes. Une URL https://… : DoH (RFC 8484), passe par le proxy.">Résolveur (optionnel)</label>
-             <input id="dns-resolver" size="20" placeholder="vide = système · IP · https://…" title="Vide : DNS système. Une IP (ex. 8.8.8.8) : DNS classique sur ce serveur — évite le rate-limiting du résolveur du FAI sur les gros volumes. Une URL https://… : DoH (RFC 8484), passe par le proxy.">
-             <label for="dns-fallback" title="IP de secours du DNS classique : utilisée seulement si le principal ne répond pas ou refuse (failover, pas de répartition de charge). Sans objet en DNS système ou DoH. Vide : pas de secours.">Secours</label>
-             <input id="dns-fallback" size="12" value="1.1.1.1" title="IP de secours du DNS classique : utilisée seulement si le principal ne répond pas ou refuse (failover, pas de répartition de charge). Sans objet en DNS système ou DoH. Vide : pas de secours.">
-             <label for="dns-doh" title="Utiliser l'IP saisie en DoH : elle devient https://<ip>/dns-query à l'enregistrement (fonctionne avec 1.1.1.1, 8.8.8.8… — le certificat du serveur doit couvrir l'IP). Sans objet si le champ contient déjà une URL."><input type="checkbox" id="dns-doh"> DoH</label></p>
-          <p><label for="direct-conc" title="Nombre de résolutions simultanées (workers SML + SMP).">Concurrence</label>
-             <input id="direct-conc" type="number" value="8" min="1" max="256" title="Nombre de résolutions simultanées (workers SML + SMP).">
-             <label for="dns-conc" title="Lookups DNS simultanés, indépendant de la concurrence des workers. 32 ≈ 1 250 req/s, sous le rate-limit des résolveurs publics (~1 500 req/s par IP chez Google) — monter au-delà expose à des timeouts et ne fait rien gagner (le débit d'un run est dominé par les requêtes SMP).">Rafale DNS</label>
-             <input id="dns-conc" type="number" value="32" min="1" max="256" title="Lookups DNS simultanés, indépendant de la concurrence des workers. 32 ≈ 1 250 req/s, sous le rate-limit des résolveurs publics (~1 500 req/s par IP chez Google) — monter au-delà expose à des timeouts et ne fait rien gagner (le débit d'un run est dominé par les requêtes SMP)."></p>
+          <p><label for="dns-resolver">Résolveur (optionnel)</label>
+             <input id="dns-resolver" size="20" placeholder="vide = système · IP · https://…" title="Vide : DNS système · IP : ce serveur · https://… : DoH, passe par le proxy.">
+             <label for="dns-fallback">Secours</label>
+             <input id="dns-fallback" size="12" value="1.1.1.1" title="IP de secours si le résolveur principal ne répond plus (failover).">
+             <label for="dns-doh" title="Transforme l'IP saisie en https://<ip>/dns-query à l'enregistrement."><input type="checkbox" id="dns-doh"> DoH</label></p>
+          <p><label for="direct-conc">Concurrence</label>
+             <input id="direct-conc" type="number" value="8" min="1" max="256" title="Résolutions simultanées (workers SML + SMP).">
+             <label for="dns-conc">Rafale DNS</label>
+             <input id="dns-conc" type="number" value="32" min="1" max="256" title="Lookups DNS simultanés — 32 convient ; au-delà, timeouts sans gain."></p>
         </div>
       </fieldset>
       <!-- La case vit dans la légende : les descendants de la première legend
@@ -177,8 +180,8 @@
            <span class="muted">identifiants demandés au lancement, jamais enregistrés</span></p>
       </fieldset>
       <fieldset><legend>Divers</legend>
-        <p><label for="api-refresh" title="Âge au-delà duquel un résultat en base est considéré périmé (utilisé par le mode Refresh).">Ancienneté refresh (jours)</label>
-           <input id="api-refresh" type="number" value="30" min="1" title="Âge au-delà duquel un résultat en base est considéré périmé (utilisé par le mode Refresh)."></p>
+        <p><label for="api-refresh">Ancienneté refresh (jours)</label>
+           <input id="api-refresh" type="number" value="30" min="1" title="Au-delà de cet âge, le mode Refresh re-résout l'adressage."></p>
       </fieldset>
       <p id="settings-error" class="hidden"></p>
     </section>

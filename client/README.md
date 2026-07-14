@@ -43,7 +43,10 @@ règlent dans le panneau **⚙ Réglages** (pas une étape du wizard).
   sémaphore : le SML autoritaire fait du Response Rate Limiting, et un
   NXDOMAIN sous rafale serait un **faux « absent de Peppol »** — seul un
   NXDOMAIN authentique vaut `exists=false`, toute erreur transitoire reste une
-  erreur d'item.
+  erreur d'item. Le réglage « Rafale DNS » (32 lookups simultanés par défaut)
+  correspond à ≈ 1 250 req/s, sous le rate-limit des résolveurs publics
+  (~1 500 req/s par IP chez Google) ; monter au-delà expose à des timeouts
+  sans rien gagner, le débit d'un run étant dominé par les requêtes SMP.
 
 ## Persistance
 
