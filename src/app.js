@@ -25,7 +25,7 @@ const state = {
   preview: null, // {headers, rows, delimiter, encoding, suggested_pid_column}
   config: {
     version: 1,
-    api: { url: "https://peppol.gavini.cloud", key: "", mode: "api", doh_url: null,
+    api: { url: "https://peppol.gavini.cloud", key: "", mode: "api", resolver: null,
            batch_size: 50, concurrency: 8, proxy: null, refresh_days: 30 },
     input: { path: "", delimiter: ";", encoding: "utf-8", pid_column: "" },
     output: { path: "", timestamp_suffix: true, encoding: "utf-8-bom",
@@ -190,7 +190,13 @@ function syncOutputForm() {
   c.api.url = $("api-url").value.trim();
   c.api.key = $("api-key").value.trim();
   c.api.mode = $("api-mode").value;
-  c.api.doh_url = $("doh-url").value.trim() || null;
+  // Case DoH = aide de saisie : une IP cochée DoH est enregistrée sous sa
+  // forme canonique https://<ip>/dns-query (l'interprétation du champ —
+  // vide/IP/URL — reste côté Rust, dns_from_spec).
+  let resolver = $("dns-resolver").value.trim();
+  if (resolver && $("dns-doh").checked && !resolver.startsWith("https://"))
+    resolver = `https://${resolver}/dns-query`;
+  c.api.resolver = resolver || null;
   const proxyUrl = $("proxy-url").value.trim();
   c.api.proxy = proxyUrl ? { url: proxyUrl } : null;
   c.api.concurrency = +$("api-conc").value || 8;
@@ -206,7 +212,8 @@ function fillOutputForm() {
   $("api-url").value = c.api.url;
   $("api-key").value = c.api.key;
   $("api-mode").value = c.api.mode || "api";
-  $("doh-url").value = c.api.doh_url || "";
+  $("dns-resolver").value = c.api.resolver || "";
+  $("dns-doh").checked = (c.api.resolver || "").startsWith("https://");
   $("proxy-url").value = c.api.proxy ? c.api.proxy.url : "";
   $("api-conc").value = c.api.concurrency;
   $("api-batch").value = c.api.batch_size;
@@ -220,7 +227,8 @@ function syncModeUi() {
   const direct = $("api-mode").value === "direct";
   for (const id of ["api-url", "api-key", "btn-test-api", "api-batch", "btn-calibrate"])
     $(id).disabled = direct;
-  $("doh-url").disabled = !direct;
+  $("dns-resolver").disabled = !direct;
+  $("dns-doh").disabled = !direct;
   if (direct) $("api-test-result").textContent = "";
 }
 $("api-mode").addEventListener("change", syncModeUi);

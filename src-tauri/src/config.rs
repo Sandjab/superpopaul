@@ -20,10 +20,13 @@ pub struct ApiConfig {
     /// et non écrit en mode Api (les configs existantes gardent leur forme).
     #[serde(default, skip_serializing_if = "ApiMode::is_api")]
     pub mode: ApiMode,
-    /// Résolveur DoH (RFC 8484) pour le mode direct — réseaux d'entreprise
-    /// qui bloquent l'UDP/53. Vide : DNS système.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub doh_url: Option<String>,
+    /// Résolveur DNS du mode direct. Vide : DNS système. Une IP : DNS
+    /// classique (UDP/53) sur ce serveur. Une URL https : DoH (RFC 8484,
+    /// pour les réseaux d'entreprise qui bloquent l'UDP/53 — passe par le
+    /// proxy). Alias doh_url : nom du champ quand il n'acceptait que le DoH
+    /// (les YAML sauvegardés avant restent lisibles).
+    #[serde(default, alias = "doh_url", skip_serializing_if = "Option::is_none")]
+    pub resolver: Option<String>,
     pub batch_size: u32,
     pub concurrency: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -201,7 +204,7 @@ mod tests {
                 url: "https://peppol.example.org".into(),
                 key: "MA_CLE".into(),
                 mode: ApiMode::Api,
-                doh_url: None,
+                resolver: None,
                 batch_size: 50,
                 concurrency: 8,
                 proxy: Some(ProxyConfig {
@@ -262,20 +265,33 @@ mod tests {
     #[test]
     fn mode_api_par_defaut_et_direct_en_aller_retour() {
         // Un YAML d'avant le mode direct doit rester lisible : mode absent
-        // -> Api, et un YAML en mode Api n'écrit ni mode ni doh_url (les
+        // -> Api, et un YAML en mode Api n'écrit ni mode ni resolver (les
         // configs existantes ne changent pas de forme).
         let yaml = to_yaml(&config_exemple()).unwrap();
         assert!(!yaml.contains("mode:"));
-        assert!(!yaml.contains("doh_url:"));
+        assert!(!yaml.contains("resolver:"));
         let parsed = from_yaml(&yaml).unwrap();
         assert_eq!(parsed.api.mode, ApiMode::Api);
 
         let mut cfg = config_exemple();
         cfg.api.mode = ApiMode::Direct;
-        cfg.api.doh_url = Some("https://1.1.1.1/dns-query".into());
+        cfg.api.resolver = Some("https://1.1.1.1/dns-query".into());
         let parsed = from_yaml(&to_yaml(&cfg).unwrap()).unwrap();
         assert_eq!(parsed.api.mode, ApiMode::Direct);
-        assert_eq!(parsed.api.doh_url.as_deref(), Some("https://1.1.1.1/dns-query"));
+        assert_eq!(parsed.api.resolver.as_deref(), Some("https://1.1.1.1/dns-query"));
+    }
+
+    #[test]
+    fn doh_url_des_anciens_yaml_lu_comme_resolver() {
+        // Le champ s'appelait doh_url avant de se généraliser (IP ou URL) :
+        // un YAML sauvegardé avec l'ancien nom doit continuer à charger.
+        let mut cfg = config_exemple();
+        cfg.api.resolver = Some("https://1.1.1.1/dns-query".into());
+        let ancien = to_yaml(&cfg)
+            .unwrap()
+            .replace("resolver:", "doh_url:");
+        let parsed = from_yaml(&ancien).unwrap();
+        assert_eq!(parsed.api.resolver.as_deref(), Some("https://1.1.1.1/dns-query"));
     }
 
     #[test]

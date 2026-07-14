@@ -52,7 +52,7 @@ impl AppState {
         let proxy = cfg.api.proxy.as_ref().map(|p| p.url.as_str());
         match cfg.api.mode {
             ApiMode::Direct => {
-                ApiClient::new_direct(cfg.api.doh_url.as_deref(), proxy, creds.as_ref())
+                ApiClient::new_direct(cfg.api.resolver.as_deref(), proxy, creds.as_ref())
             }
             ApiMode::Api => ApiClient::new(&cfg.api.url, &cfg.api.key, proxy, creds.as_ref()),
         }

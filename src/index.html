@@ -73,8 +73,9 @@
              <option value="api">API Popaul (batch)</option>
              <option value="direct">Directe — SML + SMP, sans clé</option>
            </select>
-           <label for="doh-url" title="Mode direct uniquement : résolveur DNS-over-HTTPS (RFC 8484) pour les réseaux qui bloquent l'UDP/53 — passe par le proxy. Vide : DNS système.">DoH (optionnel)</label>
-           <input id="doh-url" size="32" placeholder="https://1.1.1.1/dns-query" title="Mode direct uniquement : résolveur DNS-over-HTTPS (RFC 8484) pour les réseaux qui bloquent l'UDP/53 — passe par le proxy. Vide : DNS système."></p>
+           <label for="dns-resolver" title="Mode direct uniquement. Vide : DNS système. Une IP (ex. 8.8.8.8) : DNS classique sur ce serveur — évite le rate-limiting du résolveur du FAI sur les gros volumes. Une URL https://… : DoH (RFC 8484), passe par le proxy.">Résolveur (optionnel)</label>
+           <input id="dns-resolver" size="24" placeholder="vide = système · IP · https://…" title="Mode direct uniquement. Vide : DNS système. Une IP (ex. 8.8.8.8) : DNS classique sur ce serveur — évite le rate-limiting du résolveur du FAI sur les gros volumes. Une URL https://… : DoH (RFC 8484), passe par le proxy.">
+           <label for="dns-doh" title="Utiliser l'IP saisie en DoH : elle devient https://<ip>/dns-query à l'enregistrement (fonctionne avec 1.1.1.1, 8.8.8.8… — le certificat du serveur doit couvrir l'IP). Sans objet si le champ contient déjà une URL."><input type="checkbox" id="dns-doh"> DoH</label></p>
         <p><label for="api-url" title="URL du service de résolution Peppol.">URL</label> <input id="api-url" size="40" value="https://peppol.gavini.cloud" title="URL du service de résolution Peppol.">
            <label for="api-key" title="Clé d'authentification du service — bouton Tester pour la vérifier.">Clé</label> <input id="api-key" type="password" size="26" title="Clé d'authentification du service — bouton Tester pour la vérifier.">
            <button id="btn-test-api" title="Envoie une requête de test pour vérifier l'URL, la clé et le proxy.">Tester</button> <span id="api-test-result"></span></p>

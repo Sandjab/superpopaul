@@ -105,6 +105,21 @@ impl Dns {
             .map_err(|e| format!("résolveur DNS système : {e}"))
     }
 
+    /// DNS classique (UDP/53, repli TCP) sur un serveur choisi — évite le
+    /// résolveur du FAI (rate-limiting sous rafale, constaté 2026-07-14 :
+    /// 8.8.8.8 tient 1 500 req/s là où le résolveur Free refuse ~30 %).
+    /// Aucun search domain : la config est construite sans, et les requêtes
+    /// partent de toute façon en FQDN absolu.
+    pub fn udp(ip: std::net::IpAddr) -> Self {
+        use hickory_resolver::config::{NameServerConfigGroup, ResolverConfig, ResolverOpts};
+        let servers = NameServerConfigGroup::from_ips_clear(&[ip], 53, true);
+        let config = ResolverConfig::from_parts(None, Vec::new(), servers);
+        Dns::System(hickory_resolver::TokioAsyncResolver::tokio(
+            config,
+            ResolverOpts::default(),
+        ))
+    }
+
     pub fn doh(url: &str, http: reqwest::Client) -> Self {
         Dns::Doh {
             http,
@@ -258,11 +273,30 @@ pub struct DirectClient {
     sml_zone: String,
 }
 
+/// Résolveur depuis la config : vide = DNS système ; une IP = DNS classique
+/// sur ce serveur ; une URL https = DoH (RFC 8484). Tout le reste est une
+/// erreur explicite — jamais de repli silencieux sur le DNS système.
+pub fn dns_from_spec(spec: Option<&str>, http: &reqwest::Client) -> Result<Dns, String> {
+    let Some(spec) = spec.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Dns::system();
+    };
+    if spec.starts_with("https://") {
+        return Ok(Dns::doh(spec, http.clone()));
+    }
+    match spec.parse::<std::net::IpAddr>() {
+        Ok(ip) => Ok(Dns::udp(ip)),
+        Err(_) => Err(format!(
+            "résolveur « {spec} » : attendu une IP (DNS classique), \
+             une URL https://… (DoH), ou vide (DNS système)"
+        )),
+    }
+}
+
 impl DirectClient {
-    /// `doh_url` : résolution NAPTR via DoH (réseaux qui bloquent l'UDP/53) ;
-    /// sinon DNS système. Le proxy s'applique aux requêtes SMP et au DoH.
+    /// `resolver` : voir `dns_from_spec`. Le proxy s'applique aux requêtes
+    /// SMP et au DoH (le DNS classique, lui, part en direct sur UDP/53).
     pub fn new(
-        doh_url: Option<&str>,
+        resolver: Option<&str>,
         proxy_url: Option<&str>,
         creds: Option<&ProxyCreds>,
     ) -> Result<Self, String> {
@@ -277,10 +311,7 @@ impl DirectClient {
             b = b.proxy(p);
         }
         let http = b.build().map_err(|e| e.to_string())?;
-        let dns = match doh_url {
-            Some(u) => Dns::doh(u, http.clone()),
-            None => Dns::system()?,
-        };
+        let dns = dns_from_spec(resolver, &http)?;
         Ok(DirectClient {
             http,
             dns: Arc::new(dns),
@@ -559,6 +590,33 @@ mod tests {
     }
 
     #[test]
+    fn resolver_spec_vide_ip_url_et_erreur() {
+        let http = reqwest::Client::new();
+        // Vide ou absent : DNS système.
+        assert!(matches!(dns_from_spec(None, &http).unwrap(), Dns::System(_)));
+        assert!(matches!(dns_from_spec(Some("  "), &http).unwrap(), Dns::System(_)));
+        // Une IP (v4 ou v6) : DNS classique sur ce serveur.
+        assert!(matches!(
+            dns_from_spec(Some("8.8.8.8"), &http).unwrap(),
+            Dns::System(_)
+        ));
+        assert!(matches!(
+            dns_from_spec(Some("2001:4860:4860::8888"), &http).unwrap(),
+            Dns::System(_)
+        ));
+        // Une URL https : DoH, URL conservée telle quelle.
+        match dns_from_spec(Some("https://1.1.1.1/dns-query"), &http).unwrap() {
+            Dns::Doh { url, .. } => assert_eq!(url, "https://1.1.1.1/dns-query"),
+            _ => panic!("attendu Dns::Doh"),
+        }
+        // Tout le reste : erreur explicite (jamais un repli silencieux).
+        match dns_from_spec(Some("dns.google"), &http) {
+            Err(err) => assert!(err.contains("dns.google"), "message : {err}"),
+            Ok(_) => panic!("un hostname nu doit être refusé"),
+        }
+    }
+
+    #[test]
     fn naptr_extrait_l_url_meta_smp() {
         let recs = vec![
             ("autre".to_string(), "!.*!http://mauvais!".to_string()),
@@ -687,6 +745,20 @@ mod tests {
         assert_eq!(it.supports_extended_ctc_fr, Some(true), "item : {it:?}");
         assert!(it.pa.is_some(), "PA attendue, item : {it:?}");
         assert!(stats.latency_ms > 0);
+    }
+
+    /// Même smoke test via un DNS public choisi par IP — le chemin
+    /// « résolveur custom » (celui qui évite le rate-limiting du FAI).
+    #[tokio::test]
+    #[ignore = "réseau réel (DNS public + SML prod)"]
+    async fn resolution_reelle_via_dns_choisi() {
+        let c = DirectClient::new(Some("8.8.8.8"), None, None).unwrap();
+        let (items, _) = c
+            .resolve_batch(&["iso6523-actorid-upis::0225:000122308".to_string()])
+            .await
+            .unwrap();
+        assert_eq!(items[0].exists, Some(true), "item : {:?}", items[0]);
+        assert!(items[0].pa.is_some());
     }
 
     /// Même smoke test via DoH Cloudflare — le chemin « réseau d'entreprise ».

@@ -128,14 +128,15 @@ impl ApiClient {
         })
     }
 
-    /// Client en résolution directe SML+SMP (sans API ni clé).
+    /// Client en résolution directe SML+SMP (sans API ni clé). `resolver` :
+    /// vide = DNS système, IP = DNS classique, URL https = DoH.
     pub fn new_direct(
-        doh_url: Option<&str>,
+        resolver: Option<&str>,
         proxy_url: Option<&str>,
         creds: Option<&ProxyCreds>,
     ) -> Result<Self, String> {
         Ok(ApiClient {
-            inner: Inner::Direct(crate::direct::DirectClient::new(doh_url, proxy_url, creds)?),
+            inner: Inner::Direct(crate::direct::DirectClient::new(resolver, proxy_url, creds)?),
         })
     }
 
