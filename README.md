@@ -3,7 +3,8 @@
 # <img src="client/src/logo.png" width="32" alt="" align="top"> Super Popaul
 
 Résolution Peppol en masse : un CSV d'adressages en entrée, un CSV enrichi en
-sortie (existe dans Peppol, code PA, pays PA, support EXTENDED-CTC-FR).
+sortie (présence dans Peppol, code, nom et pays de la PA, prise en charge
+d'EXTENDED-CTC-FR).
 Le repo contient tout l'écosystème — le serveur d'API et ses clients :
 
 ```
@@ -31,7 +32,7 @@ maintenue par tests miroir.
   d'entrée (chemin relatif au YAML), colonne des adressages, colonnes de
   sortie. Ni clé API ni réglages ; les anciennes configs complètes restent
   chargeables (seul le profil en est repris).
-- **Cockpit temps réel** : ring de progression + ETA, % Peppol, % CTC-FR,
+- **Cockpit temps réel** : anneau de progression + ETA, % Peppol, % CTC-FR,
   débits (req/s et adressages/s), codes HTTP, latences p50/p90/p99.
 - **Pause/reprise** à chaud et entre sessions (détection de run incomplet).
 - Erreurs intelligentes : 401 → suspension + ressaisie de clé ; 429 → backoff
@@ -46,7 +47,8 @@ cargo tauri build   # binaire de distribution
 
 **Distribution** : binaires **non signés** — la procédure d'ouverture
 (Gatekeeper macOS, SmartScreen Windows) est détaillée dans
-`NOTICE-OUVERTURE.md`. macOS : build local. Windows : GitHub Actions
+[`NOTICE-OUVERTURE.md`](NOTICE-OUVERTURE.md). macOS : build local.
+Windows : GitHub Actions
 (`.github/workflows/windows.yml`, déclenché par les tags `v*`).
 
 ## `server/` — `peppol_api.py`, l'API REST ([README détaillé](server/README.md))
@@ -102,7 +104,7 @@ résolveur : `--proxy`, `--ca-bundle`, `--insecure`, `--dns-server`, `--doh`.
 
 ## `cli/` — `popaul.py` / `popaul.ps1`, clients batch ([README détaillé](cli/README.md))
 
-Client léger (stdlib pure) qui résout une liste d'adressages par fournées via
+Client léger (stdlib pure) qui résout une liste d'adressages via
 `POST /resolve/batch` et écrit un CSV. Découpe en fournées (50 par défaut,
 ≤ 500 côté serveur), gère la clé
 d'API (`--key` ou `PEPPOL_API_KEY`), les **429** (retry + backoff,

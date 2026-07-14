@@ -1,7 +1,7 @@
 # Ouvrir Super Popaul (binaires non signés)
 
 ## macOS
-1. Dézippe `SuperPopaul-macos.zip`.
+1. Décompresse `SuperPopaul-macos.zip`.
 2. Double-clique sur `Super Popaul.app`. macOS refuse de l'ouvrir :
    c'est normal, l'app n'est pas signée. Ferme le message.
 3. Ouvre **Réglages Système** → **Confidentialité et sécurité**.
@@ -19,5 +19,5 @@ Réglages comme ci-dessus.)
 1. Lance `Super Popaul.exe`.
 2. Si SmartScreen affiche « Windows a protégé votre ordinateur » :
    **Informations complémentaires** → **Exécuter quand même**.
-3. Prérequis : WebView2 (préinstallé sur Windows 10/11 récents). Si l'app
-   ne démarre pas, installer « WebView2 Evergreen » depuis le site Microsoft.
+3. Prérequis : WebView2 (préinstallé sur les Windows 10/11 récents). Si l'app
+   ne démarre pas, installe « WebView2 Evergreen » depuis le site de Microsoft.

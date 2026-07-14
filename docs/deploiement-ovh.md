@@ -53,11 +53,11 @@ NVMe, 1 IPv4 + IPv6 incluses, trafic illimité, bande passante garantie de
 
 | Besoin | Choix | Pourquoi |
 |--------|-------|----------|
-| **API seule, usage perso/partenaires** | **VPS-1** | Déjà surdimensionné pour ce workload. Le bon rapport prix/marge. |
+| **API seule, usage perso/partenaires** | **VPS-1** | Déjà surdimensionné pour cette charge. Le bon rapport prix/marge. |
 | Marge confort (logs volumineux, batchs de résolution en masse, 2-3 autres petits services sur la même machine) | VPS-2 | Double la RAM et le disque pour ~2-3 €/mois de plus. |
 | Inutile ici | VPS-3+ | Aucun intérêt pour cette API : vous paieriez du CPU/RAM jamais utilisés. |
 
-**Reco : VPS-1** (ou VPS-2 si vous voulez de la place pour grandir).
+**En pratique : VPS-1** (ou VPS-2 si vous voulez de la place pour grandir).
 
 **Autres choix à la commande :**
 - **OS : Debian 12 « bookworm »** (Python 3.11, ce qui suit est écrit pour lui) ;
@@ -223,7 +223,8 @@ ufw enable
 ufw status verbose
 ```
 
-fail2ban (protège SSH du bruteforce) est actif par défaut après installation :
+fail2ban (protège SSH contre la force brute) est actif par défaut après
+installation :
 
 ```bash
 systemctl enable --now fail2ban

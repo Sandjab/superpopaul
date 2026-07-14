@@ -15,7 +15,7 @@ cargo tauri build   # binaire de distribution
 ## Le wizard en 3 étapes
 
 1. **Fichier** — dépôt (drag-drop) ou parcours d'un CSV/TXT. Le backend
-   détecte séparateur (`;` `,` tab `|`) et encodage (UTF-8 / windows-1252),
+   détecte le séparateur (`;` `,` tab `|`) et l'encodage (UTF-8 / windows-1252),
    affiche un aperçu et **suggère la colonne des adressages** (celle dont la
    majorité des valeurs ressemblent à un PID) ; l'utilisateur confirme.
 2. **Colonnes** — le tableau d'aperçu *est* l'outil de configuration :
@@ -101,7 +101,7 @@ Pilotées par le moteur (`resolver.rs`), typées dans `api.rs` :
   bouton « Réessayer maintenant »).
 - **4xx** autre → échec définitif de l'item, tracé en base, sans retry.
 
-## Calibrage
+## Calibration
 
 Depuis les réglages, un banc d'essai (`calibrate_api`) envoie des salves à
 concurrence croissante (1, 2, 4, …) et retient le palier optimal : arrêt au
@@ -118,17 +118,17 @@ annulable ; sans objet en mode direct (SMP distribués).
 | `config.rs` | réglages, profils, migrations d'alias legacy, écriture atomique |
 | `store.rs` | cache SQLite (`rusqlite` bundled, WAL, upsert par lots) |
 | `modes.rs` | calcul de la liste à résoudre (full / reprise / refresh) |
-| `csv_io.rs` | sniff séparateur+encodage, aperçu, lecture streaming, suggestion de colonne |
+| `csv_io.rs` | détection séparateur + encodage, aperçu, lecture streaming, suggestion de colonne |
 | `api.rs` | client HTTP : façade commune aux transports API et direct, typage des erreurs |
 | `direct.rs` | résolution SML+SMP directe (NAPTR, SMP, X.509), DNS système/IP/DoH |
-| `resolver.rs` | moteur de run : workers tokio, AIMD, circuit breaker, suspensions, calibrage |
+| `resolver.rs` | moteur de run : workers tokio, AIMD, circuit breaker, suspensions, calibration |
 | `telemetry.rs` | agrégation du Snapshot (latences, histogrammes, débits, ETA) |
 | `output.rs` | CSV enrichi : BOM, windows-1252, écriture atomique, refus d'écraser l'entrée |
 | `commands.rs` | les 19 commandes Tauri + `AppState` |
 
 ### Frontend (`src/`)
 
-- `app.js` — état global, wizard, réglages, profils, calibrage ; helper
+- `app.js` — état global, wizard, réglages, profils, calibration ; helper
   **`h()`** de construction DOM (**jamais d'innerHTML** avec des données
   dynamiques : un CSV est une entrée non fiable).
 - `columns.js` — étape 2 (drag-drop des colonnes).

@@ -3,7 +3,7 @@
 Clients **en ligne de commande** de l'API `server/peppol_api.py` : ils lisent
 une liste de Participant IDs (fichier texte, un par ligne, ou colonne d'un
 CSV), l'envoient par fournées à `POST /resolve/batch`, et écrivent un CSV :
-existe ? / code PA / nom PA / pays / support EXTENDED-CTC-FR.
+existe ? / code PA / nom PA / pays / prise en charge d'EXTENDED-CTC-FR.
 
 ## `popaul.py` — Python, stdlib pure
 

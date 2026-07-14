@@ -9,8 +9,8 @@ threadé, **sans framework** — seules dépendances : celles du résolveur
 Pour un adressage donné (Participant ID Peppol), l'endpoint principal répond
 simplement : **existe ?**, **code de la PA** (Common Name du certificat de
 l'Access Point), **nom de la PA** (Organization du certificat), **pays**, et
-**support du format UBL EXTENDED-CTC-FR** (facture structurée principale du
-PASR France §6.1.c).
+**prise en charge du format UBL EXTENDED-CTC-FR** (facture structurée
+principale du PASR France §6.1.c).
 
 ## Démarrage rapide
 
@@ -161,8 +161,9 @@ sortant ou ne propage pas les NAPTR externes).
 ## Déploiement VPS
 
 Script d'installation **idempotent** [`../deploy/install.sh`](../deploy/install.sh)
-qui automate durcissement → déploiement → systemd → nginx → TLS. Bootstrap en un
-seul `curl` (le script fait ensuite un **clone partiel + sparse** : seuls
+qui automatise toute la chaîne durcissement → déploiement → systemd → nginx →
+TLS. Bootstrap en un seul `curl` (le script fait ensuite un
+**clone partiel + sparse** : seuls
 `server/` et `deploy/` descendent, pas tout le dépôt) :
 
 ```bash
