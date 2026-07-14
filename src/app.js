@@ -25,7 +25,7 @@ const state = {
   preview: null, // {headers, rows, delimiter, encoding, suggested_pid_column}
   config: {
     version: 1,
-    api: { url: "https://peppol.gavini.cloud", key: "", mode: "api", resolver: null,
+    api: { url: "https://peppol.gavini.cloud", key: "", mode: "api", resolver: null, dns_concurrency: 32,
            batch_size: 50, concurrency: 8, proxy: null, refresh_days: 30 },
     input: { path: "", delimiter: ";", encoding: "utf-8", pid_column: "" },
     output: { path: "", timestamp_suffix: true, encoding: "utf-8-bom",
@@ -197,6 +197,7 @@ function syncOutputForm() {
   if (resolver && $("dns-doh").checked && !resolver.startsWith("https://"))
     resolver = `https://${resolver}/dns-query`;
   c.api.resolver = resolver || null;
+  c.api.dns_concurrency = +$("dns-conc").value || 32;
   const proxyUrl = $("proxy-url").value.trim();
   c.api.proxy = proxyUrl ? { url: proxyUrl } : null;
   c.api.concurrency = +$("api-conc").value || 8;
@@ -214,6 +215,7 @@ function fillOutputForm() {
   $("api-mode").value = c.api.mode || "api";
   $("dns-resolver").value = c.api.resolver || "";
   $("dns-doh").checked = (c.api.resolver || "").startsWith("https://");
+  $("dns-conc").value = c.api.dns_concurrency || 32;
   $("proxy-url").value = c.api.proxy ? c.api.proxy.url : "";
   $("api-conc").value = c.api.concurrency;
   $("api-batch").value = c.api.batch_size;
@@ -229,6 +231,7 @@ function syncModeUi() {
     $(id).disabled = direct;
   $("dns-resolver").disabled = !direct;
   $("dns-doh").disabled = !direct;
+  $("dns-conc").disabled = !direct;
   if (direct) $("api-test-result").textContent = "";
 }
 $("api-mode").addEventListener("change", syncModeUi);

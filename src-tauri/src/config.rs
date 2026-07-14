@@ -27,6 +27,13 @@ pub struct ApiConfig {
     /// (les YAML sauvegardés avant restent lisibles).
     #[serde(default, alias = "doh_url", skip_serializing_if = "Option::is_none")]
     pub resolver: Option<String>,
+    /// Mode direct : lookups DNS simultanés (indépendant de `concurrency`,
+    /// qui pilote les workers). 32 × ~25 ms ≈ 1 250 req/s, sous le
+    /// rate-limit des résolveurs publics (~1 500 QPS/IP chez Google) et
+    /// autant de sockets UDP en vol au maximum. Absent des YAML d'avant
+    /// l'option → 32, et non écrit à la valeur par défaut.
+    #[serde(default = "dns_concurrency_default", skip_serializing_if = "dns_concurrency_is_default")]
+    pub dns_concurrency: u32,
     pub batch_size: u32,
     pub concurrency: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -46,6 +53,14 @@ impl ApiMode {
     fn is_api(&self) -> bool {
         *self == ApiMode::Api
     }
+}
+
+fn dns_concurrency_default() -> u32 {
+    32
+}
+
+fn dns_concurrency_is_default(v: &u32) -> bool {
+    *v == dns_concurrency_default()
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -152,6 +167,9 @@ impl Config {
         if self.api.concurrency < 1 {
             return Err("concurrency doit être ≥ 1".into());
         }
+        if !(1..=256).contains(&self.api.dns_concurrency) {
+            return Err("dns_concurrency doit être entre 1 et 256".into());
+        }
         if self.output.columns.is_empty() {
             return Err("output.columns ne doit pas être vide".into());
         }
@@ -205,6 +223,7 @@ mod tests {
                 key: "MA_CLE".into(),
                 mode: ApiMode::Api,
                 resolver: None,
+                dns_concurrency: 32,
                 batch_size: 50,
                 concurrency: 8,
                 proxy: Some(ProxyConfig {
@@ -292,6 +311,31 @@ mod tests {
             .replace("resolver:", "doh_url:");
         let parsed = from_yaml(&ancien).unwrap();
         assert_eq!(parsed.api.resolver.as_deref(), Some("https://1.1.1.1/dns-query"));
+    }
+
+    #[test]
+    fn dns_concurrency_defaut_32_et_absent_du_yaml_par_defaut() {
+        // Un YAML d'avant l'option doit charger (défaut 32), et un YAML à
+        // la valeur par défaut ne change pas de forme (comme mode/resolver).
+        let yaml = to_yaml(&config_exemple()).unwrap();
+        assert!(!yaml.contains("dns_concurrency:"));
+        assert_eq!(from_yaml(&yaml).unwrap().api.dns_concurrency, 32);
+
+        let mut cfg = config_exemple();
+        cfg.api.dns_concurrency = 16;
+        let parsed = from_yaml(&to_yaml(&cfg).unwrap()).unwrap();
+        assert_eq!(parsed.api.dns_concurrency, 16);
+    }
+
+    #[test]
+    fn validate_rejette_dns_concurrency_hors_bornes() {
+        let mut cfg = config_exemple();
+        cfg.api.dns_concurrency = 0;
+        assert!(cfg.validate().is_err());
+        cfg.api.dns_concurrency = 257;
+        assert!(cfg.validate().is_err());
+        cfg.api.dns_concurrency = 256;
+        assert!(cfg.validate().is_ok());
     }
 
     #[test]
