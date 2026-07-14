@@ -139,3 +139,25 @@ function renderOutPreview() {
   // canonique au render et un tri manuel serait défait au re-render suivant.
   sortZone = new Sortable($("col-zone"), { ...common, group: "columns", sort: false });
 }
+
+// Raccourci sans drag : double-clic sur un en-tête = écarter la colonne,
+// double-clic sur une chip = la réintégrer en dernière position. Délégation
+// sur les conteneurs (ils survivent aux re-renders), même source de vérité
+// (columns → renderOutPreview) et même garde « minimum 1 colonne » que le
+// pull du drag.
+$("out-preview").addEventListener("dblclick", (e) => {
+  const th = e.target.closest("th[data-key]");
+  if (!th) return;
+  const cols = state.config.output.columns;
+  if (cols.length <= 1) return;
+  const i = cols.findIndex((c) => colKey(c) === th.dataset.key);
+  if (i < 0) return;
+  cols.splice(i, 1);
+  renderOutPreview();
+});
+$("col-zone").addEventListener("dblclick", (e) => {
+  const chip = e.target.closest(".chip[data-key]");
+  if (!chip) return;
+  state.config.output.columns.push(specFromKey(chip.dataset.key));
+  renderOutPreview();
+});
