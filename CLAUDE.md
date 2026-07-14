@@ -1,8 +1,9 @@
-# Super Popaul — conventions du sous-projet
+# Super Popaul — conventions du projet
 
-- Sous-projet **autonome** : ne dépend d'aucun module Python du repo parent.
-  La parité de comportement avec `popaul.py` (canonicalisation, format API)
-  est vérifiée par tests, pas par import.
+- Projet **indépendant**, issu du monorepo peppolstat (split du 2026-07-14).
+  La parité stricte avec le client CLI `popaul.py` est abandonnée : la
+  canonicalisation et le format API évoluent ici librement, couverts par
+  les tests Rust existants (`pid`, `api`).
 - Rust : modules étanches (`pid`, `config`, `store`, `modes`, `csv_io`, `api`,
   `telemetry`, `resolver`, `output`, `commands`). Toute logique métier est
   testable sans UI (`cargo test` dans `src-tauri/`).
