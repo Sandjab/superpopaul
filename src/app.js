@@ -369,6 +369,82 @@ $("btn-test-api").addEventListener("click", async () => {
   }
 });
 
+// --- Banc d'essai du calibrage : une colonne par palier, hauteurs re-échelonnées
+// sur le meilleur débit vu (le backend n'envoie que des adr/s absolus).
+const bench = { cols: new Map(), max: 0, steps: [] };
+
+function benchReset() {
+  $("calibrate-bench").replaceChildren();
+  bench.cols.clear();
+  bench.max = 0;
+  bench.steps = [];
+  $("calibrate-bench").classList.remove("hidden");
+}
+
+function benchRescale() {
+  for (const { bar } of bench.cols.values()) {
+    const v = Number(bar.dataset.adr || 0);
+    if (v > 0 && bench.max > 0)
+      bar.style.height = `${Math.max(4, Math.round((v / bench.max) * 52))}px`;
+  }
+}
+
+listen("calibrate-step", (e) => {
+  const s = e.payload;
+  bench.steps.push(s);
+  if (s.status === "measuring") {
+    const val = h("span", { class: "cal-val" }, "");
+    const bar = h("div", { class: "cal-bar measuring" });
+    const col = h("div", { class: "cal-col" }, val, bar,
+      h("span", { class: "cal-lab" }, String(s.level)));
+    bench.cols.set(s.level, { col, bar, val });
+    $("calibrate-bench").append(col);
+    return;
+  }
+  const entry = bench.cols.get(s.level);
+  if (!entry) return;
+  entry.bar.classList.remove("measuring");
+  entry.bar.dataset.adr = String(s.addr_per_s);
+  entry.val.textContent = String(Math.round(s.addr_per_s));
+  if (s.addr_per_s > bench.max) bench.max = s.addr_per_s;
+  if (s.status === "retained") {
+    // Le vert bascule : l'ancien meilleur redevient gris.
+    for (const { col, bar } of bench.cols.values()) {
+      col.classList.remove("win");
+      bar.classList.remove("win");
+    }
+    entry.col.classList.add("win");
+    entry.bar.classList.add("win");
+  } else if (s.status === "rejected") {
+    entry.col.classList.add("reject");
+    entry.bar.classList.add("reject");
+  } else if (s.status === "rate_limited") {
+    entry.col.classList.add("ratelimited");
+    entry.bar.classList.add("ratelimited");
+  }
+  benchRescale();
+});
+
+/** Raison d'arrêt pour le verdict texte — formatage de présentation uniquement. */
+function benchStopReason(r) {
+  const last = bench.steps[bench.steps.length - 1];
+  if (!last) return r.rate_limited ? " (clé rate-limitée)" : "";
+  if (last.status === "rate_limited") return ` (${last.level} : rate-limité, arrêt)`;
+  if (last.status === "rejected") {
+    const gain = r.addr_per_s > 0
+      ? Math.round((last.addr_per_s / r.addr_per_s - 1) * 100) : 0;
+    return ` (${last.level} : ${gain >= 0 ? "+" : ""}${gain} % < 15 %, arrêt)`;
+  }
+  return ""; // arrêt par plafond : rien à expliquer
+}
+
+function benchDimLosers() {
+  for (const { bar } of bench.cols.values()) {
+    if (!bar.classList.contains("win") && !bar.classList.contains("reject")
+        && !bar.classList.contains("ratelimited")) bar.classList.add("dim");
+  }
+}
+
 $("btn-calibrate").addEventListener("click", async () => {
   apiButtons().forEach((b) => { b.disabled = true; });
   syncSettingsForm();
@@ -377,14 +453,16 @@ $("btn-calibrate").addEventListener("click", async () => {
   try {
     await invoke("set_config", { cfg: state.config });
     await ensureProxyCreds();
+    benchReset();
     const r = await invoke("calibrate_api");
     $("api-conc").value = r.best_concurrency;
     $("direct-conc").value = r.best_concurrency; // champs miroirs
     state.config.api.concurrency = r.best_concurrency;
+    benchDimLosers();
     out.textContent = `→ ${r.best_concurrency} sessions, ~${Math.round(r.addr_per_s)} adr/s` +
-      ` · ${r.addr_sent} adressages consommés` +
-      (r.rate_limited ? " (clé rate-limitée)" : "");
+      ` · ${r.addr_sent} adressages consommés` + benchStopReason(r);
   } catch (err) {
+    $("calibrate-bench").classList.add("hidden");
     if (err && err.proxyCancelled) out.textContent = "Calibrage annulé.";
     else {
       // Échec d'auth proxy probable : re-demander les identifiants au prochain clic.
