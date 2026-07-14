@@ -15,11 +15,9 @@ par systemd.
 > Le script `deploy/install.sh` les lit dans l'environnement, et les demande
 > interactivement s'ils manquent.
 
-> Rédigé en juillet 2026. Le catalogue et les prix OVH évoluent — **vérifiez les
-> specs et tarifs exacts dans le configurateur OVH au moment de commander**
-> (<https://www.ovhcloud.com/fr/vps/>). Les pages OVH bloquant la récupération
-> automatique, les chiffres ci-dessous proviennent de sources tierces recoupées
-> et sont donnés à titre indicatif.
+> Gamme et prix relevés en juillet 2026 sur la page officielle
+> (<https://www.ovhcloud.com/fr/vps/>). Le catalogue OVH évolue — **vérifiez les
+> specs et tarifs exacts dans le configurateur au moment de commander**.
 
 ---
 
@@ -33,28 +31,28 @@ CPU/RAM quasi nulle (serveur `http.server` stdlib + un peu de parsing XML/cert).
 Le facteur limitant est la latence amont et le rate-limit Peppol, **pas** la
 taille du VPS. Conclusion : **le plus petit VPS du catalogue suffit largement.**
 
-### Gamme OVH VPS 2026 (indicatif)
+### Gamme OVH VPS 2027
 
-La gamme 2026 s'appelle **VPS-1 à VPS-6** (virtualisation KVM, AMD EPYC, stockage
-NVMe, 1 IPv4 + IPv6 incluses, trafic illimité, bande passante garantie de
-~400 Mbps à 3 Gbps, sauvegardes quotidiennes en option, anti-DDoS inclus).
+La gamme 2027 s'appelle **VPS-1 à VPS-4** (stockage SSD NVMe, 1 IPv4 dédiée +
+IPv6 incluses, trafic illimité, anti-DDoS inclus, **sauvegardes quotidiennes
+incluses** avec rétention glissante de 7 jours, console KVM intégrée).
 
-| Modèle | vCores | RAM | NVMe | Prix HT/mois (~) |
-|--------|-------:|----:|-----:|-----------------:|
-| **VPS-1** | 4 | 8 Go | 75 Go | ~6–8 € |
-| **VPS-2** | 6 | 12 Go | 100 Go | ~8,5 € |
-| **VPS-3** | 8 | 24 Go | 200 Go | ~17 € |
-| VPS-4/5/6 | 12→24 | 32→96 Go | 200→400 Go | plus |
+| Modèle | vCores | RAM | NVMe | Bande passante | Prix/mois HT (TTC) |
+|--------|-------:|----:|-----:|---------------:|-------------------:|
+| **VPS-1** | 2 | 4 Go | 40 Go | 500 Mbit/s | 3,81 € (4,57 €) |
+| **VPS-2** | 4 | 8 Go | 75 Go | 1 Gbit/s | 7,21 € (8,65 €) |
+| **VPS-3** | 6 | 12 Go | 100 Go | 2 Gbit/s | 10,40 € (12,48 €) |
+| **VPS-4** | 8 | 24 Go | 200 Go | 3 Gbit/s | 19,96 € (23,95 €) |
 
-> ⚠️ OVH a relevé fortement les tarifs VPS et l'option IPv4 en 2026. Les valeurs
-> ci-dessus sont des ordres de grandeur ; l'engagement annuel réduit le mensuel.
+Les configurations sont upgradables sans interruption de service ; options
+payantes : sauvegarde avancée, Load Balancer, IP additionnelles.
 
 ### Recommandation
 
 | Besoin | Choix | Pourquoi |
 |--------|-------|----------|
-| **API seule, usage perso/partenaires** | **VPS-1** | Déjà surdimensionné pour cette charge. Le bon rapport prix/marge. |
-| Marge confort (logs volumineux, batchs de résolution en masse, 2-3 autres petits services sur la même machine) | VPS-2 | Double la RAM et le disque pour ~2-3 €/mois de plus. |
+| **API seule, usage perso/partenaires** | **VPS-1** | 2 vCores / 4 Go suffisent largement pour cette charge I/O-bound. Le bon rapport prix/marge. |
+| Marge confort (logs volumineux, batchs de résolution en masse, 2-3 autres petits services sur la même machine) | VPS-2 | Double CPU, RAM et disque pour ~3,5 €/mois de plus. |
 | Inutile ici | VPS-3+ | Aucun intérêt pour cette API : vous paieriez du CPU/RAM jamais utilisés. |
 
 **En pratique : VPS-1** (ou VPS-2 si vous voulez de la place pour grandir).
@@ -67,7 +65,9 @@ NVMe, 1 IPv4 + IPv6 incluses, trafic illimité, bande passante garantie de
 - **Clé SSH** : enregistrez votre clé publique dans l'espace client puis
   sélectionnez-la à l'installation (procédure détaillée en **§1**), pour vous
   connecter sans mot de passe.
-- **Sauvegarde automatique** : option peu chère, recommandée.
+- **Sauvegardes** : les sauvegardes quotidiennes (rétention 7 jours) sont
+  désormais incluses — rien à cocher ; l'option « sauvegarde avancée » n'est
+  utile que pour des besoins de rétention plus longs.
 
 ---
 
@@ -535,8 +535,8 @@ emporter est `/etc/peppol-api.keys`. Tout le reste se reconstruit via `install.s
 - Healthcheck externe : pointez un moniteur (UptimeRobot, etc.) sur
   `https://<votre-domaine>/health` (non authentifié, non rate-limité).
 
-**Sauvegardes :** l'option snapshot OVH suffit ; sauvegardez surtout
-`/etc/peppol-api.keys` (hors du VPS, chiffré).
+**Sauvegardes :** les sauvegardes quotidiennes incluses (rétention 7 jours)
+suffisent ; sauvegardez surtout `/etc/peppol-api.keys` (hors du VPS, chiffré).
 
 ---
 
