@@ -229,7 +229,7 @@ footer .logo a:hover { color: var(--blue); text-decoration: underline; }
 }
 #modal input { display: block; margin: 8px 0; width: 100%; }
 
-/* --- Banc d'essai du calibrage (panneau ⚙) ------------------------------------
+/* --- Banc d'essai du calibrage (modale) ------------------------------------
    Une colonne par palier : valeur (adr/s), barre, label (nb de sessions).
    Hauteurs pilotées par app.js (normalisées sur le meilleur débit vu). */
 #calibrate-bench { display: flex; align-items: flex-end; gap: 8px; height: 84px; margin: 2px 0 8px 2px; }

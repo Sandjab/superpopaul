@@ -23,7 +23,8 @@ annulée. », « Calibration impossible : … »). Le bouton du panneau ⚙ rest
 
 1. **En cours** — titre « Calibration en cours… », le banc se construit
    (événements `calibrate-step`, rendu inchangé), ligne d'état « palier N
-   sessions — mesure… · X adressages consommés », un seul bouton :
+   sessions — mesure… » (le cumul d'adressages consommés n'apparaît qu'au
+   verdict), un seul bouton :
    **■ Arrêter** (bordure/texte `--red`). Backdrop et Échap : inertes.
 2. **Terminée** — titre « Calibration terminée », banc figé (dim des perdants),
    ligne d'état = verdict actuel (vert). Boutons : **↻ Retenter** (bordure/texte
