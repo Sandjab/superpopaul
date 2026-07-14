@@ -3588,6 +3588,7 @@ dependencies = [
  "encoding_rs_io",
  "hickory-proto",
  "hickory-resolver",
+ "libc",
  "percent-encoding",
  "reqwest 0.12.28",
  "roxmltree",

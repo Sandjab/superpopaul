@@ -50,6 +50,15 @@ const PID_ENCODE: &AsciiSet = &NON_ALPHANUMERIC
 const DNS_MAX_RETRIES: u32 = 2;
 const DNS_RETRY_BASE_MS: u64 = 400;
 
+/// Rafale DNS bornée indépendamment de la concurrence des workers (parité
+/// _DNS_SEM de peppol_resolver.py). 32 lookups × ~25 ms ≈ 1 250 req/s de
+/// plafond : sous le rate-limit de Google Public DNS (~1 500 QPS/IP), et
+/// autant de sockets UDP en vol au maximum — une par requête hickory
+/// (EMFILE constaté le 2026-07-14 à concurrence 128 sur macOS). Le permis
+/// est relâché pendant le backoff entre deux tentatives.
+const DNS_MAX_CONCURRENCY: usize = 32;
+static DNS_SEM: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(DNS_MAX_CONCURRENCY);
+
 /// Hostname NAPTR selon la spec SML OpenPeppol (post-nov 2025) :
 /// base32(sha256(lowercase(value))) sans padding, en minuscules.
 pub fn sml_hostname(scheme: &str, value: &str, zone: &str) -> String {
@@ -246,7 +255,11 @@ impl Dns {
     pub async fn naptr_smp_url(&self, host: &str) -> SmlLookup {
         let mut last = SmlLookup::Failed("NoAnswer".into());
         for attempt in 0..=DNS_MAX_RETRIES {
-            match self.lookup_once(host).await {
+            let outcome = {
+                let _permit = DNS_SEM.acquire().await.expect("sémaphore DNS fermé");
+                self.lookup_once(host).await
+            };
+            match outcome {
                 SmlLookup::Failed(status) => {
                     last = SmlLookup::Failed(status);
                     if attempt < DNS_MAX_RETRIES {
@@ -302,7 +315,11 @@ impl DirectClient {
     ) -> Result<Self, String> {
         let mut b = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
-            .connect_timeout(Duration::from_secs(10));
+            .connect_timeout(Duration::from_secs(10))
+            // Sans plafond, les connexions inactives (90 s de keep-alive)
+            // vers des dizaines de SMP distincts s'accumulent — une des
+            // sources de l'EMFILE du 2026-07-14 sur macOS.
+            .pool_max_idle_per_host(4);
         if let Some(purl) = proxy_url {
             let mut p = reqwest::Proxy::all(purl).map_err(|e| format!("proxy : {e}"))?;
             if let Some(c) = creds {
@@ -772,6 +789,35 @@ mod tests {
             .unwrap();
         assert_eq!(items[0].exists, Some(true), "item : {:?}", items[0]);
         assert!(items[0].pa.is_some());
+    }
+
+    #[tokio::test]
+    async fn semaphore_dns_rend_ses_permis_sous_rafale() {
+        // 200 lookups concurrents > 32 permis : tous doivent aboutir sans
+        // blocage (un permis fuité finirait en deadlock au 33e lookup d'un
+        // run ultérieur). Vérifie aussi que le compteur revient à plein.
+        let dns = Arc::new(fake_dns(&host_for_pid(), SmlLookup::NotRegistered));
+        let host = host_for_pid();
+        let tasks: Vec<_> = (0..200)
+            .map(|_| {
+                let dns = dns.clone();
+                let host = host.clone();
+                tokio::spawn(async move { dns.naptr_smp_url(&host).await })
+            })
+            .collect();
+        for t in tasks {
+            assert!(matches!(t.await.unwrap(), SmlLookup::NotRegistered));
+        }
+        // Compteur revenu à plein — avec une courte tolérance : d'autres
+        // tests du binaire partagent la static et tiennent un permis
+        // quelques microsecondes.
+        for _ in 0..100 {
+            if DNS_SEM.available_permits() == DNS_MAX_CONCURRENCY {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(DNS_SEM.available_permits(), DNS_MAX_CONCURRENCY);
     }
 
     #[tokio::test]

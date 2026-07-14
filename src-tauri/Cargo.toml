@@ -33,6 +33,9 @@ hickory-resolver = "0.24"     # NAPTR via le DNS système
 hickory-proto = "0.24"        # encodage des requêtes DNS pour le DoH (RFC 8484)
 percent-encoding = "2"        # encodage du PID dans les URL SMP (parité quote(safe=''))
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"                  # setrlimit : relever le soft 256 fd des apps GUI macOS
+
 [dev-dependencies]
 wiremock = "0.6"
 tempfile = "3"
