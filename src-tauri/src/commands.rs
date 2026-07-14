@@ -10,6 +10,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{AppHandle, Emitter, State};
 
 pub struct AppState {
@@ -23,6 +24,9 @@ pub struct AppState {
     pub config: Mutex<Option<Config>>,
     pub proxy_creds: Mutex<Option<ProxyCreds>>,
     pub run: Mutex<Option<Arc<RunHandle>>>,
+    /// Annulation du calibrage en cours — armée par cancel_calibration,
+    /// réarmée à false au début de chaque calibrate_api.
+    pub calibrate_cancel: Arc<AtomicBool>,
 }
 
 impl AppState {
@@ -34,6 +38,7 @@ impl AppState {
             config: Mutex::new(None),
             proxy_creds: Mutex::new(None),
             run: Mutex::new(None),
+            calibrate_cancel: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -264,7 +269,7 @@ fn calibration_prerequisites(key: &str, input_path: &str) -> Result<(), String> 
     if missing.is_empty() {
         Ok(())
     } else {
-        Err(format!("Calibrage impossible : il manque {}.", missing.join(" et ")))
+        Err(format!("Calibration impossible : il manque {}.", missing.join(" et ")))
     }
 }
 
@@ -292,8 +297,8 @@ pub async fn calibrate_api(
     if sample.is_empty() {
         return Err("Aucun adressage dans le fichier d'entrée.".into());
     }
-    // Provisoire : la Task 2 branchera le vrai flag d'annulation (AppState).
-    let cancel = std::sync::atomic::AtomicBool::new(false);
+    state.calibrate_cancel.store(false, Ordering::Relaxed);
+    let cancel = state.calibrate_cancel.clone();
     Ok(calibrate(
         &client,
         &sample,
@@ -305,6 +310,13 @@ pub async fn calibrate_api(
         },
     )
     .await)
+}
+
+/// Arme l'annulation de la calibration en cours (coopérative : le palier en
+/// cours se termine). Sans effet si aucune calibration n'est active.
+#[tauri::command]
+pub fn cancel_calibration(state: State<'_, AppState>) {
+    state.calibrate_cancel.store(true, Ordering::Relaxed);
 }
 
 #[tauri::command]

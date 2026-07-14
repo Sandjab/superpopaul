@@ -64,6 +64,7 @@ pub fn run() {
             commands::test_api,
             commands::analyze_input,
             commands::calibrate_api,
+            commands::cancel_calibration,
             commands::start_run,
             commands::pause_run,
             commands::resume_run,
