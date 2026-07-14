@@ -45,7 +45,12 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
-            let dir = app.path().app_data_dir()?;
+            // Mode portable (Windows) : données à côté de l'exe si marqueur
+            // ou base déjà présents — cf. config::portable_dir.
+            let dir = match config::portable_dir_of_current_exe() {
+                Some(d) => d,
+                None => app.path().app_data_dir()?,
+            };
             let store = store::Store::open(&dir.join("superpopaul.db"))
                 .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
             app.manage(commands::AppState::new(store, dir.join("superpopaul.yaml")));
@@ -56,6 +61,7 @@ pub fn run() {
             commands::set_config,
             commands::load_settings,
             commands::save_settings,
+            commands::portable_dir,
             commands::load_profile,
             commands::save_profile,
             commands::resolved_input_path,

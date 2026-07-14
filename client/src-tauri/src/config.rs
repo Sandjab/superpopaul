@@ -385,6 +385,35 @@ fn atomic_write(path: &Path, contents: &str) -> Result<(), String> {
     std::fs::rename(&tmp, path).map_err(|e| format!("écriture {path:?} : {e}"))
 }
 
+/// Mode portable : les données (base, réglages) vivent à côté de l'exe si
+/// le marqueur `superpopaul.portable` OU une base `superpopaul.db` y est déjà
+/// présent. Jamais d'heuristique d'inscriptibilité (l'install per-user NSIS
+/// vit dans %LOCALAPPDATA%, inscriptible). Renvoie None → mode installé
+/// (app_data_dir).
+pub fn portable_dir(exe_dir: Option<&Path>) -> Option<PathBuf> {
+    let dir = exe_dir?;
+    if dir.join("superpopaul.portable").exists() || dir.join("superpopaul.db").exists() {
+        Some(dir.to_path_buf())
+    } else {
+        None
+    }
+}
+
+/// Variante branchée sur l'exe courant. Windows uniquement : sur macOS l'exe
+/// vit dans le bundle .app (signature, translocation Gatekeeper), qu'on ne
+/// mute jamais — mode installé inconditionnel.
+pub fn portable_dir_of_current_exe() -> Option<PathBuf> {
+    #[cfg(not(windows))]
+    {
+        None
+    }
+    #[cfg(windows)]
+    {
+        let exe = std::env::current_exe().ok()?;
+        portable_dir(exe.parent())
+    }
+}
+
 /// Résout un chemin de la config relativement au répertoire du fichier YAML.
 pub fn resolve_relative(yaml_path: &Path, p: &str) -> PathBuf {
     let pb = PathBuf::from(p);
@@ -793,5 +822,38 @@ mod tests {
         assert_eq!(p, std::path::PathBuf::from("/tmp/projet/./clients.csv"));
         let abs = resolve_relative(std::path::Path::new("/tmp/projet/conf.yaml"), "/data/x.csv");
         assert_eq!(abs, std::path::PathBuf::from("/data/x.csv"));
+    }
+
+    #[test]
+    fn portable_dir_absent_sans_marqueur_ni_base() {
+        // Un exe posé dans un dossier quelconque (téléchargement, install
+        // per-user NSIS dans %LOCALAPPDATA% — inscriptible !) ne doit PAS
+        // basculer en portable : seuls le marqueur ou une base existante
+        // le décident, jamais une heuristique d'inscriptibilité.
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(portable_dir(Some(dir.path())), None);
+    }
+
+    #[test]
+    fn portable_dir_avec_marqueur() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("superpopaul.portable"), "").unwrap();
+        assert_eq!(portable_dir(Some(dir.path())), Some(dir.path().to_path_buf()));
+    }
+
+    #[test]
+    fn portable_dir_avec_base_existante() {
+        // Le marqueur peut se perdre en déplaçant le dossier : une base déjà
+        // présente à côté de l'exe suffit à rester portable (jamais
+        // d'abandon silencieux des données de l'utilisateur).
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("superpopaul.db"), "").unwrap();
+        assert_eq!(portable_dir(Some(dir.path())), Some(dir.path().to_path_buf()));
+    }
+
+    #[test]
+    fn portable_dir_sans_repertoire_exe() {
+        // current_exe() peut échouer : on retombe sur le mode installé.
+        assert_eq!(portable_dir(None), None);
     }
 }

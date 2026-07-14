@@ -644,13 +644,22 @@ function ensureProxyCreds(force = false) {
 // --- Profils de chargement : sauvegarde / chargement explicites -------------------
 // Un profil décrit COMMENT traiter un fichier (chemin, colonne des adressages,
 // colonnes de sortie) ; les réglages (API, sortie), eux, sont auto-persistés.
+
+// En mode portable les dialogues de profils s'ouvrent à côté de l'exe ;
+// en mode installé, pas de defaultPath (dernier dossier visité, comportement OS).
+async function profileDialogDefault() {
+  const dir = await invoke("portable_dir").catch(() => null);
+  return dir ? { defaultPath: dir } : {};
+}
+
 $("btn-save-cfg").addEventListener("click", async () => {
   if (!state.inputPath || !state.config.input.pid_column) {
     banner("warn", "Choisis d'abord le fichier et la colonne des adressages " +
       "avant de sauvegarder un profil.");
     return;
   }
-  const f = await save({ filters: [{ name: "YAML", extensions: ["yaml", "yml"] }] });
+  const f = await save({ filters: [{ name: "YAML", extensions: ["yaml", "yml"] }],
+                         ...(await profileDialogDefault()) });
   if (!f) return;
   try {
     await invoke("save_profile", { path: f, profile: {
@@ -665,7 +674,8 @@ $("btn-save-cfg").addEventListener("click", async () => {
 });
 
 $("btn-load-cfg").addEventListener("click", async () => {
-  const f = await open({ multiple: false, filters: [{ name: "YAML", extensions: ["yaml", "yml"] }] });
+  const f = await open({ multiple: false, filters: [{ name: "YAML", extensions: ["yaml", "yml"] }],
+                         ...(await profileDialogDefault()) });
   if (!f) return;
   let r;
   try {

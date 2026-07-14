@@ -50,6 +50,14 @@ règlent dans le panneau **⚙ Réglages** (pas une étape du wizard).
 
 ## Persistance
 
+Le « dossier données utilisateur » ci-dessous est `app_data_dir` (Tauri) —
+sauf en **mode portable** (Windows) : si un marqueur `superpopaul.portable`
+ou une base `superpopaul.db` existe à côté de `superpopaul.exe`, tout est lu
+et écrit dans le dossier de l'exe (et les dialogues de profils s'y ouvrent).
+C'est le mode du zip portable des releases. Jamais d'heuristique
+d'inscriptibilité (l'install NSIS per-user vit dans `%LOCALAPPDATA%`,
+inscriptible) ; sur macOS, mode installé inconditionnel (bundle signé).
+
 - **Réglages** (`superpopaul.yaml`, dossier données utilisateur) : lus au
   démarrage, écrits à la fermeture du panneau ⚙. URL + clé d'API, mode
   api/direct, résolveur DNS et repli, `batch_size`, concurrence, proxy,

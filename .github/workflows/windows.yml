@@ -29,11 +29,40 @@ jobs:
             echo "Taille : $((SIZE / 1024 / 1024)) Mo — $EXE"
             test "$SIZE" -lt 20971520
           done
+      # Zip portable : exe + marqueur (cf. config::portable_dir) + notice.
+      # Déposé dans target/release/ pour garder l'ancrage commun de
+      # l'artefact (les chemins vus par le job release restent stables).
+      - name: Assembler le zip portable
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory portable | Out-Null
+          Copy-Item src-tauri/target/release/superpopaul.exe portable/
+          New-Item -ItemType File portable/superpopaul.portable | Out-Null
+          Set-Content -Path portable/LISEZMOI.txt -Encoding UTF8 -Value @"
+          Super Popaul — version portable
+          ===============================
+
+          Ce dossier contient l'application en mode portable : la base de
+          données (superpopaul.db) et les réglages (superpopaul.yaml) sont
+          créés ICI, à côté de superpopaul.exe.
+
+          - « superpopaul.portable » est le marqueur du mode portable :
+            ne le supprimez pas.
+          - Pour déménager l'application, déplacez le dossier ENTIER.
+          - Évitez un dossier synchronisé (OneDrive, Dropbox…) : la base
+            SQLite peut s'y corrompre.
+
+          Pour une installation classique (données dans %APPDATA%), prenez
+          plutôt le Super.Popaul_x.y.z_x64-setup.exe de la même release.
+          "@
+          Compress-Archive -Path portable/* `
+            -DestinationPath src-tauri/target/release/SuperPopaul_portable.zip
       - uses: actions/upload-artifact@v4
         with:
           name: SuperPopaul-windows
           path: |
             client/src-tauri/target/release/superpopaul.exe
+            client/src-tauri/target/release/SuperPopaul_portable.zip
             client/src-tauri/target/release/bundle/nsis/*.exe
 
   # Publication GitHub Release sur tag uniquement. Job séparé : le build
@@ -54,8 +83,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # L'exe nu n'est plus publié : sans marqueur il se comporte comme
+          # la version installée — le zip portable lève l'ambiguïté.
+          mv dist/SuperPopaul_portable.zip \
+             "dist/SuperPopaul_${GITHUB_REF_NAME#v}_portable.zip"
           gh release create "$GITHUB_REF_NAME" \
             --repo "$GITHUB_REPOSITORY" \
             --title "Super Popaul ${GITHUB_REF_NAME#v}" \
             --generate-notes \
-            dist/superpopaul.exe dist/bundle/nsis/*.exe
+            "dist/SuperPopaul_${GITHUB_REF_NAME#v}_portable.zip" \
+            dist/bundle/nsis/*.exe

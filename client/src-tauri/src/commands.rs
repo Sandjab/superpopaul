@@ -138,6 +138,13 @@ pub struct ProfileLoad {
     pub legacy: bool,
 }
 
+/// Some(répertoire) si le mode portable est actif — sert de defaultPath aux
+/// dialogues de profils ; None en mode installé (comportement OS inchangé).
+#[tauri::command]
+pub fn portable_dir() -> Option<String> {
+    config::portable_dir_of_current_exe().map(|p| p.to_string_lossy().into_owned())
+}
+
 #[tauri::command]
 pub fn load_profile(state: State<'_, AppState>, path: String) -> Result<ProfileLoad, String> {
     let p = PathBuf::from(&path);
