@@ -149,6 +149,16 @@ function renderFilePanel() {
   }));
   $("pid-hint").textContent =
     p.suggested_pid_column != null ? "(suggestion automatique)" : "";
+  highlightPidColumn();
+}
+
+/** Surligne dans l'aperçu la colonne des adressages choisie (couleur d'accent,
+ *  même langage visuel que les colonnes Peppol de l'étape 2). */
+function highlightPidColumn() {
+  const idx = state.preview
+    ? state.preview.headers.indexOf(state.config.input.pid_column) : -1;
+  document.querySelectorAll("#preview-table tr").forEach((tr) =>
+    [...tr.children].forEach((cell, i) => cell.classList.toggle("pid-col", i === idx)));
 }
 
 $("btn-browse").addEventListener("click", async (e) => {
@@ -161,7 +171,10 @@ $("btn-browse").addEventListener("click", async (e) => {
     btn.disabled = false;
   }
 });
-$("pid-column").addEventListener("change", (e) => { state.config.input.pid_column = e.target.value; });
+$("pid-column").addEventListener("change", (e) => {
+  state.config.input.pid_column = e.target.value;
+  highlightPidColumn();
+});
 const dz = $("dropzone");
 dz.addEventListener("dragover", (e) => { e.preventDefault(); dz.classList.add("over"); });
 dz.addEventListener("dragleave", () => dz.classList.remove("over"));

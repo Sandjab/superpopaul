@@ -12,9 +12,9 @@
       {
         "title": "Super Popaul",
         "width": 1000,
-        "height": 700,
+        "height": 750,
         "minWidth": 860,
-        "minHeight": 600,
+        "minHeight": 750,
         "center": true
       }
     ],

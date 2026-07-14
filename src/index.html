@@ -157,10 +157,10 @@
           <p><label for="dns-resolver" title="Vide : DNS système. Une IP (ex. 8.8.8.8) : DNS classique sur ce serveur — évite le rate-limiting du résolveur du FAI sur les gros volumes. Une URL https://… : DoH (RFC 8484), passe par le proxy.">Résolveur (optionnel)</label>
              <input id="dns-resolver" size="24" placeholder="vide = système · IP · https://…" title="Vide : DNS système. Une IP (ex. 8.8.8.8) : DNS classique sur ce serveur — évite le rate-limiting du résolveur du FAI sur les gros volumes. Une URL https://… : DoH (RFC 8484), passe par le proxy.">
              <label for="dns-doh" title="Utiliser l'IP saisie en DoH : elle devient https://<ip>/dns-query à l'enregistrement (fonctionne avec 1.1.1.1, 8.8.8.8… — le certificat du serveur doit couvrir l'IP). Sans objet si le champ contient déjà une URL."><input type="checkbox" id="dns-doh"> DoH</label></p>
-          <p><label for="dns-conc" title="Lookups DNS simultanés, indépendant de la concurrence des workers. 32 ≈ 1 250 req/s, sous le rate-limit des résolveurs publics (~1 500 req/s par IP chez Google) — monter au-delà expose à des timeouts et ne fait rien gagner (le débit d'un run est dominé par les requêtes SMP).">Rafale DNS</label>
-             <input id="dns-conc" type="number" value="32" min="1" max="256" title="Lookups DNS simultanés, indépendant de la concurrence des workers. 32 ≈ 1 250 req/s, sous le rate-limit des résolveurs publics (~1 500 req/s par IP chez Google) — monter au-delà expose à des timeouts et ne fait rien gagner (le débit d'un run est dominé par les requêtes SMP).">
-             <label for="direct-conc" title="Nombre de résolutions simultanées (workers SML + SMP).">Concurrence</label>
-             <input id="direct-conc" type="number" value="8" min="1" max="256" title="Nombre de résolutions simultanées (workers SML + SMP)."></p>
+          <p><label for="direct-conc" title="Nombre de résolutions simultanées (workers SML + SMP).">Concurrence</label>
+             <input id="direct-conc" type="number" value="8" min="1" max="256" title="Nombre de résolutions simultanées (workers SML + SMP).">
+             <label for="dns-conc" title="Lookups DNS simultanés, indépendant de la concurrence des workers. 32 ≈ 1 250 req/s, sous le rate-limit des résolveurs publics (~1 500 req/s par IP chez Google) — monter au-delà expose à des timeouts et ne fait rien gagner (le débit d'un run est dominé par les requêtes SMP).">Rafale DNS</label>
+             <input id="dns-conc" type="number" value="32" min="1" max="256" title="Lookups DNS simultanés, indépendant de la concurrence des workers. 32 ≈ 1 250 req/s, sous le rate-limit des résolveurs publics (~1 500 req/s par IP chez Google) — monter au-delà expose à des timeouts et ne fait rien gagner (le débit d'un run est dominé par les requêtes SMP)."></p>
         </div>
       </fieldset>
       <!-- La case vit dans la légende : les descendants de la première legend

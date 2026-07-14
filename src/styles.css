@@ -77,6 +77,10 @@ fieldset { border: 1px solid var(--border); border-radius: 8px; margin: 12px 0; 
   text-align: center; color: var(--muted);
 }
 #dropzone.over { border-color: var(--blue); color: var(--fg); }
+/* Colonne des adressages choisie : surbrillance à la couleur d'accent (même
+   langage que th.peppol / td.temp de l'étape 2). */
+#preview-table th.pid-col { color: var(--blue); border-color: var(--blue); }
+#preview-table td.pid-col { background: rgba(88, 166, 255, .10); }
 table { border-collapse: collapse; margin: 12px 0; width: 100%; }
 th, td { border: 1px solid var(--border); padding: 4px 10px; text-align: left; }
 th { background: var(--card); }
