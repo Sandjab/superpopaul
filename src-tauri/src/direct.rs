@@ -114,19 +114,23 @@ impl Dns {
             .map_err(|e| format!("résolveur DNS système : {e}"))
     }
 
-    /// DNS classique (UDP/53, repli TCP) sur un serveur choisi — évite le
-    /// résolveur du FAI (rate-limiting sous rafale, constaté 2026-07-14 :
-    /// 8.8.8.8 tient 1 500 req/s là où le résolveur Free refuse ~30 %).
-    /// Aucun search domain : la config est construite sans, et les requêtes
-    /// partent de toute façon en FQDN absolu.
-    pub fn udp(ip: std::net::IpAddr) -> Self {
-        use hickory_resolver::config::{NameServerConfigGroup, ResolverConfig, ResolverOpts};
-        let servers = NameServerConfigGroup::from_ips_clear(&[ip], 53, true);
+    /// DNS classique (UDP/53, repli TCP) sur un ou plusieurs serveurs choisis
+    /// — évite le résolveur du FAI (rate-limiting sous rafale, constaté
+    /// 2026-07-14 : 8.8.8.8 tient 1 500 req/s là où le résolveur Free refuse
+    /// ~30 %). Le premier serveur est le principal, les suivants des secours
+    /// (UserProvidedOrder : hickory garde l'ordre fourni et ne bascule que
+    /// sur échec — pas de lissage de charge, c'est voulu : la limite par IP
+    /// des résolveurs publics protège la zone SML). Aucun search domain : la
+    /// config est construite sans, et les requêtes partent en FQDN absolu.
+    pub fn udp(ips: &[std::net::IpAddr]) -> Self {
+        use hickory_resolver::config::{
+            NameServerConfigGroup, ResolverConfig, ResolverOpts, ServerOrderingStrategy,
+        };
+        let servers = NameServerConfigGroup::from_ips_clear(ips, 53, true);
         let config = ResolverConfig::from_parts(None, Vec::new(), servers);
-        Dns::System(hickory_resolver::TokioAsyncResolver::tokio(
-            config,
-            ResolverOpts::default(),
-        ))
+        let mut opts = ResolverOpts::default();
+        opts.server_ordering_strategy = ServerOrderingStrategy::UserProvidedOrder;
+        Dns::System(hickory_resolver::TokioAsyncResolver::tokio(config, opts))
     }
 
     pub fn doh(url: &str, http: reqwest::Client) -> Self {
@@ -292,7 +296,14 @@ pub struct DirectClient {
 /// Résolveur depuis la config : vide = DNS système ; une IP = DNS classique
 /// sur ce serveur ; une URL https = DoH (RFC 8484). Tout le reste est une
 /// erreur explicite — jamais de repli silencieux sur le DNS système.
-pub fn dns_from_spec(spec: Option<&str>, http: &reqwest::Client) -> Result<Dns, String> {
+/// `fallback` : IP de secours du DNS classique (failover, pas de lissage) —
+/// interprétée seulement quand le principal est une IP ; ignorée en DNS
+/// système ou DoH (le champ, toujours renseigné par l'IHM, n'y a pas de sens).
+pub fn dns_from_spec(
+    spec: Option<&str>,
+    fallback: Option<&str>,
+    http: &reqwest::Client,
+) -> Result<Dns, String> {
     let Some(spec) = spec.map(str::trim).filter(|s| !s.is_empty()) else {
         return Dns::system();
     };
@@ -300,7 +311,18 @@ pub fn dns_from_spec(spec: Option<&str>, http: &reqwest::Client) -> Result<Dns, 
         return Ok(Dns::doh(spec, http.clone()));
     }
     match spec.parse::<std::net::IpAddr>() {
-        Ok(ip) => Ok(Dns::udp(ip)),
+        Ok(ip) => {
+            let mut ips = vec![ip];
+            if let Some(fb) = fallback.map(str::trim).filter(|s| !s.is_empty()) {
+                let fb_ip = fb.parse::<std::net::IpAddr>().map_err(|_| {
+                    format!("résolveur de secours « {fb} » : attendu une IP (ou vide)")
+                })?;
+                if fb_ip != ip {
+                    ips.push(fb_ip);
+                }
+            }
+            Ok(Dns::udp(&ips))
+        }
         Err(_) => Err(format!(
             "résolveur « {spec} » : attendu une IP (DNS classique), \
              une URL https://… (DoH), ou vide (DNS système)"
@@ -309,11 +331,13 @@ pub fn dns_from_spec(spec: Option<&str>, http: &reqwest::Client) -> Result<Dns, 
 }
 
 impl DirectClient {
-    /// `resolver` : voir `dns_from_spec` ; `dns_concurrency` : lookups DNS
-    /// simultanés (config, défaut 32). Le proxy s'applique aux requêtes
-    /// SMP et au DoH (le DNS classique, lui, part en direct sur UDP/53).
+    /// `resolver`/`resolver_fallback` : voir `dns_from_spec` ;
+    /// `dns_concurrency` : lookups DNS simultanés (config, défaut 32). Le
+    /// proxy s'applique aux requêtes SMP et au DoH (le DNS classique, lui,
+    /// part en direct sur UDP/53).
     pub fn new(
         resolver: Option<&str>,
+        resolver_fallback: Option<&str>,
         dns_concurrency: u32,
         proxy_url: Option<&str>,
         creds: Option<&ProxyCreds>,
@@ -333,7 +357,7 @@ impl DirectClient {
             b = b.proxy(p);
         }
         let http = b.build().map_err(|e| e.to_string())?;
-        let dns = dns_from_spec(resolver, &http)?;
+        let dns = dns_from_spec(resolver, resolver_fallback, &http)?;
         if dns_concurrency == 0 {
             // Un sémaphore à 0 permis bloquerait tout run, silencieusement.
             return Err("dns_concurrency doit être ≥ 1".into());
@@ -623,27 +647,57 @@ mod tests {
     fn resolver_spec_vide_ip_url_et_erreur() {
         let http = reqwest::Client::new();
         // Vide ou absent : DNS système.
-        assert!(matches!(dns_from_spec(None, &http).unwrap(), Dns::System(_)));
-        assert!(matches!(dns_from_spec(Some("  "), &http).unwrap(), Dns::System(_)));
+        assert!(matches!(dns_from_spec(None, None, &http).unwrap(), Dns::System(_)));
+        assert!(matches!(dns_from_spec(Some("  "), None, &http).unwrap(), Dns::System(_)));
         // Une IP (v4 ou v6) : DNS classique sur ce serveur.
         assert!(matches!(
-            dns_from_spec(Some("8.8.8.8"), &http).unwrap(),
+            dns_from_spec(Some("8.8.8.8"), None, &http).unwrap(),
             Dns::System(_)
         ));
         assert!(matches!(
-            dns_from_spec(Some("2001:4860:4860::8888"), &http).unwrap(),
+            dns_from_spec(Some("2001:4860:4860::8888"), None, &http).unwrap(),
             Dns::System(_)
         ));
         // Une URL https : DoH, URL conservée telle quelle.
-        match dns_from_spec(Some("https://1.1.1.1/dns-query"), &http).unwrap() {
+        match dns_from_spec(Some("https://1.1.1.1/dns-query"), None, &http).unwrap() {
             Dns::Doh { url, .. } => assert_eq!(url, "https://1.1.1.1/dns-query"),
             _ => panic!("attendu Dns::Doh"),
         }
         // Tout le reste : erreur explicite (jamais un repli silencieux).
-        match dns_from_spec(Some("dns.google"), &http) {
+        match dns_from_spec(Some("dns.google"), None, &http) {
             Err(err) => assert!(err.contains("dns.google"), "message : {err}"),
             Ok(_) => panic!("un hostname nu doit être refusé"),
         }
+    }
+
+    #[test]
+    fn resolver_fallback_failover_du_mode_classique_uniquement() {
+        let http = reqwest::Client::new();
+        // Principal IP + secours IP : accepté (failover hickory,
+        // UserProvidedOrder — le principal reste préféré).
+        assert!(matches!(
+            dns_from_spec(Some("8.8.8.8"), Some("1.1.1.1"), &http).unwrap(),
+            Dns::System(_)
+        ));
+        // Secours vide ou identique au principal : accepté (pas de doublon).
+        assert!(dns_from_spec(Some("8.8.8.8"), Some("  "), &http).is_ok());
+        assert!(dns_from_spec(Some("8.8.8.8"), Some("8.8.8.8"), &http).is_ok());
+        // Principal IP + secours invalide : erreur explicite.
+        match dns_from_spec(Some("8.8.8.8"), Some("dns.google"), &http) {
+            Err(err) => assert!(err.contains("secours"), "message : {err}"),
+            Ok(_) => panic!("un secours non-IP doit être refusé"),
+        }
+        // DNS système ou DoH : le secours (toujours renseigné par l'IHM,
+        // même invalide) est ignoré, jamais une erreur.
+        assert!(matches!(
+            dns_from_spec(None, Some("n'importe quoi"), &http).unwrap(),
+            Dns::System(_)
+        ));
+        assert!(matches!(
+            dns_from_spec(Some("https://1.1.1.1/dns-query"), Some("n'importe quoi"), &http)
+                .unwrap(),
+            Dns::Doh { .. }
+        ));
     }
 
     #[test]
@@ -761,7 +815,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "réseau réel (SML prod)"]
     async fn resolution_reelle_sur_sml_prod() {
-        let c = DirectClient::new(None, DNS_CONCURRENCY_DEFAULT, None, None).unwrap();
+        let c = DirectClient::new(None, None, DNS_CONCURRENCY_DEFAULT, None, None).unwrap();
         let (items, stats) = c
             .resolve_batch(&["iso6523-actorid-upis::0225:000122308".to_string()])
             .await
@@ -782,7 +836,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "réseau réel (DNS public + SML prod)"]
     async fn resolution_reelle_via_dns_choisi() {
-        let c = DirectClient::new(Some("8.8.8.8"), DNS_CONCURRENCY_DEFAULT, None, None).unwrap();
+        let c = DirectClient::new(Some("8.8.8.8"), Some("1.1.1.1"), DNS_CONCURRENCY_DEFAULT, None, None).unwrap();
         let (items, _) = c
             .resolve_batch(&["iso6523-actorid-upis::0225:000122308".to_string()])
             .await
@@ -795,7 +849,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "réseau réel (DoH + SML prod)"]
     async fn resolution_reelle_via_doh() {
-        let c = DirectClient::new(Some("https://1.1.1.1/dns-query"), DNS_CONCURRENCY_DEFAULT, None, None).unwrap();
+        let c = DirectClient::new(Some("https://1.1.1.1/dns-query"), None, DNS_CONCURRENCY_DEFAULT, None, None).unwrap();
         let (items, _) = c
             .resolve_batch(&["iso6523-actorid-upis::0225:000122308".to_string()])
             .await
@@ -828,9 +882,9 @@ mod tests {
 
     #[tokio::test]
     async fn dns_concurrency_configuree_appliquee_et_zero_refuse() {
-        let c = DirectClient::new(Some("8.8.8.8"), 7, None, None).unwrap();
+        let c = DirectClient::new(Some("8.8.8.8"), None, 7, None, None).unwrap();
         assert_eq!(c.dns_sem.available_permits(), 7);
-        assert!(DirectClient::new(Some("8.8.8.8"), 0, None, None).is_err());
+        assert!(DirectClient::new(Some("8.8.8.8"), None, 0, None, None).is_err());
     }
 
     #[tokio::test]

@@ -63,6 +63,7 @@ impl AppState {
             ApiMode::Direct => {
                 ApiClient::new_direct(
                     cfg.api.resolver.as_deref(),
+                    Some(cfg.api.resolver_fallback.as_str()),
                     cfg.api.dns_concurrency,
                     proxy,
                     creds.as_ref(),

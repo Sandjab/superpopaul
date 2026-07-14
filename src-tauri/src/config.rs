@@ -27,6 +27,13 @@ pub struct ApiConfig {
     /// (les YAML sauvegardés avant restent lisibles).
     #[serde(default, alias = "doh_url", skip_serializing_if = "Option::is_none")]
     pub resolver: Option<String>,
+    /// IP de secours du DNS classique (failover si le principal ne répond
+    /// pas ou refuse — PAS de lissage de charge : la limite par IP des
+    /// résolveurs publics protège la zone SML). Interprétée seulement quand
+    /// `resolver` est une IP ; vide = pas de secours. Absente des YAML
+    /// d'avant l'option → 1.1.1.1, non écrite à la valeur par défaut.
+    #[serde(default = "resolver_fallback_default", skip_serializing_if = "resolver_fallback_is_default")]
+    pub resolver_fallback: String,
     /// Mode direct : lookups DNS simultanés (indépendant de `concurrency`,
     /// qui pilote les workers). 32 × ~25 ms ≈ 1 250 req/s, sous le
     /// rate-limit des résolveurs publics (~1 500 QPS/IP chez Google) et
@@ -61,6 +68,14 @@ fn dns_concurrency_default() -> u32 {
 
 fn dns_concurrency_is_default(v: &u32) -> bool {
     *v == dns_concurrency_default()
+}
+
+fn resolver_fallback_default() -> String {
+    "1.1.1.1".into()
+}
+
+fn resolver_fallback_is_default(v: &String) -> bool {
+    *v == resolver_fallback_default()
 }
 
 fn suffix_default() -> String {
@@ -392,6 +407,7 @@ mod tests {
                 key: "MA_CLE".into(),
                 mode: ApiMode::Api,
                 resolver: None,
+                resolver_fallback: "1.1.1.1".into(),
                 dns_concurrency: 32,
                 batch_size: 50,
                 concurrency: 8,
@@ -482,6 +498,25 @@ mod tests {
             .replace("resolver:", "doh_url:");
         let parsed = from_yaml(&ancien).unwrap();
         assert_eq!(parsed.api.resolver.as_deref(), Some("https://1.1.1.1/dns-query"));
+    }
+
+    #[test]
+    fn resolver_fallback_defaut_et_forme_yaml() {
+        // Un YAML d'avant l'option charge avec le secours par défaut
+        // (1.1.1.1), qui n'est pas écrit ; une valeur personnalisée fait
+        // l'aller-retour ; vide (= pas de secours) est écrit et relu.
+        let yaml = to_yaml(&config_exemple()).unwrap();
+        assert!(!yaml.contains("resolver_fallback:"));
+        assert_eq!(from_yaml(&yaml).unwrap().api.resolver_fallback, "1.1.1.1");
+
+        let mut cfg = config_exemple();
+        cfg.api.resolver_fallback = "9.9.9.9".into();
+        let back = from_yaml(&to_yaml(&cfg).unwrap()).unwrap();
+        assert_eq!(back.api.resolver_fallback, "9.9.9.9");
+
+        cfg.api.resolver_fallback = String::new();
+        let back = from_yaml(&to_yaml(&cfg).unwrap()).unwrap();
+        assert_eq!(back.api.resolver_fallback, "");
     }
 
     #[test]

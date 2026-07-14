@@ -35,7 +35,7 @@ async fn main() {
         .build()
         .unwrap();
     let spec_opt = (spec != "system").then_some(spec.as_str());
-    let dns = Arc::new(dns_from_spec(spec_opt, &http).unwrap());
+    let dns = Arc::new(dns_from_spec(spec_opt, None, &http).unwrap());
     let dns_sem = Arc::new(tokio::sync::Semaphore::new(dns_conc));
     let sem = Arc::new(tokio::sync::Semaphore::new(conc));
     let mut tasks = Vec::new();

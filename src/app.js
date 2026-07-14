@@ -25,7 +25,10 @@ const state = {
   preview: null, // {headers, rows, delimiter, encoding, suggested_pid_column}
   config: {
     version: 1,
-    api: { url: "https://peppol.gavini.cloud", key: "", mode: "api", resolver: null, dns_concurrency: 32,
+    // Résolveur direct par défaut : 8.8.8.8 avec 1.1.1.1 en secours (failover
+    // du DNS classique) — le résolveur du FAI rate-limite sous rafale.
+    api: { url: "https://peppol.gavini.cloud", key: "", mode: "api", resolver: "8.8.8.8",
+           resolver_fallback: "1.1.1.1", dns_concurrency: 32,
            batch_size: 50, concurrency: 8, proxy: null, refresh_days: 30 },
     input: { path: "", delimiter: ";", encoding: "utf-8", pid_column: "" },
     output: { dir: "", suffix: "_enrichi", timestamp_suffix: true,
@@ -203,6 +206,7 @@ function syncSettingsForm() {
   if (resolver && $("dns-doh").checked && !resolver.startsWith("https://"))
     resolver = `https://${resolver}/dns-query`;
   c.api.resolver = resolver || null;
+  c.api.resolver_fallback = $("dns-fallback").value.trim();
   c.api.dns_concurrency = +$("dns-conc").value || 32;
   // Deux champs Concurrence (un par bloc de mode), miroirs l'un de l'autre :
   // on lit celui du mode courant.
@@ -225,6 +229,7 @@ function fillSettingsForm() {
   $("api-key").value = c.api.key;
   $("dns-resolver").value = c.api.resolver || "";
   $("dns-doh").checked = (c.api.resolver || "").startsWith("https://");
+  $("dns-fallback").value = c.api.resolver_fallback ?? "1.1.1.1";
   $("dns-conc").value = c.api.dns_concurrency || 32;
   $("api-conc").value = c.api.concurrency;
   $("direct-conc").value = c.api.concurrency;
@@ -234,6 +239,7 @@ function fillSettingsForm() {
   $("api-refresh").value = c.api.refresh_days;
   syncModeUi();
   syncProxyUi();
+  syncDnsUi();
 }
 
 /** Affiche le bloc de champs du backend choisi (API ou direct). */
@@ -244,6 +250,17 @@ function syncModeUi() {
   if (direct) $("api-test-result").textContent = "";
 }
 $("api-mode").addEventListener("change", syncModeUi);
+
+/** Le secours ne sert qu'au DNS classique : grisé en DNS système (champ
+ *  vide) comme en DoH (case cochée ou URL saisie) — la valeur reste
+ *  enregistrée, Rust l'ignore hors mode classique. */
+function syncDnsUi() {
+  const spec = $("dns-resolver").value.trim();
+  $("dns-fallback").disabled =
+    !spec || spec.startsWith("https://") || $("dns-doh").checked;
+}
+$("dns-resolver").addEventListener("input", syncDnsUi);
+$("dns-doh").addEventListener("change", syncDnsUi);
 
 /** Grise toute la zone Proxy tant que la case (dans la légende, donc épargnée
  *  par le disabled natif du fieldset) n'est pas cochée. */

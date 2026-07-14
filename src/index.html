@@ -158,7 +158,9 @@
         </div>
         <div id="direct-fields" class="hidden">
           <p><label for="dns-resolver" title="Vide : DNS système. Une IP (ex. 8.8.8.8) : DNS classique sur ce serveur — évite le rate-limiting du résolveur du FAI sur les gros volumes. Une URL https://… : DoH (RFC 8484), passe par le proxy.">Résolveur (optionnel)</label>
-             <input id="dns-resolver" size="24" placeholder="vide = système · IP · https://…" title="Vide : DNS système. Une IP (ex. 8.8.8.8) : DNS classique sur ce serveur — évite le rate-limiting du résolveur du FAI sur les gros volumes. Une URL https://… : DoH (RFC 8484), passe par le proxy.">
+             <input id="dns-resolver" size="20" placeholder="vide = système · IP · https://…" title="Vide : DNS système. Une IP (ex. 8.8.8.8) : DNS classique sur ce serveur — évite le rate-limiting du résolveur du FAI sur les gros volumes. Une URL https://… : DoH (RFC 8484), passe par le proxy.">
+             <label for="dns-fallback" title="IP de secours du DNS classique : utilisée seulement si le principal ne répond pas ou refuse (failover, pas de répartition de charge). Sans objet en DNS système ou DoH. Vide : pas de secours.">Secours</label>
+             <input id="dns-fallback" size="12" value="1.1.1.1" title="IP de secours du DNS classique : utilisée seulement si le principal ne répond pas ou refuse (failover, pas de répartition de charge). Sans objet en DNS système ou DoH. Vide : pas de secours.">
              <label for="dns-doh" title="Utiliser l'IP saisie en DoH : elle devient https://<ip>/dns-query à l'enregistrement (fonctionne avec 1.1.1.1, 8.8.8.8… — le certificat du serveur doit couvrir l'IP). Sans objet si le champ contient déjà une URL."><input type="checkbox" id="dns-doh"> DoH</label></p>
           <p><label for="direct-conc" title="Nombre de résolutions simultanées (workers SML + SMP).">Concurrence</label>
              <input id="direct-conc" type="number" value="8" min="1" max="256" title="Nombre de résolutions simultanées (workers SML + SMP).">

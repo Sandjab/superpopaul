@@ -130,9 +130,11 @@ impl ApiClient {
 
     /// Client en résolution directe SML+SMP (sans API ni clé). `resolver` :
     /// vide = DNS système, IP = DNS classique, URL https = DoH ;
+    /// `resolver_fallback` : IP de secours du DNS classique (failover) ;
     /// `dns_concurrency` : lookups DNS simultanés (config, défaut 32).
     pub fn new_direct(
         resolver: Option<&str>,
+        resolver_fallback: Option<&str>,
         dns_concurrency: u32,
         proxy_url: Option<&str>,
         creds: Option<&ProxyCreds>,
@@ -140,6 +142,7 @@ impl ApiClient {
         Ok(ApiClient {
             inner: Inner::Direct(crate::direct::DirectClient::new(
                 resolver,
+                resolver_fallback,
                 dns_concurrency,
                 proxy_url,
                 creds,
