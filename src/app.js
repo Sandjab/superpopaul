@@ -428,11 +428,11 @@ listen("calibrate-step", (e) => {
 /** Raison d'arrêt pour le verdict texte — formatage de présentation uniquement. */
 function benchStopReason(r) {
   const last = bench.steps[bench.steps.length - 1];
-  if (!last) return r.rate_limited ? " (clé rate-limitée)" : "";
+  if (!last || last.status === "measuring") return r.rate_limited ? " (clé rate-limitée)" : "";
   if (last.status === "rate_limited") return ` (${last.level} : rate-limité, arrêt)`;
   if (last.status === "rejected") {
     const gain = r.addr_per_s > 0
-      ? Math.round((last.addr_per_s / r.addr_per_s - 1) * 100) : 0;
+      ? Math.floor((last.addr_per_s / r.addr_per_s - 1) * 100) : 0;
     return ` (${last.level} : ${gain >= 0 ? "+" : ""}${gain} % < 15 %, arrêt)`;
   }
   return ""; // arrêt par plafond : rien à expliquer
@@ -441,7 +441,8 @@ function benchStopReason(r) {
 function benchDimLosers() {
   for (const { bar } of bench.cols.values()) {
     if (!bar.classList.contains("win") && !bar.classList.contains("reject")
-        && !bar.classList.contains("ratelimited")) bar.classList.add("dim");
+        && !bar.classList.contains("ratelimited")
+        && !bar.classList.contains("measuring")) bar.classList.add("dim");
   }
 }
 
