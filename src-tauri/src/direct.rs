@@ -448,10 +448,21 @@ fn service_metadata_refs(xml: &str) -> Vec<String> {
         .collect()
 }
 
-/// Doctype URL-encodé dans le href : dernier segment après « /services/ ».
+/// Doctype URL-encodé dans le href : dernier segment après « /services/ »,
+/// de la forme « {scheme}::{value} » (spec SMP — scheme = busdox-docid-qns).
+/// On ne garde que value, seule comparable à FR_CTC_PRIMARY_INVOICE (parité
+/// avec le DocumentIdentifier des ServiceMetadata côté Python). Le scheme
+/// se reconnaît à l'absence de « : » avant le premier « :: » — un doctype
+/// nu commence par « urn:… » et son « :: » interne n'est pas un séparateur.
 fn doctype_from_href(href: &str) -> Option<String> {
     let (_, enc) = href.rsplit_once("/services/")?;
-    Some(percent_decode_str(enc).decode_utf8_lossy().into_owned())
+    let decoded = percent_decode_str(enc).decode_utf8_lossy().into_owned();
+    match decoded.split_once("::") {
+        Some((scheme, value)) if !scheme.contains(':') && !value.is_empty() => {
+            Some(value.to_string())
+        }
+        _ => Some(decoded),
+    }
 }
 
 /// Premier élément <Certificate> (contenu base64) d'un ServiceMetadata.
@@ -517,13 +528,25 @@ mod tests {
 
     #[test]
     fn doctype_decode_depuis_href() {
+        // href réel (SMP spec) : segment « {scheme}::{value} » URL-encodé.
+        // Seul value est le doctype comparable à FR_CTC_PRIMARY_INVOICE —
+        // garder le préfixe busdox-docid-qns:: rendait supports toujours
+        // false (0 % de CTC constaté en prod le 2026-07-14).
         let href = "http://smp.example/iso6523-actorid-upis%3A%3A0225%3A1/services/\
                     busdox-docid-qns%3A%3Aurn%3Aoasis%3Anames%3Aspecification%3Aubl%3A\
                     schema%3Axsd%3AInvoice-2%3A%3AInvoice%23%23urn%3Acen.eu%3Aen16931%3A2017";
         assert_eq!(
             doctype_from_href(href).unwrap(),
-            "busdox-docid-qns::urn:oasis:names:specification:ubl:schema:xsd:\
+            "urn:oasis:names:specification:ubl:schema:xsd:\
              Invoice-2::Invoice##urn:cen.eu:en16931:2017"
+        );
+        // Sans préfixe de schéma (SMP non conforme) : la valeur est gardée
+        // telle quelle — le « :: » interne au doctype n'est pas un séparateur.
+        let href_nu = "http://smp.example/x/services/\
+                       urn%3Aoasis%3Ax%3AInvoice-2%3A%3AInvoice%23%23urn%3Acen.eu%3Aen16931%3A2017";
+        assert_eq!(
+            doctype_from_href(href_nu).unwrap(),
+            "urn:oasis:x:Invoice-2::Invoice##urn:cen.eu:en16931:2017"
         );
         assert!(doctype_from_href("http://smp.example/sans-services").is_none());
     }
@@ -559,12 +582,13 @@ mod tests {
     }
 
     fn sg_xml(smp: &str, doctypes: &[&str]) -> String {
+        // Comme les SMP réels : le segment services est « {scheme}::{value} ».
         let refs: String = doctypes
             .iter()
             .map(|d| {
                 format!(
                     r#"<smp:ServiceMetadataReference href="{smp}/x/services/{}"/>"#,
-                    utf8_percent_encode(d, PID_ENCODE)
+                    utf8_percent_encode(&format!("busdox-docid-qns::{d}"), PID_ENCODE)
                 )
             })
             .collect();
@@ -610,7 +634,10 @@ mod tests {
         Mock::given(method("GET"))
             .and(path(format!(
                 "/x/services/{}",
-                utf8_percent_encode(FR_CTC_PRIMARY_INVOICE, PID_ENCODE)
+                utf8_percent_encode(
+                    &format!("busdox-docid-qns::{FR_CTC_PRIMARY_INVOICE}"),
+                    PID_ENCODE
+                )
             )))
             .respond_with(ResponseTemplate::new(200).set_body_string(md_xml(TEST_CERT_B64)))
             .mount(&server)
@@ -647,6 +674,10 @@ mod tests {
         let it = &items[0];
         assert!(it.error.is_none(), "erreur item : {:?}", it.error);
         assert_eq!(it.exists, Some(true));
+        // Ce PID annonce le doctype CTC extended dans son ServiceGroup —
+        // garde-fou contre une régression du décodage des hrefs (le préfixe
+        // busdox-docid-qns:: rendait supports toujours false, 2026-07-14).
+        assert_eq!(it.supports_extended_ctc_fr, Some(true), "item : {it:?}");
         assert!(it.pa.is_some(), "PA attendue, item : {it:?}");
         assert!(stats.latency_ms > 0);
     }
@@ -720,7 +751,7 @@ mod tests {
         Mock::given(method("GET"))
             .and(path(format!(
                 "/x/services/{}",
-                utf8_percent_encode("autre::doctype", PID_ENCODE)
+                utf8_percent_encode("busdox-docid-qns::autre::doctype", PID_ENCODE)
             )))
             .respond_with(ResponseTemplate::new(200).set_body_string(md_xml(TEST_CERT_B64)))
             .mount(&server)
