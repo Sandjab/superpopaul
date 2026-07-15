@@ -30,6 +30,10 @@ use std::time::{Duration, Instant};
 
 pub const SML_PROD: &str = "participant.sml.prod.tech.peppol.org";
 
+/// Cible de la sonde preflight : hôte Peppol public et stable, hors SML/SMP
+/// (seul le chemin proxy→HTTPS est testé, pas la cible elle-même).
+pub const PROXY_PROBE_URL: &str = "https://directory.peppol.eu/";
+
 /// Doctype de la facture structurée principale (PASR §6.1.c). DOIT rester
 /// identique à FR_CTC_PRIMARY_INVOICE de peppol_api.py.
 pub const FR_CTC_PRIMARY_INVOICE: &str =
@@ -385,6 +389,25 @@ impl DirectClient {
                 DNS_CONCURRENCY_DEFAULT as usize,
             )),
             sml_zone: sml_zone.to_string(),
+        }
+    }
+
+    /// Sonde le chemin réseau avant un run derrière proxy : un GET dont
+    /// toute réponse HTTP (même 4xx/5xx, sauf 407) vaut succès — elle prouve
+    /// que le proxy achemine. Un échec d'envoi (tunnel refusé, proxy
+    /// injoignable) ou un 407 bloquent le lancement avec la cause, au lieu
+    /// de laisser le run labourer tout le fichier en erreurs.
+    pub async fn preflight_proxy(&self, probe_url: &str) -> Result<(), String> {
+        match self.http.get(probe_url).send().await {
+            Ok(resp) if resp.status().as_u16() == 407 => Err(
+                "Le proxy refuse les identifiants (407). Vérifiez-les dans ⚙.".into(),
+            ),
+            Ok(_) => Ok(()),
+            Err(e) => Err(format!(
+                "Le proxy n'achemine pas les requêtes ({}). Vérifiez l'URL du \
+                 proxy et les identifiants dans ⚙.",
+                root_cause(&e)
+            )),
         }
     }
 
@@ -950,6 +973,54 @@ mod tests {
         let (items, _) = c.resolve_batch(&[PID.to_string()]).await.unwrap();
         assert_eq!(items[0].error.as_deref(), Some("SML lookup: NoAnswer"));
         assert!(items[0].exists.is_none());
+    }
+
+    #[tokio::test]
+    async fn preflight_bloque_sur_proxy_qui_refuse_le_tunnel() {
+        // Proxy répondant 403 au CONNECT (créds faux) : le preflight refuse
+        // de lancer le run, avec la cause — au lieu de laisser le run
+        // labourer tout le fichier en erreurs (run proxy du 15/07).
+        let proxy = fake_proxy_403().await;
+        let http = reqwest::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .proxy(
+                reqwest::Proxy::all(format!("http://{proxy}"))
+                    .unwrap()
+                    .basic_auth("user", "faux"),
+            )
+            .build()
+            .unwrap();
+        let c = DirectClient::for_tests_http(fake_dns("aucun", SmlLookup::NotRegistered), ZONE, http);
+        let err = c.preflight_proxy("https://sonde.exemple/").await.unwrap_err();
+        assert!(err.contains("proxy"), "{err}");
+        assert!(err.contains("tunnel error: unsuccessful"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn preflight_passe_sur_toute_reponse_http() {
+        // Une réponse HTTP — même 500 — prouve que le chemin réseau
+        // fonctionne : seuls les échecs d'acheminement bloquent le run.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+        let c = DirectClient::for_tests(fake_dns("aucun", SmlLookup::NotRegistered), ZONE);
+        assert!(c.preflight_proxy(&server.uri()).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn preflight_bloque_sur_reponse_407() {
+        // 407 en réponse directe (proxy http sans CONNECT) : identifiants
+        // refusés, même verdict que le tunnel.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(407))
+            .mount(&server)
+            .await;
+        let c = DirectClient::for_tests(fake_dns("aucun", SmlLookup::NotRegistered), ZONE);
+        let err = c.preflight_proxy(&server.uri()).await.unwrap_err();
+        assert!(err.contains("proxy"), "{err}");
     }
 
     #[tokio::test]

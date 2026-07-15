@@ -352,6 +352,13 @@ pub async fn start_run(
     .map_err(|e| e.to_string())??;
     let total = todo.len() as u64;
     let client = state.client()?;
+    // Derrière un proxy en mode direct : sonde avant de lancer — un proxy
+    // qui refuse le tunnel (créds faux → 403 au CONNECT chez beaucoup de
+    // proxys, jamais détectable en 407) ferait labourer tout le fichier
+    // en erreurs (run du 15/07/2026).
+    if cfg.api.mode == ApiMode::Direct && cfg.api.proxy.is_some() {
+        client.preflight_proxy().await?;
+    }
     let (tx, mut rx) = tokio::sync::mpsc::channel(256);
     {
         // Garde définitif : re-vérifie et installe sous LE MÊME verrou

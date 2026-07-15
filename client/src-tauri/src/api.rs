@@ -168,6 +168,15 @@ impl ApiClient {
         }
     }
 
+    /// Sonde le proxy avant un run direct (voir DirectClient::preflight_proxy).
+    /// Sans objet en mode API : Ok — le premier appel batch fait office de test.
+    pub async fn preflight_proxy(&self) -> Result<(), String> {
+        match &self.inner {
+            Inner::Direct(d) => d.preflight_proxy(crate::direct::PROXY_PROBE_URL).await,
+            Inner::Http(_) => Ok(()),
+        }
+    }
+
     pub async fn resolve_batch(
         &self,
         pids: &[String],
