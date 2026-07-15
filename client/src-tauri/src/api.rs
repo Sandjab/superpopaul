@@ -79,6 +79,10 @@ pub struct ApiItem {
 pub struct CallStats {
     pub http_status: u16,
     pub latency_ms: u64,
+    /// Mode direct : statuts réels des GET SMP du paquet (statut→compte,
+    /// 0 = échec de connexion) pour l'histogramme HTTP. None en mode API,
+    /// où http_status raconte tout.
+    pub smp_http: Option<std::collections::BTreeMap<u16, u32>>,
 }
 
 /// Client de résolution du moteur. Deux transports : l'API Popaul
@@ -235,6 +239,7 @@ impl HttpTransport {
                     CallStats {
                         http_status: 200,
                         latency_ms,
+                        smp_http: None,
                     },
                 ))
             }
@@ -261,6 +266,7 @@ impl HttpTransport {
             Ok(CallStats {
                 http_status: 200,
                 latency_ms,
+                smp_http: None,
             })
         } else {
             Err(Self::status_to_error(status, resp.headers()))
@@ -282,6 +288,7 @@ impl HttpTransport {
             Ok(CallStats {
                 http_status: 200,
                 latency_ms,
+                smp_http: None,
             })
         } else {
             Err(Self::status_to_error(status, resp.headers()))

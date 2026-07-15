@@ -22,6 +22,7 @@ use crate::api::{ApiError, ApiItem, CallStats, PaInfo, ProxyCreds};
 use data_encoding::{BASE32, BASE64, BASE64URL_NOPAD};
 use percent_encoding::{percent_decode_str, utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 #[cfg(test)]
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -396,19 +397,27 @@ impl DirectClient {
     ) -> Result<(Vec<ApiItem>, CallStats), ApiError> {
         let t0 = Instant::now();
         let mut items = Vec::with_capacity(pids.len());
+        // Statuts réels des GET SMP du paquet (0 = échec de connexion) :
+        // l'histogramme HTTP du run reflète les SMP, pas un 200 synthétique.
+        let mut smp_http = BTreeMap::new();
         for pid in pids {
-            items.push(self.resolve_one(pid).await?);
+            items.push(self.resolve_one(pid, &mut smp_http).await?);
         }
         Ok((
             items,
             CallStats {
                 http_status: 200,
                 latency_ms: t0.elapsed().as_millis() as u64,
+                smp_http: Some(smp_http),
             },
         ))
     }
 
-    async fn resolve_one(&self, pid: &str) -> Result<ApiItem, ApiError> {
+    async fn resolve_one(
+        &self,
+        pid: &str,
+        smp_http: &mut BTreeMap<u16, u32>,
+    ) -> Result<ApiItem, ApiError> {
         let (scheme, value) = match pid.split_once("::") {
             Some((s, v)) if !s.is_empty() && !v.is_empty() => (s, v),
             _ => (DEFAULT_SCHEME, pid),
@@ -442,7 +451,7 @@ impl DirectClient {
             smp_url.trim_end_matches('/'),
             utf8_percent_encode(&pid_full, PID_ENCODE)
         );
-        let sg_xml = match self.get_text(&sg_url).await? {
+        let sg_xml = match self.get_text(&sg_url, smp_http).await? {
             Ok(xml) => xml,
             Err(msg) => {
                 // Enregistré mais catalogue illisible : exists=true, on ne
@@ -469,7 +478,7 @@ impl DirectClient {
             hrefs.first()
         };
         if let Some(href) = target {
-            if let Ok(Ok(md_xml)) = self.get_text(href).await.map(|r| r) {
+            if let Ok(Ok(md_xml)) = self.get_text(href, smp_http).await.map(|r| r) {
                 if let Some(cert_b64) = first_certificate(&md_xml) {
                     if let Some(pa) = pa_from_cert(&cert_b64) {
                         item.pa = Some(pa);
@@ -481,8 +490,13 @@ impl DirectClient {
     }
 
     /// GET texte. Err(ApiError) uniquement pour l'auth proxy (bloquant run) ;
-    /// Ok(Err(msg)) pour les échecs propres à cet adressage.
-    async fn get_text(&self, url: &str) -> Result<Result<String, String>, ApiError> {
+    /// Ok(Err(msg)) pour les échecs propres à cet adressage. Chaque tentative
+    /// crédite `smp_http` de son statut (0 = échec de connexion).
+    async fn get_text(
+        &self,
+        url: &str,
+        smp_http: &mut BTreeMap<u16, u32>,
+    ) -> Result<Result<String, String>, ApiError> {
         let resp = match self
             .http
             .get(url)
@@ -503,10 +517,12 @@ impl DirectClient {
                 }
                 // Cause profonde plutôt que le Display reqwest complet : son
                 // URL variable rendrait chaque motif/note distinct.
+                *smp_http.entry(0).or_insert(0) += 1;
                 return Ok(Err(format!("fetch: {}", root_cause(&e))));
             }
         };
         let status = resp.status().as_u16();
+        *smp_http.entry(status).or_insert(0) += 1;
         if status == 407 {
             return Err(ApiError::ProxyAuth);
         }
@@ -934,6 +950,27 @@ mod tests {
         let (items, _) = c.resolve_batch(&[PID.to_string()]).await.unwrap();
         assert_eq!(items[0].error.as_deref(), Some("SML lookup: NoAnswer"));
         assert!(items[0].exists.is_none());
+    }
+
+    #[tokio::test]
+    async fn stats_portent_les_statuts_reels_des_get_smp() {
+        // L'histogramme HTTP du run affichait un 200 synthétique par paquet
+        // quel que soit le sort des GET SMP : les stats portent désormais la
+        // carte des statuts réels (ici : ServiceGroup en 403).
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(403))
+            .mount(&server)
+            .await;
+        let c = DirectClient::for_tests(
+            fake_dns(&host_for_pid(), SmlLookup::Found(server.uri())),
+            ZONE,
+        );
+        let (_, stats) = c.resolve_batch(&[PID.to_string()]).await.unwrap();
+        assert_eq!(
+            stats.smp_http,
+            Some(std::collections::BTreeMap::from([(403u16, 1u32)]))
+        );
     }
 
     #[tokio::test]

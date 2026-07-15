@@ -479,8 +479,13 @@ impl Engine {
                                 let st = store.lock().unwrap();
                                 let _ = st.upsert_batch(&resolutions);
                             }
+                            // Direct : statuts réels des GET SMP ; API : le
+                            // statut de l'appel batch, compté une fois.
+                            let http = stats.smp_http.unwrap_or_else(|| {
+                                std::collections::BTreeMap::from([(stats.http_status, 1)])
+                            });
                             telemetry.record_call(
-                                stats.http_status,
+                                &http,
                                 stats.latency_ms,
                                 items.len() as u32,
                                 ex,
