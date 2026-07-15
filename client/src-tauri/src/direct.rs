@@ -372,8 +372,13 @@ impl DirectClient {
 
     #[cfg(test)]
     fn for_tests(dns: Dns, sml_zone: &str) -> Self {
+        Self::for_tests_http(dns, sml_zone, reqwest::Client::new())
+    }
+
+    #[cfg(test)]
+    fn for_tests_http(dns: Dns, sml_zone: &str, http: reqwest::Client) -> Self {
         DirectClient {
-            http: reqwest::Client::new(),
+            http,
             dns: Arc::new(dns),
             dns_sem: Arc::new(tokio::sync::Semaphore::new(
                 DNS_CONCURRENCY_DEFAULT as usize,
@@ -416,7 +421,17 @@ impl DirectClient {
                 return Ok(item_base(&pid_full, Some(false), Some(false)));
             }
             SmlLookup::Failed(status) => {
-                return Ok(item_error(&pid_full, &format!("SML lookup: {status}")));
+                // DNS_ERROR embarque le message hickory (nom d'hôte variable
+                // par participant) : motif borné pour la télémétrie, détail
+                // complet dans la note.
+                return Ok(match status.strip_prefix("DNS_ERROR:") {
+                    Some(detail) => {
+                        let mut it = item_error(&pid_full, "SML lookup: erreur DNS");
+                        it.note = Some(format!("{host} : {detail}"));
+                        it
+                    }
+                    None => item_error(&pid_full, &format!("SML lookup: {status}")),
+                });
             }
             SmlLookup::Found(url) => url,
         };
@@ -486,7 +501,9 @@ impl DirectClient {
                     }
                     cur = err.source();
                 }
-                return Ok(Err(format!("fetch: {e}")));
+                // Cause profonde plutôt que le Display reqwest complet : son
+                // URL variable rendrait chaque motif/note distinct.
+                return Ok(Err(format!("fetch: {}", root_cause(&e))));
             }
         };
         let status = resp.status().as_u16();
@@ -501,6 +518,16 @@ impl DirectClient {
             Err(e) => Ok(Err(format!("fetch: {e}"))),
         }
     }
+}
+
+/// Dernier maillon de la chaîne d'erreurs : la cause réelle (ex. « tunnel
+/// error: unsuccessful »), débarrassée des enrobages reqwest/hyper.
+fn root_cause(e: &(dyn std::error::Error + 'static)) -> String {
+    let mut cur = e;
+    while let Some(src) = cur.source() {
+        cur = src;
+    }
+    cur.to_string()
 }
 
 fn item_base(pid_full: &str, exists: Option<bool>, supports: Option<bool>) -> ApiItem {
@@ -907,6 +934,79 @@ mod tests {
         let (items, _) = c.resolve_batch(&[PID.to_string()]).await.unwrap();
         assert_eq!(items[0].error.as_deref(), Some("SML lookup: NoAnswer"));
         assert!(items[0].exists.is_none());
+    }
+
+    #[tokio::test]
+    async fn echec_dns_detaille_motif_borne_et_note() {
+        // Les DNS_ERROR embarquent le message hickory, qui contient le nom
+        // d'hôte (variable par participant) : en motif de télémétrie ils
+        // explosaient le Top erreurs en « (autres) » (run proxy du 15/07).
+        // Motif borné, détail dans la note.
+        let c = DirectClient::for_tests(
+            fake_dns(
+                &host_for_pid(),
+                SmlLookup::Failed("DNS_ERROR:proto error: timeout sur xyz.sml.test".into()),
+            ),
+            ZONE,
+        );
+        let (items, _) = c.resolve_batch(&[PID.to_string()]).await.unwrap();
+        assert_eq!(items[0].error.as_deref(), Some("SML lookup: erreur DNS"));
+        let note = items[0].note.as_deref().unwrap();
+        assert!(note.contains("timeout sur xyz.sml.test"), "{note}");
+        assert!(items[0].exists.is_none());
+    }
+
+    /// Faux proxy : répond 403 à tout CONNECT (créds refusés) puis ferme.
+    async fn fake_proxy_403() -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else {
+                    break;
+                };
+                let mut buf = [0u8; 4096];
+                use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                let _ = sock.read(&mut buf).await;
+                let _ = sock
+                    .write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
+                    .await;
+            }
+        });
+        addr
+    }
+
+    #[tokio::test]
+    async fn echec_proxy_tunnel_note_cause_profonde() {
+        // Proxy répondant 403 au CONNECT (créds faux) : la note porte la
+        // cause profonde de la chaîne reqwest (« tunnel error: unsuccessful »)
+        // et l'URL du SMP — pas le message reqwest complet, dont l'URL
+        // variable rendait chaque motif distinct.
+        let proxy = fake_proxy_403().await;
+        let http = reqwest::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .proxy(
+                reqwest::Proxy::all(format!("http://{proxy}"))
+                    .unwrap()
+                    .basic_auth("user", "faux"),
+            )
+            .build()
+            .unwrap();
+        let c = DirectClient::for_tests_http(
+            fake_dns(
+                &host_for_pid(),
+                SmlLookup::Found("https://smp.exemple".into()),
+            ),
+            ZONE,
+            http,
+        );
+        let (items, _) = c.resolve_batch(&[PID.to_string()]).await.unwrap();
+        let it = &items[0];
+        assert_eq!(it.exists, Some(true));
+        let note = it.note.as_deref().unwrap();
+        assert!(note.contains("tunnel error: unsuccessful"), "{note}");
+        assert!(note.contains("https://smp.exemple"), "{note}");
+        assert!(!note.contains("error sending request"), "{note}");
     }
 
     #[tokio::test]
