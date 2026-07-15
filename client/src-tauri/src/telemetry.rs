@@ -25,6 +25,7 @@ struct Inner {
     done: u64,
     exists: u64,
     ctc: u64,
+    no_verdict: u64,
     failed: u64,
     http: BTreeMap<u16, u64>,
     pa: BTreeMap<String, u64>, // nom de PA → adressages routés vers elle
@@ -55,6 +56,7 @@ pub struct LineWeights {
     pub done: u64,
     pub exists: u64,
     pub ctc: u64,
+    pub no_verdict: u64,
 }
 
 /// Un libellé (nom de PA, motif d'échec…) et un nombre d'adressages.
@@ -78,11 +80,15 @@ pub struct Snapshot {
     pub total: u64,
     pub exists: u64,
     pub ctc: u64,
+    /// Présents dans Peppol mais sans verdict CTC (catalogue SMP illisible) :
+    /// à part du gap exists−ctc, qui ne compte que les confirmés sans extension.
+    pub no_verdict: u64,
     pub failed: u64,
-    /// Équivalents en lignes de fichier de done/exists/ctc.
+    /// Équivalents en lignes de fichier de done/exists/ctc/no_verdict.
     pub done_lines: u64,
     pub exists_lines: u64,
     pub ctc_lines: u64,
+    pub no_verdict_lines: u64,
     pub http: BTreeMap<u16, u64>,
     /// PA découvertes, classées par représentativité décroissante
     /// (à égalité : ordre alphabétique, pour un affichage stable).
@@ -118,6 +124,7 @@ impl Telemetry {
                 done: 0,
                 exists: 0,
                 ctc: 0,
+                no_verdict: 0,
                 failed: 0,
                 http: BTreeMap::new(),
                 pa: BTreeMap::new(),
@@ -147,7 +154,8 @@ impl Telemetry {
     }
 
     /// Un appel HTTP abouti (200) : addr adressages traités, dont `exists`
-    /// présents Peppol, `ctc` supportant CTC-FR, `failed` en erreur item.
+    /// présents Peppol, `ctc` supportant CTC-FR, `no_verdict` présents sans
+    /// verdict CTC (catalogue SMP illisible), `failed` en erreur item.
     /// `pa` : adressages de l'appel agrégés par nom de PA.
     /// `lines` : les mêmes compteurs pondérés en lignes de fichier.
     /// `errors` : adressages en erreur item, agrégés par motif.
@@ -159,6 +167,7 @@ impl Telemetry {
         addr: u32,
         exists: u32,
         ctc: u32,
+        no_verdict: u32,
         failed: u32,
         pa: &BTreeMap<String, u32>,
         lines: LineWeights,
@@ -168,10 +177,12 @@ impl Telemetry {
         i.done += addr as u64;
         i.exists += exists as u64;
         i.ctc += ctc as u64;
+        i.no_verdict += no_verdict as u64;
         i.failed += failed as u64;
         i.lines.done += lines.done;
         i.lines.exists += lines.exists;
         i.lines.ctc += lines.ctc;
+        i.lines.no_verdict += lines.no_verdict;
         *i.http.entry(http_status).or_insert(0) += 1;
         for (name, n) in pa {
             *i.pa.entry(name.clone()).or_insert(0) += *n as u64;
@@ -210,7 +221,7 @@ impl Telemetry {
         // Sous le verrou : purge de la fenêtre + copies. Le tri des latences
         // (coûteux à grand volume) se fait HORS verrou pour ne pas bloquer
         // les record_call des workers.
-        let (done, exists, ctc, failed, http, pa, errors, lines, latencies, req_per_s, addr_per_s, active_s) = {
+        let (done, exists, ctc, no_verdict, failed, http, pa, errors, lines, latencies, req_per_s, addr_per_s, active_s) = {
             let mut i = self.inner.lock().unwrap();
             let now = Instant::now();
             while let Some((t, _)) = i.calls.front() {
@@ -234,6 +245,7 @@ impl Telemetry {
                 i.done,
                 i.exists,
                 i.ctc,
+                i.no_verdict,
                 i.failed,
                 i.http.clone(),
                 i.pa.clone(),
@@ -267,10 +279,12 @@ impl Telemetry {
             total: self.total,
             exists,
             ctc,
+            no_verdict,
             failed,
             done_lines: lines.done,
             exists_lines: lines.exists,
             ctc_lines: lines.ctc,
+            no_verdict_lines: lines.no_verdict,
             http,
             pa,
             errors,
@@ -364,8 +378,8 @@ mod tests {
     fn compteurs_et_pourcentages() {
         let t = Telemetry::new(1000);
         // 2 appels : 50 adressages ok (30 existent, 20 ctc), puis 25 ok + 5 échecs
-        t.record_call(200, 120, 50, 30, 20, 0, &vide(), LineWeights::default(), &vide());
-        t.record_call(200, 250, 30, 10, 5, 5, &vide(), LineWeights::default(), &vide());
+        t.record_call(200, 120, 50, 30, 20, 0, 0, &vide(), LineWeights::default(), &vide());
+        t.record_call(200, 250, 30, 10, 5, 0, 5, &vide(), LineWeights::default(), &vide());
         let s = t.snapshot();
         assert_eq!(s.total, 1000);
         assert_eq!(s.done, 80);
@@ -393,11 +407,27 @@ mod tests {
         // peut couvrir 7 lignes dont 5 présentes et 3 CTC. Un échec d'appel
         // définitif couvre aussi ses lignes (dénominateur cohérent).
         let t = Telemetry::new(10);
-        t.record_call(200, 100, 2, 1, 1, 0, &vide(),
-            LineWeights { done: 7, exists: 5, ctc: 3 }, &vide());
+        t.record_call(200, 100, 2, 1, 1, 0, 0, &vide(),
+            LineWeights { done: 7, exists: 5, ctc: 3, no_verdict: 0 }, &vide());
         t.record_error(400, 2, 4);
         let s = t.snapshot();
         assert_eq!((s.done_lines, s.exists_lines, s.ctc_lines), (11, 5, 3));
+    }
+
+    #[test]
+    fn sans_verdict_compte_en_adressages_et_en_lignes() {
+        // Présent dans Peppol mais catalogue SMP illisible : ni « avec
+        // extension » ni « à convertir ». Le compteur distingue ces
+        // adressages du gap exists−ctc, que l'UI présentait à tort comme
+        // « le reste à convertir » (cas Serensia du 15/07 : 2 165 adressages).
+        let t = Telemetry::new(100);
+        t.record_call(200, 100, 5, 3, 1, 2, 0, &vide(),
+            LineWeights { done: 8, exists: 5, ctc: 2, no_verdict: 3 }, &vide());
+        let s = t.snapshot();
+        assert_eq!(s.exists, 3);
+        assert_eq!(s.ctc, 1);
+        assert_eq!(s.no_verdict, 2);
+        assert_eq!(s.no_verdict_lines, 3);
     }
 
     #[test]
@@ -406,9 +436,9 @@ mod tests {
         // nombre d'adressages décroissant (rang 1 = la plus représentée),
         // à égalité par nom pour un ordre stable.
         let t = Telemetry::new(100);
-        t.record_call(200, 100, 8, 8, 0, 0, &BTreeMap::from([("Beta".into(), 5), ("Alpha".into(), 3)]),
+        t.record_call(200, 100, 8, 8, 0, 0, 0, &BTreeMap::from([("Beta".into(), 5), ("Alpha".into(), 3)]),
             LineWeights::default(), &vide());
-        t.record_call(200, 100, 4, 4, 0, 0, &BTreeMap::from([("Alpha".into(), 4), ("Gamma".into(), 5)]),
+        t.record_call(200, 100, 4, 4, 0, 0, 0, &BTreeMap::from([("Alpha".into(), 4), ("Gamma".into(), 5)]),
             LineWeights::default(), &vide());
         let s = t.snapshot();
         let ranking: Vec<(&str, u64)> = s.pa.iter().map(|p| (p.name.as_str(), p.count)).collect();
@@ -422,7 +452,7 @@ mod tests {
     fn percentiles_latence() {
         let t = Telemetry::new(100);
         for (i, ms) in (1..=100u64).enumerate() {
-            t.record_call(200, ms, 1, 0, 0, 0, &vide(), LineWeights::default(), &vide());
+            t.record_call(200, ms, 1, 0, 0, 0, 0, &vide(), LineWeights::default(), &vide());
             let _ = i;
         }
         let s = t.snapshot();
@@ -439,7 +469,7 @@ mod tests {
         let t = Telemetry::new(100);
         // 2 erreurs item « timeout SMP », 1 « participant invalide » dans un
         // appel 200 ; puis un échec HTTP définitif de 10 adressages.
-        t.record_call(200, 100, 5, 2, 0, 3, &vide(), LineWeights::default(),
+        t.record_call(200, 100, 5, 2, 0, 0, 3, &vide(), LineWeights::default(),
             &BTreeMap::from([("timeout SMP".into(), 2), ("participant invalide".into(), 1)]));
         t.record_error(404, 10, 10);
         let s = t.snapshot();
@@ -466,7 +496,7 @@ mod tests {
         // borner mémoire et taille du snapshot.
         let t = Telemetry::new(1000);
         for i in 0..25 {
-            t.record_call(200, 100, 1, 0, 0, 1, &vide(), LineWeights::default(),
+            t.record_call(200, 100, 1, 0, 0, 0, 1, &vide(), LineWeights::default(),
                 &BTreeMap::from([(format!("motif {i:02}"), 1u32)]));
         }
         let s = t.snapshot();
@@ -479,7 +509,7 @@ mod tests {
     fn histogramme_de_latences_par_tranches() {
         let t = Telemetry::new(10);
         for ms in [10u64, 60, 150, 700, 6000] {
-            t.record_call(200, ms, 1, 0, 0, 0, &vide(), LineWeights::default(), &vide());
+            t.record_call(200, ms, 1, 0, 0, 0, 0, &vide(), LineWeights::default(), &vide());
         }
         let hist = t.snapshot().latency_hist;
         // Bornes fixes ≤50, ≤100, ≤200, ≤500, ≤1000, ≤2000, ≤5000, au-delà.
@@ -505,7 +535,7 @@ mod tests {
         // 1 requête portant 50 adressages : addr_per_s ≈ 50 × req_per_s.
         // Un swap des deux champs ne passerait pas ce test.
         let t = Telemetry::new(1000);
-        t.record_call(200, 100, 50, 0, 0, 0, &vide(), LineWeights::default(), &vide());
+        t.record_call(200, 100, 50, 0, 0, 0, 0, &vide(), LineWeights::default(), &vide());
         let s = t.snapshot();
         assert!(s.req_per_s > 0.0);
         let ratio = s.addr_per_s / s.req_per_s;
@@ -516,7 +546,7 @@ mod tests {
     fn eta_present_des_qu_il_y_a_du_debit() {
         let t = Telemetry::new(1000);
         assert!(t.snapshot().eta_s.is_none()); // rien traité
-        t.record_call(200, 100, 100, 0, 0, 0, &vide(), LineWeights::default(), &vide());
+        t.record_call(200, 100, 100, 0, 0, 0, 0, &vide(), LineWeights::default(), &vide());
         let s = t.snapshot();
         assert!(s.addr_per_s > 0.0);
         assert!(s.eta_s.is_some());

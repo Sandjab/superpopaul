@@ -432,7 +432,7 @@ impl Engine {
                             breaker.lock().unwrap().on_success();
                             aimd.on_success();
                             let at = now_epoch();
-                            let (mut ex, mut ctc, mut failed) = (0u32, 0u32, 0u32);
+                            let (mut ex, mut ctc, mut nv, mut failed) = (0u32, 0u32, 0u32, 0u32);
                             let mut pa_counts: BTreeMap<String, u32> = BTreeMap::new();
                             let mut error_counts: BTreeMap<String, u32> = BTreeMap::new();
                             let mut lines = LineWeights::default();
@@ -447,6 +447,13 @@ impl Engine {
                                     if r.exists_in_peppol == Some(true) {
                                         ex += 1;
                                         lines.exists += w;
+                                        // Catalogue SMP illisible : présent mais
+                                        // sans verdict CTC — compté à part du
+                                        // « reste à convertir ».
+                                        if r.extended_ctc_fr.is_none() {
+                                            nv += 1;
+                                            lines.no_verdict += w;
+                                        }
                                     }
                                     if r.extended_ctc_fr == Some(true) {
                                         ctc += 1;
@@ -478,6 +485,7 @@ impl Engine {
                                 items.len() as u32,
                                 ex,
                                 ctc,
+                                nv,
                                 failed,
                                 &pa_counts,
                                 lines,
@@ -1044,6 +1052,58 @@ mod tests_engine {
         // EchoResolver : tout existe et tout est CTC → 2 adressages, 4 lignes.
         assert_eq!((s.done, s.done_lines), (2, 4));
         assert_eq!((s.exists_lines, s.ctc_lines), (4, 4));
+    }
+
+    #[tokio::test]
+    async fn adressage_sans_verdict_ctc_compte_separement() {
+        // Réponse « enregistré mais catalogue SMP illisible » : exists=true,
+        // supports_extended_ctc_fr=null. Ces adressages alimentent no_verdict
+        // (pas ctc), en adressages comme en lignes.
+        struct NoVerdictResolver;
+        impl Respond for NoVerdictResolver {
+            fn respond(&self, req: &Request) -> ResponseTemplate {
+                let body: serde_json::Value = serde_json::from_slice(&req.body).unwrap();
+                let results: Vec<serde_json::Value> = body["participants"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|p| {
+                        serde_json::json!({
+                            "participant_id": p, "exists": true,
+                            "supports_extended_ctc_fr": null,
+                            "note": "ServiceGroup HTTP 403 on https://smp.example"
+                        })
+                    })
+                    .collect();
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"results": results}))
+            }
+        }
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/resolve/batch"))
+            .respond_with(NoVerdictResolver)
+            .mount(&server)
+            .await;
+        let store = Arc::new(Mutex::new(Store::open_in_memory().unwrap()));
+        let client = ApiClient::new(&server.uri(), "K", None, None).unwrap();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        let todo = pids(2);
+        let line_counts = HashMap::from([(todo[0].clone(), 3u64)]);
+        let handle = Engine::start(
+            client,
+            EngineParams {
+                batch_size: 10,
+                concurrency: 1,
+            },
+            todo,
+            line_counts,
+            store,
+            tx,
+        );
+        wait_finished(&mut rx).await;
+        let s = handle.telemetry.snapshot();
+        assert_eq!((s.exists, s.ctc, s.no_verdict), (2, 0, 2));
+        assert_eq!((s.exists_lines, s.ctc_lines, s.no_verdict_lines), (4, 0, 4));
     }
 
     #[tokio::test]

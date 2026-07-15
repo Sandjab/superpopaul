@@ -250,11 +250,14 @@ const HTTP_CATS = [
 /** Mini-anneau d'une tuile : % à l'intérieur (en adressages), absolus à côté
  *  en adressages ET en lignes de fichier (le % des lignes couvertes diffère,
  *  un adressage pouvant porter plusieurs lignes). Tant que rien n'est résolu,
- *  tout reste à « — ». */
-function renderMiniRing(ring, count, outOf, lineCount, linesOutOf) {
+ *  tout reste à « — ». `warnCount` (optionnel) : part « sans verdict »,
+ *  segment orange après le vert — absent quand le compteur est à 0. */
+function renderMiniRing(ring, count, outOf, lineCount, linesOutOf, warnCount = 0) {
   const pct = outOf ? (100 * count / outOf) : 0;
-  $(`ring-${ring}`).style.background =
-    `conic-gradient(var(--green) ${pct}%, var(--track) ${pct}%)`;
+  const warnTo = outOf ? pct + (100 * warnCount / outOf) : 0;
+  $(`ring-${ring}`).style.background = warnCount > 0
+    ? `conic-gradient(var(--green) ${pct}%, var(--amber) ${pct}% ${warnTo}%, var(--track) ${warnTo}%)`
+    : `conic-gradient(var(--green) ${pct}%, var(--track) ${pct}%)`;
   $(`t-${ring}`).textContent = outOf ? `${pct.toFixed(1)} %` : "—";
   $(`t-${ring}-abs`).textContent = outOf ? fmt(count) : "—";
   $(`t-${ring}-lines`).textContent = linesOutOf ? fmt(lineCount) : "—";
@@ -277,11 +280,17 @@ listen("telemetry", (e) => {
     s.halted ? fmtActive(s.active_s)
              : s.eta_s != null ? fmtDuration(s.eta_s) : "—");
   renderMiniRing("exists", s.exists, s.done, s.exists_lines, s.done_lines);
-  renderMiniRing("ctc", s.ctc, s.done, s.ctc_lines, s.done_lines);
-  // Reste à convertir : présents dans Peppol mais sans l'extension France.
-  $("t-ctc-gap").textContent = s.done ? fmt(Math.max(0, s.exists - s.ctc)) : "—";
+  renderMiniRing("ctc", s.ctc, s.done, s.ctc_lines, s.done_lines, s.no_verdict);
+  // Reste à convertir : confirmés dans Peppol sans l'extension France — les
+  // « sans verdict » (catalogue SMP illisible) en sont exclus et affichés à
+  // part, sinon ils gonfleraient le chiffre à convertir.
+  $("t-ctc-gap").textContent =
+    s.done ? fmt(Math.max(0, s.exists - s.ctc - s.no_verdict)) : "—";
   $("t-ctc-gap-lines").textContent =
-    s.done ? fmt(Math.max(0, s.exists_lines - s.ctc_lines)) : "—";
+    s.done ? fmt(Math.max(0, s.exists_lines - s.ctc_lines - s.no_verdict_lines)) : "—";
+  $("t-ctc-nv").classList.toggle("hidden", !s.no_verdict);
+  $("t-ctc-nv-abs").textContent = fmt(s.no_verdict);
+  $("t-ctc-nv-lines").textContent = fmt(s.no_verdict_lines);
   $("t-rate").textContent = `${s.req_per_s.toFixed(1)} req/s · ${Math.round(s.addr_per_s)} adr/s`;
   rateSeries.push({ adr: s.addr_per_s });
   renderSpark("rate-spark", rateSeries.hist, [["adr", "var(--gold)"]]);

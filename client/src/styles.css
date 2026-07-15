@@ -235,6 +235,10 @@ body > .drag-fallback {
 #rate-spark svg { height: 40px; }
 .ctc-gap { margin: 7px 0 0; font-size: 12px; }
 .ctc-gap b { font-size: 13px; }
+/* Verdict CTC inconnu (catalogue SMP illisible) : avertissement orange,
+   ligne présente seulement quand le compteur est > 0. */
+.ctc-nv { margin: 3px 0 0; font-size: 12px; color: var(--amber); }
+.ctc-nv b { font-size: 13px; }
 .err-row { display: flex; align-items: baseline; gap: 10px; font-size: 12px; margin-top: 6px; }
 .err-count { color: var(--red); font-weight: 600; min-width: 6ch; text-align: right; }
 .err-row.muted .err-count { color: var(--muted); }
