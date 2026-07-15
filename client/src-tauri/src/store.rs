@@ -12,6 +12,9 @@ pub struct Resolution {
     pub extended_ctc_fr: Option<bool>,
     pub api_status: String,
     pub resolved_at: i64,
+    /// Note diagnostique du résolveur (ex. « ServiceGroup HTTP 403 on … »)
+    /// quand exists=1 sans PA ni verdict CTC : catalogue SMP illisible.
+    pub note: Option<String>,
 }
 
 pub struct Store {
@@ -27,20 +30,22 @@ CREATE TABLE IF NOT EXISTS resolutions (
   pa_country        TEXT,
   extended_ctc_fr   INTEGER,
   api_status        TEXT NOT NULL,
-  resolved_at       INTEGER NOT NULL
+  resolved_at       INTEGER NOT NULL,
+  note              TEXT
 );
 ";
 
 const UPSERT_SQL: &str = "INSERT INTO resolutions
  (participant, exists_in_peppol, pa_code, pa_name, pa_country,
-  extended_ctc_fr, api_status, resolved_at)
- VALUES (?1,?2,?3,?4,?5,?6,?7,?8)
+  extended_ctc_fr, api_status, resolved_at, note)
+ VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)
  ON CONFLICT(participant) DO UPDATE SET
    exists_in_peppol=excluded.exists_in_peppol,
    pa_code=excluded.pa_code, pa_name=excluded.pa_name,
    pa_country=excluded.pa_country,
    extended_ctc_fr=excluded.extended_ctc_fr,
-   api_status=excluded.api_status, resolved_at=excluded.resolved_at";
+   api_status=excluded.api_status, resolved_at=excluded.resolved_at,
+   note=excluded.note";
 
 impl Store {
     pub fn open(path: &Path) -> Result<Self, String> {
@@ -63,6 +68,16 @@ impl Store {
 
     fn init(conn: Connection) -> Result<Self, String> {
         conn.execute_batch(SCHEMA).map_err(|e| e.to_string())?;
+        // Migration : les bases d'avant la colonne note sont complétées
+        // à l'ouverture.
+        let a_note: bool = conn
+            .prepare("SELECT 1 FROM pragma_table_info('resolutions') WHERE name='note'")
+            .and_then(|mut s| s.exists([]))
+            .map_err(|e| e.to_string())?;
+        if !a_note {
+            conn.execute("ALTER TABLE resolutions ADD COLUMN note TEXT", [])
+                .map_err(|e| e.to_string())?;
+        }
         Ok(Store { conn })
     }
 
@@ -101,6 +116,7 @@ impl Store {
             &r.extended_ctc_fr,
             &r.api_status,
             &r.resolved_at,
+            &r.note,
         )
     }
 
@@ -108,7 +124,7 @@ impl Store {
         self.conn
             .query_row(
                 "SELECT participant, exists_in_peppol, pa_code, pa_name, pa_country,
-                        extended_ctc_fr, api_status, resolved_at
+                        extended_ctc_fr, api_status, resolved_at, note
                  FROM resolutions WHERE participant = ?1",
                 params![pid],
                 Self::row_to_resolution,
@@ -126,7 +142,7 @@ impl Store {
             let placeholders = vec!["?"; chunk.len()].join(",");
             let sql = format!(
                 "SELECT participant, exists_in_peppol, pa_code, pa_name, pa_country,
-                        extended_ctc_fr, api_status, resolved_at
+                        extended_ctc_fr, api_status, resolved_at, note
                  FROM resolutions WHERE participant IN ({placeholders})"
             );
             let mut stmt = self.conn.prepare_cached(&sql).map_err(|e| e.to_string())?;
@@ -151,6 +167,7 @@ impl Store {
             extended_ctc_fr: row.get(5)?,
             api_status: row.get(6)?,
             resolved_at: row.get(7)?,
+            note: row.get(8)?,
         })
     }
 }
@@ -169,6 +186,7 @@ mod tests {
             extended_ctc_fr: if ok { Some(true) } else { None },
             api_status: if ok { "ok".into() } else { "error:503".into() },
             resolved_at: at,
+            note: None,
         }
     }
 
@@ -223,6 +241,60 @@ mod tests {
         assert_eq!(m["b::49"].resolved_at, 49);
         // un batch vide ne plante pas
         s.upsert_batch(&[]).unwrap();
+    }
+
+    #[test]
+    fn note_persistee_en_aller_retour() {
+        // La note diagnostique (« ServiceGroup HTTP 403 on … ») doit survivre
+        // en base : c'est elle qui distingue un ban WAF d'une panne SMP quand
+        // exists=1 sans PA ni verdict CTC.
+        let s = Store::open_in_memory().unwrap();
+        let mut r = res("a::note", true, 1);
+        r.note = Some("ServiceGroup HTTP 403 on https://smp.example".into());
+        s.upsert(&r).unwrap();
+        let lu = s.get("a::note").unwrap().unwrap();
+        assert_eq!(
+            lu.note.as_deref(),
+            Some("ServiceGroup HTTP 403 on https://smp.example")
+        );
+        // Sans note : None en relecture (upsert écrase aussi la note).
+        s.upsert(&res("a::note", true, 2)).unwrap();
+        assert!(s.get("a::note").unwrap().unwrap().note.is_none());
+    }
+
+    #[test]
+    fn ouverture_migre_une_base_sans_colonne_note() {
+        // Les bases créées avant la colonne note doivent rester ouvrables,
+        // relisibles (note=None) et accepter des upserts avec note.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ancienne.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE resolutions (
+                   participant       TEXT PRIMARY KEY,
+                   exists_in_peppol  INTEGER,
+                   pa_code           TEXT,
+                   pa_name           TEXT,
+                   pa_country        TEXT,
+                   extended_ctc_fr   INTEGER,
+                   api_status        TEXT NOT NULL,
+                   resolved_at       INTEGER NOT NULL
+                 );
+                 INSERT INTO resolutions VALUES ('a::vieux', 1, NULL, NULL, NULL, NULL, 'ok', 42);",
+            )
+            .unwrap();
+        }
+        let s = Store::open(&path).unwrap();
+        let vieux = s.get("a::vieux").unwrap().unwrap();
+        assert!(vieux.note.is_none());
+        let mut r = res("a::neuf", true, 43);
+        r.note = Some("SMP catalogue indisponible".into());
+        s.upsert(&r).unwrap();
+        assert_eq!(
+            s.get("a::neuf").unwrap().unwrap().note.as_deref(),
+            Some("SMP catalogue indisponible")
+        );
     }
 
     #[test]

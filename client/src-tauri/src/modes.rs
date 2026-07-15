@@ -58,6 +58,7 @@ mod tests {
             extended_ctc_fr: None,
             api_status: status.into(),
             resolved_at: at,
+            note: None,
         };
         s.upsert(&mk("a::1", "ok", now - 86400)).unwrap(); // 1 jour
         s.upsert(&mk("a::2", "ok", now - 50 * 86400)).unwrap(); // 50 jours
@@ -125,6 +126,7 @@ mod tests {
             extended_ctc_fr: None,
             api_status: "ok".into(),
             resolved_at: now - 30 * 86400,
+            note: None,
         })
         .unwrap();
         let mode = RunMode::Refresh { max_age_days: 30 };

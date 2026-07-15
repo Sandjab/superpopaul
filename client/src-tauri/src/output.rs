@@ -301,6 +301,7 @@ mod tests {
                 extended_ctc_fr: Some(false),
                 api_status: "ok".into(),
                 resolved_at: 0,
+                note: None,
             },
         );
         m

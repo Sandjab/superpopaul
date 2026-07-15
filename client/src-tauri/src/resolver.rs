@@ -263,6 +263,7 @@ fn to_resolution(item: &ApiItem, sent: &str, at: i64) -> Resolution {
             extended_ctc_fr: None,
             api_status: format!("error:{e}"),
             resolved_at: at,
+            note: item.note.clone(),
         },
         None => Resolution {
             participant,
@@ -273,6 +274,7 @@ fn to_resolution(item: &ApiItem, sent: &str, at: i64) -> Resolution {
             extended_ctc_fr: item.supports_extended_ctc_fr,
             api_status: "ok".into(),
             resolved_at: at,
+            note: item.note.clone(),
         },
     }
 }
@@ -291,6 +293,7 @@ fn client_error_resolutions(chunk: &[String], code: u16, at: i64) -> Vec<Resolut
             extended_ctc_fr: None,
             api_status: format!("error:HTTP {code}"),
             resolved_at: at,
+            note: None,
         })
         .collect()
 }
@@ -881,6 +884,41 @@ mod tests_engine {
                 other => panic!("Finished attendu, obtenu {other:?}"),
             }
         }
+    }
+
+    #[test]
+    fn to_resolution_porte_la_note_diagnostique() {
+        // Item « enregistré mais catalogue illisible » (403 SMP, panne…) :
+        // la note est la seule trace de la cause, elle doit être persistée.
+        let item = crate::api::ApiItem {
+            participant_id: Some("a::1".into()),
+            participant: None,
+            exists: Some(true),
+            pa: None,
+            supports_extended_ctc_fr: None,
+            note: Some("ServiceGroup HTTP 403 on https://smp.example".into()),
+            error: None,
+        };
+        let r = to_resolution(&item, "a::1", 42);
+        assert_eq!(r.api_status, "ok");
+        assert_eq!(
+            r.note.as_deref(),
+            Some("ServiceGroup HTTP 403 on https://smp.example")
+        );
+        // Item en erreur : la note (si le serveur en joint une) est portée
+        // aussi — api_status garde la cause principale.
+        let err = crate::api::ApiItem {
+            participant_id: Some("a::2".into()),
+            participant: None,
+            exists: None,
+            pa: None,
+            supports_extended_ctc_fr: None,
+            note: Some("détail transitoire".into()),
+            error: Some("HTTP 503".into()),
+        };
+        let r = to_resolution(&err, "a::2", 42);
+        assert_eq!(r.api_status, "error:HTTP 503");
+        assert_eq!(r.note.as_deref(), Some("détail transitoire"));
     }
 
     #[tokio::test]
