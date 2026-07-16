@@ -563,6 +563,12 @@ impl DirectClient {
                         item.pa = Some(pa);
                     }
                 }
+                // Mesure : bornes de validité déclarées du support CTC (le
+                // ServiceMetadata téléchargé est celui du doctype CTC quand
+                // supports est vrai). Verdict inchangé.
+                if supports {
+                    item.note = service_dates_note(&md_xml);
+                }
             }
         }
         Ok(item)
@@ -677,6 +683,40 @@ fn doctype_from_href(href: &str) -> Option<String> {
         }
         _ => Some(decoded),
     }
+}
+
+/// Bornes de validité déclarées (ServiceActivationDate/ServiceExpirationDate,
+/// spec SMP) des endpoints d'un ServiceMetadata — étape de MESURE, portée en
+/// note sans toucher au verdict CTC, dans le MÊME format que le serveur
+/// (peppol_api.ctc_service_dates_note) pour que les requêtes SQL sur la
+/// colonne note voient les deux modes d'un coup.
+fn service_dates_note(xml: &str) -> Option<String> {
+    let doc = roxmltree::Document::parse(xml).ok()?;
+    let collect = |tag: &str| -> Vec<&str> {
+        let mut v: Vec<&str> = doc
+            .descendants()
+            .filter(|n| n.tag_name().name() == tag)
+            .filter_map(|n| n.text())
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .collect();
+        v.sort_unstable();
+        v.dedup();
+        v
+    };
+    let activations = collect("ServiceActivationDate");
+    let expirations = collect("ServiceExpirationDate");
+    if activations.is_empty() && expirations.is_empty() {
+        return None;
+    }
+    let mut parts = Vec::new();
+    if !activations.is_empty() {
+        parts.push(format!("activation {}", activations.join("/")));
+    }
+    if !expirations.is_empty() {
+        parts.push(format!("expiration {}", expirations.join("/")));
+    }
+    Some(format!("support CTC : {}", parts.join(", ")))
 }
 
 /// Premier élément <Certificate> (contenu base64) d'un ServiceMetadata.
@@ -1004,6 +1044,74 @@ mod tests {
                <Endpoint><Certificate>{cert_b64}</Certificate></Endpoint>
                </ServiceInformation></ServiceMetadata></SignedServiceMetadata>"#
         )
+    }
+
+    /// ServiceMetadata dont les deux endpoints portent des bornes de
+    /// validité (avec un doublon, pour vérifier la déduplication).
+    fn md_xml_avec_dates(cert_b64: &str) -> String {
+        format!(
+            r#"<?xml version="1.0"?><SignedServiceMetadata xmlns="http://busdox.org/serviceMetadata/publishing/1.0/">
+               <ServiceMetadata><ServiceInformation>
+               <Endpoint><Certificate>{cert_b64}</Certificate>
+                 <ServiceActivationDate>2026-09-01</ServiceActivationDate>
+                 <ServiceExpirationDate>2027-09-01</ServiceExpirationDate></Endpoint>
+               <Endpoint><Certificate>{cert_b64}</Certificate>
+                 <ServiceActivationDate>2026-09-01</ServiceActivationDate></Endpoint>
+               </ServiceInformation></ServiceMetadata></SignedServiceMetadata>"#
+        )
+    }
+
+    #[test]
+    fn dates_de_service_extraites_et_formatees_comme_le_serveur() {
+        // Sans dates : aucune note (le cas de loin majoritaire).
+        assert!(service_dates_note(&md_xml(TEST_CERT_B64)).is_none());
+        // Avec dates : format partagé avec peppol_api.ctc_service_dates_note,
+        // valeurs dédupliquées.
+        assert_eq!(
+            service_dates_note(&md_xml_avec_dates(TEST_CERT_B64)).as_deref(),
+            Some("support CTC : activation 2026-09-01, expiration 2027-09-01")
+        );
+    }
+
+    #[tokio::test]
+    async fn dates_de_service_portees_en_note_sans_toucher_le_verdict() {
+        let server = MockServer::start().await;
+        let sg_path = format!("/{}", utf8_percent_encode(PID, PID_ENCODE));
+        Mock::given(method("GET"))
+            .and(path(sg_path))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(sg_xml(&server.uri(), &[FR_CTC_PRIMARY_INVOICE])),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!(
+                "/x/services/{}",
+                utf8_percent_encode(
+                    &format!("busdox-docid-qns::{FR_CTC_PRIMARY_INVOICE}"),
+                    PID_ENCODE
+                )
+            )))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string(md_xml_avec_dates(TEST_CERT_B64)),
+            )
+            .mount(&server)
+            .await;
+
+        let c = DirectClient::for_tests(
+            fake_dns(&host_for_pid(), SmlLookup::Found(server.uri())),
+            ZONE,
+        );
+        let (items, _) = c.resolve_batch(&[PID.to_string()]).await.unwrap();
+        let it = &items[0];
+        // Verdict inchangé (mesure pure), PA toujours identifiée.
+        assert_eq!(it.supports_extended_ctc_fr, Some(true));
+        assert_eq!(it.pa.as_ref().unwrap().code.as_deref(), Some("PFR000123"));
+        assert_eq!(
+            it.note.as_deref(),
+            Some("support CTC : activation 2026-09-01, expiration 2027-09-01")
+        );
     }
 
     fn fake_dns(host: &str, outcome: SmlLookup) -> Dns {
