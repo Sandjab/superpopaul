@@ -107,7 +107,11 @@ fn smp_url_from_naptr(records: &[(String, String)]) -> Option<String> {
 /// proxy), ou table factice pour les tests.
 pub enum Dns {
     System(hickory_resolver::TokioAsyncResolver),
-    Doh { http: reqwest::Client, url: String },
+    Doh {
+        http: reqwest::Client,
+        url: String,
+        fallback: Option<String>,
+    },
     #[cfg(test)]
     Fake(HashMap<String, SmlLookup>),
 }
@@ -138,10 +142,11 @@ impl Dns {
         Dns::System(hickory_resolver::TokioAsyncResolver::tokio(config, opts))
     }
 
-    pub fn doh(url: &str, http: reqwest::Client) -> Self {
+    pub fn doh(url: &str, fallback: Option<&str>, http: reqwest::Client) -> Self {
         Dns::Doh {
             http,
             url: url.to_string(),
+            fallback: fallback.map(str::to_string),
         }
     }
 
@@ -187,7 +192,18 @@ impl Dns {
                     },
                 }
             }
-            Dns::Doh { http, url } => Self::doh_lookup(http, url, host).await,
+            // Failover DoH : le secours n'est consulté que sur échec du
+            // principal (Failed — panne, HTTP non-2xx, décodage) ; Found et
+            // NXDOMAIN sont des réponses définitives. Même politique que le
+            // classique (hickory UserProvidedOrder) : failover pur, et le
+            // verdict retourné est celui du dernier interrogé.
+            Dns::Doh { http, url, fallback } => {
+                let outcome = Self::doh_lookup(http, url, host).await;
+                match (&outcome, fallback) {
+                    (SmlLookup::Failed(_), Some(fb)) => Self::doh_lookup(http, fb, host).await,
+                    _ => outcome,
+                }
+            }
             #[cfg(test)]
             Dns::Fake(map) => map
                 .get(host)
@@ -301,9 +317,12 @@ pub struct DirectClient {
 /// Résolveur depuis la config : vide = DNS système ; une IP = DNS classique
 /// sur ce serveur ; une URL https = DoH (RFC 8484). Tout le reste est une
 /// erreur explicite — jamais de repli silencieux sur le DNS système.
-/// `fallback` : IP de secours du DNS classique (failover, pas de lissage) —
-/// interprétée seulement quand le principal est une IP ; ignorée en DNS
-/// système ou DoH (le champ, toujours renseigné par l'IHM, n'y a pas de sens).
+/// `fallback` : résolveur de secours (failover pur, pas de lissage), de même
+/// nature que le principal — IP derrière une IP, URL https derrière une URL
+/// https ; le panachage est refusé (jamais de changement de transport
+/// silencieux). Ignoré en DNS système (pas de principal explicite — le champ,
+/// toujours renseigné par l'IHM, n'y a pas de sens), et quand il est vide ou
+/// identique au principal.
 pub fn dns_from_spec(
     spec: Option<&str>,
     fallback: Option<&str>,
@@ -313,7 +332,17 @@ pub fn dns_from_spec(
         return Dns::system();
     };
     if spec.starts_with("https://") {
-        return Ok(Dns::doh(spec, http.clone()));
+        let fb = match fallback.map(str::trim).filter(|s| !s.is_empty() && *s != spec) {
+            Some(fb) if fb.starts_with("https://") => Some(fb),
+            Some(fb) => {
+                return Err(format!(
+                    "résolveur de secours « {fb} » : attendu une URL https://… \
+                     comme le principal (ou vide) — pas de panachage DoH/DNS classique"
+                ))
+            }
+            None => None,
+        };
+        return Ok(Dns::doh(spec, fb, http.clone()));
     }
     match spec.parse::<std::net::IpAddr>() {
         Ok(ip) => {
@@ -737,7 +766,7 @@ mod tests {
     }
 
     #[test]
-    fn resolver_fallback_failover_du_mode_classique_uniquement() {
+    fn resolver_fallback_failover_du_mode_classique() {
         let http = reqwest::Client::new();
         // Principal IP + secours IP : accepté (failover hickory,
         // UserProvidedOrder — le principal reste préféré).
@@ -753,17 +782,144 @@ mod tests {
             Err(err) => assert!(err.contains("secours"), "message : {err}"),
             Ok(_) => panic!("un secours non-IP doit être refusé"),
         }
-        // DNS système ou DoH : le secours (toujours renseigné par l'IHM,
-        // même invalide) est ignoré, jamais une erreur.
+        // DNS système : pas de principal explicite, le secours (toujours
+        // renseigné par l'IHM, même invalide) est ignoré, jamais une erreur.
         assert!(matches!(
             dns_from_spec(None, Some("n'importe quoi"), &http).unwrap(),
             Dns::System(_)
         ));
-        assert!(matches!(
-            dns_from_spec(Some("https://1.1.1.1/dns-query"), Some("n'importe quoi"), &http)
-                .unwrap(),
-            Dns::Doh { .. }
-        ));
+    }
+
+    #[test]
+    fn resolver_fallback_homogene_en_doh() {
+        let http = reqwest::Client::new();
+        // Principal DoH + secours DoH : même politique qu'en classique
+        // (failover pur, le principal d'abord).
+        match dns_from_spec(
+            Some("https://a.example/dns-query"),
+            Some("https://b.example/dns-query"),
+            &http,
+        )
+        .unwrap()
+        {
+            Dns::Doh { url, fallback, .. } => {
+                assert_eq!(url, "https://a.example/dns-query");
+                assert_eq!(fallback.as_deref(), Some("https://b.example/dns-query"));
+            }
+            _ => panic!("attendu Dns::Doh"),
+        }
+        // Secours vide ou identique au principal : pas de secours (pas de
+        // doublon), comme en classique.
+        for fb in [None, Some("  "), Some("https://a.example/dns-query")] {
+            match dns_from_spec(Some("https://a.example/dns-query"), fb, &http).unwrap() {
+                Dns::Doh { fallback, .. } => {
+                    assert!(fallback.is_none(), "secours {fb:?} : attendu aucun")
+                }
+                _ => panic!("attendu Dns::Doh"),
+            }
+        }
+        // Panachage DoH + IP (ou autre) : erreur explicite — jamais de
+        // changement de transport silencieux.
+        for fb in ["1.1.1.1", "n'importe quoi"] {
+            match dns_from_spec(Some("https://a.example/dns-query"), Some(fb), &http) {
+                Err(err) => assert!(err.contains("secours"), "message : {err}"),
+                Ok(_) => panic!("un secours non-DoH derrière un principal DoH doit être refusé"),
+            }
+        }
+    }
+
+    /// Réponse DoH binaire (RFC 8484) portant un NAPTR Meta:SMP vers `smp_url`,
+    /// ou un NXDOMAIN si `smp_url` est None.
+    fn doh_wire_response(host: &str, smp_url: Option<&str>) -> Vec<u8> {
+        use hickory_proto::op::{Message, MessageType, ResponseCode};
+        use hickory_proto::rr::{rdata::naptr::NAPTR, Name, RData, Record};
+        let mut msg = Message::new();
+        msg.set_message_type(MessageType::Response);
+        match smp_url {
+            Some(url) => {
+                let name = Name::from_utf8(host).unwrap();
+                let naptr = NAPTR::new(
+                    100,
+                    10,
+                    b"U".to_vec().into_boxed_slice(),
+                    b"Meta:SMP".to_vec().into_boxed_slice(),
+                    format!("!.*!{url}!").into_bytes().into_boxed_slice(),
+                    Name::root(),
+                );
+                msg.add_answer(Record::from_rdata(name, 60, RData::NAPTR(naptr)));
+            }
+            None => {
+                msg.set_response_code(ResponseCode::NXDomain);
+            }
+        }
+        msg.to_vec().unwrap()
+    }
+
+    #[tokio::test]
+    async fn doh_secours_prend_le_relais_si_principal_en_panne() {
+        let principal = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/dns-query"))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(1)
+            .mount(&principal)
+            .await;
+        let secours = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/dns-query"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                doh_wire_response("h.sml.test", Some("http://smp.example.org")),
+                "application/dns-message",
+            ))
+            .expect(1)
+            .mount(&secours)
+            .await;
+        let dns = Dns::doh(
+            &format!("{}/dns-query", principal.uri()),
+            Some(&format!("{}/dns-query", secours.uri())),
+            reqwest::Client::new(),
+        );
+        let sem = tokio::sync::Semaphore::new(4);
+        match dns.naptr_smp_url("h.sml.test", &sem).await {
+            SmlLookup::Found(url) => assert_eq!(url, "http://smp.example.org"),
+            autre => panic!("Found attendu via le secours, obtenu {autre:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn doh_pas_de_secours_sur_reponse_definitive() {
+        // NXDOMAIN du principal = réponse valide et définitive (adressage non
+        // enregistré) : le secours ne doit PAS être consulté.
+        let principal = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/dns-query"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                doh_wire_response("h.sml.test", None),
+                "application/dns-message",
+            ))
+            .expect(1)
+            .mount(&principal)
+            .await;
+        let secours = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/dns-query"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                doh_wire_response("h.sml.test", Some("http://smp.example.org")),
+                "application/dns-message",
+            ))
+            .expect(0)
+            .mount(&secours)
+            .await;
+        let dns = Dns::doh(
+            &format!("{}/dns-query", principal.uri()),
+            Some(&format!("{}/dns-query", secours.uri())),
+            reqwest::Client::new(),
+        );
+        let sem = tokio::sync::Semaphore::new(4);
+        match dns.naptr_smp_url("h.sml.test", &sem).await {
+            SmlLookup::NotRegistered => {}
+            autre => panic!("NotRegistered attendu, obtenu {autre:?}"),
+        }
     }
 
     #[test]

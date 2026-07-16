@@ -27,11 +27,12 @@ pub struct ApiConfig {
     /// (les YAML sauvegardés avant restent lisibles).
     #[serde(default, alias = "doh_url", skip_serializing_if = "Option::is_none")]
     pub resolver: Option<String>,
-    /// IP de secours du DNS classique (failover si le principal ne répond
-    /// pas ou refuse — PAS de lissage de charge : la limite par IP des
-    /// résolveurs publics protège la zone SML). Interprétée seulement quand
-    /// `resolver` est une IP ; vide = pas de secours. Absente des YAML
-    /// d'avant l'option → 1.1.1.1, non écrite à la valeur par défaut.
+    /// Résolveur de secours, de même nature que `resolver` (IP derrière une
+    /// IP, URL https derrière une URL https — panachage refusé). Failover si
+    /// le principal ne répond pas ou refuse — PAS de lissage de charge : la
+    /// limite par IP des résolveurs publics protège la zone SML. Ignoré en
+    /// DNS système ; vide = pas de secours. Absente des YAML d'avant
+    /// l'option → 1.1.1.1, non écrite à la valeur par défaut.
     #[serde(default = "resolver_fallback_default", skip_serializing_if = "resolver_fallback_is_default")]
     pub resolver_fallback: String,
     /// Mode direct : lookups DNS simultanés (indépendant de `concurrency`,
