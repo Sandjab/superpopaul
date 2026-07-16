@@ -104,6 +104,53 @@ class SimpleViewTests(unittest.TestCase):
         self.assertIn("403", v["note"])
 
 
+def _ep(doctype, activation=None, expiration=None):
+    return {
+        "document_identifier": doctype,
+        "service_activation_date": activation,
+        "service_expiration_date": expiration,
+    }
+
+
+class CtcServiceDatesTests(unittest.TestCase):
+    """Étape de MESURE (2026-07-16) : les ServiceActivation/ExpirationDate
+    déclarées sur le endpoint CTC sont tracées dans la note diagnostique,
+    SANS toucher au verdict supports_extended_ctc_fr — on décidera d'un
+    verdict temporel quand on saura si le phénomène existe en vrai."""
+
+    def _ok_ext(self, endpoints):
+        return dict(RESULT_OK_EXT, endpoints=endpoints)
+
+    def test_activation_ctc_tracee_dans_note_verdict_inchange(self):
+        v = peppol_api.simple_view(
+            self._ok_ext([_ep(FR_CTC_PRIMARY_INVOICE, activation="2026-09-01")]))
+        self.assertTrue(v["supports_extended_ctc_fr"])  # mesure, pas verdict
+        self.assertIn("support CTC", v["note"])
+        self.assertIn("activation 2026-09-01", v["note"])
+
+    def test_expiration_ctc_tracee_dans_note(self):
+        v = peppol_api.simple_view(
+            self._ok_ext([_ep(FR_CTC_PRIMARY_INVOICE, expiration="2025-12-31")]))
+        self.assertIn("expiration 2025-12-31", v["note"])
+
+    def test_les_deux_dates_tracees(self):
+        v = peppol_api.simple_view(self._ok_ext(
+            [_ep(FR_CTC_PRIMARY_INVOICE, "2026-09-01", "2027-09-01")]))
+        self.assertIn("activation 2026-09-01", v["note"])
+        self.assertIn("expiration 2027-09-01", v["note"])
+
+    def test_dates_des_autres_doctypes_ignorees(self):
+        v = peppol_api.simple_view(
+            self._ok_ext([_ep("other-doctype", "2020-01-01", "2021-01-01"),
+                          _ep(FR_CTC_PRIMARY_INVOICE)]))
+        self.assertIsNone(v.get("note"))
+
+    def test_sans_dates_pas_de_note(self):
+        # RESULT_OK_EXT n'a pas de clé endpoints : aucune note, pas d'erreur.
+        v = peppol_api.simple_view(RESULT_OK_EXT)
+        self.assertIsNone(v.get("note"))
+
+
 class ConstantTests(unittest.TestCase):
     def test_ctc_constant_matches_spec_urn(self):
         """La constante inline de l'API doit rester l'URN officiel PASR

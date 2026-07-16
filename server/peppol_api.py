@@ -317,6 +317,28 @@ def _pick_primary_ap(access_points: list[dict[str, Any]], supports: bool) -> dic
     return access_points[0]
 
 
+def ctc_service_dates_note(endpoints: list[dict[str, Any]]) -> str | None:
+    """Bornes de validité déclarées (ServiceActivation/ExpirationDate, spec
+    SMP) sur les endpoints du doctype CTC — étape de MESURE : tracées dans la
+    note diagnostique, le verdict n'en tient pas compte. On décidera d'un
+    verdict temporel quand on saura si le phénomène existe en vrai (ces
+    champs optionnels sont rarement renseignés par les SMP)."""
+    ctc = [e for e in endpoints
+           if e.get("document_identifier") == FR_CTC_PRIMARY_INVOICE]
+    activations = sorted({e["service_activation_date"] for e in ctc
+                          if e.get("service_activation_date")})
+    expirations = sorted({e["service_expiration_date"] for e in ctc
+                          if e.get("service_expiration_date")})
+    if not activations and not expirations:
+        return None
+    parts = []
+    if activations:
+        parts.append("activation " + "/".join(activations))
+    if expirations:
+        parts.append("expiration " + "/".join(expirations))
+    return "support CTC : " + ", ".join(parts)
+
+
 def sml_lookup_error(result: dict[str, Any]) -> str | None:
     """Statut SML signalant un ÉCHEC de lookup (annuaire inconsultable), par
     opposition à une absence. Seul NXDOMAIN — réponse authentique de
@@ -362,6 +384,10 @@ def simple_view(result: dict[str, Any]) -> dict[str, Any]:
         FR_CTC_PRIMARY_INVOICE in ap.get("doctypes_supported", []) for ap in aps
     )
     out["supports_extended_ctc_fr"] = supports
+    if supports:
+        note = ctc_service_dates_note(result.get("endpoints") or [])
+        if note:
+            out["note"] = note
 
     ap = _pick_primary_ap(aps, supports)
     if ap is not None:
