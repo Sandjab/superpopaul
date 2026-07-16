@@ -7,6 +7,7 @@ pub mod modes;
 pub mod output;
 pub mod pid;
 pub mod resolver;
+pub mod report;
 pub mod store;
 pub mod telemetry;
 
@@ -76,7 +77,8 @@ pub fn run() {
             commands::resume_run,
             commands::stop_run,
             commands::clear_run,
-            commands::generate_output
+            commands::generate_output,
+            commands::export_report
         ])
         .run(tauri::generate_context!())
         .expect("erreur au lancement de Super Popaul");

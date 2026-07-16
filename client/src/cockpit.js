@@ -560,7 +560,8 @@ listen("run-finished", async (e) => {
         statPair(fmtActive(active_s), "durée active")),
       h("div", { class: "result-file" },
         h("span", { class: "path" }, "mode reprise pour continuer plus tard"),
-        h("button", { onclick: writeOutput }, "Générer quand même le fichier")));
+        h("button", { onclick: writeOutput }, "Générer quand même le fichier"),
+        h("button", { onclick: (ev) => exportReport(ev.currentTarget) }, "Rapport HTML")));
   } else {
     res.replaceChildren(
       h("p", { class: "result-title" }, "✅ Run terminé"),
@@ -575,6 +576,23 @@ listen("run-finished", async (e) => {
   }
 });
 
+/** Écrit le rapport HTML client du dernier run (commande export_report) puis
+ *  le révèle dans le dossier. Le résultat vit dans le bouton (✓ / message),
+ *  comme pour « Copier le bilan ». */
+async function exportReport(btn) {
+  btn.disabled = true;
+  const label = btn.textContent;
+  try {
+    const path = await invoke("export_report");
+    btn.textContent = "Rapport ✓";
+    window.__TAURI__.opener?.revealItemInDir(path);
+  } catch (err) {
+    btn.textContent = "Rapport impossible";
+    btn.title = String(err);
+  }
+  setTimeout(() => { btn.disabled = false; btn.textContent = label; }, 1500);
+}
+
 async function writeOutput() {
   const res = $("run-result");
   const row = res.querySelector(".result-file");
@@ -588,7 +606,8 @@ async function writeOutput() {
       h("span", { class: "path", title: path }, dir),
       h("button", { onclick: () => window.__TAURI__.opener?.revealItemInDir(path) },
         "Afficher dans le dossier"),
-      h("button", { onclick: (ev) => copyReport(ev.currentTarget) }, "Copier le bilan"));
+      h("button", { onclick: (ev) => copyReport(ev.currentTarget) }, "Copier le bilan"),
+      h("button", { onclick: (ev) => exportReport(ev.currentTarget) }, "Rapport HTML"));
   } catch (err) {
     res.classList.add("failed");
     row.replaceChildren(

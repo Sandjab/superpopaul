@@ -4,6 +4,7 @@ use crate::csv_io;
 use crate::modes::{compute_todo, RunMode};
 use crate::output;
 use crate::pid::{canonical_line_counts, unique_canonical};
+use crate::report;
 use crate::resolver::{calibrate, CalibrationReport, Engine, EngineEvent, EngineParams, RunHandle};
 use crate::store::Store;
 use serde::Serialize;
@@ -24,9 +25,18 @@ pub struct AppState {
     pub config: Mutex<Option<Config>>,
     pub proxy_creds: Mutex<Option<ProxyCreds>>,
     pub run: Mutex<Option<Arc<RunHandle>>>,
+    /// Photographie du dernier run terminé (snapshot final + nom du fichier
+    /// d'entrée), capturée par clear_run au moment où le slot est libéré —
+    /// c'est la matière du rapport HTML (export_report).
+    pub last_run: Mutex<Option<LastRun>>,
     /// Annulation du calibrage en cours — armée par cancel_calibration,
     /// réarmée à false au début de chaque calibrate_api.
     pub calibrate_cancel: Arc<AtomicBool>,
+}
+
+pub struct LastRun {
+    pub snapshot: crate::telemetry::Snapshot,
+    pub file_name: String,
 }
 
 impl AppState {
@@ -38,6 +48,7 @@ impl AppState {
             config: Mutex::new(None),
             proxy_creds: Mutex::new(None),
             run: Mutex::new(None),
+            last_run: Mutex::new(None),
             calibrate_cancel: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -476,9 +487,62 @@ pub fn stop_run(state: State<'_, AppState>) -> Result<(), String> {
 }
 
 /// À appeler quand run-finished est reçu côté UI, pour libérer le slot.
+/// Le run libéré est photographié dans `last_run` (snapshot final + nom du
+/// fichier d'entrée) : c'est ce que le rapport HTML exporte.
 #[tauri::command]
 pub fn clear_run(state: State<'_, AppState>) {
-    *state.run.lock().unwrap() = None;
+    if let Some(h) = state.run.lock().unwrap().take() {
+        let file_name = state
+            .input_path()
+            .ok()
+            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .unwrap_or_default();
+        *state.last_run.lock().unwrap() = Some(LastRun {
+            snapshot: h.telemetry.snapshot(),
+            file_name,
+        });
+    }
+}
+
+/// Écrit le rapport HTML du dernier run terminé, à côté du fichier de sortie
+/// (mêmes règles de répertoire que generate_output), et rend son chemin.
+#[tauri::command]
+pub fn export_report(state: State<'_, AppState>) -> Result<String, String> {
+    let (snapshot, file_name) = {
+        let last = state.last_run.lock().unwrap();
+        let last = last
+            .as_ref()
+            .ok_or_else(|| String::from("Aucun run terminé à rapporter."))?;
+        (last.snapshot.clone(), last.file_name.clone())
+    };
+    let (_, cfg) = state.current_config()?;
+    let input = state.input_path()?;
+    let now = chrono::Local::now();
+    let html = report::render(&report::ReportData {
+        file_name: &file_name,
+        date_longue: &report::date_fr_longue(&now),
+        date_heure: &now.format("%d/%m/%Y %H:%M").to_string(),
+        version: env!("CARGO_PKG_VERSION"),
+        snapshot: &snapshot,
+    });
+    let out = resolved_out_dir(&input, &cfg.output.dir).join(format!(
+        "{}_rapport.html",
+        input.file_stem().unwrap_or_default().to_string_lossy()
+    ));
+    std::fs::write(&out, html).map_err(|e| format!("écriture du rapport : {e}"))?;
+    Ok(out.display().to_string())
+}
+
+/// Répertoire de sortie effectif : celui des réglages (superpopaul.yaml) ;
+/// un chemin relatif (ou vide) se résout contre le dossier du fichier
+/// d'entrée — join("") le laisse tel quel.
+fn resolved_out_dir(input: &Path, dir: &str) -> PathBuf {
+    let d = Path::new(dir);
+    if d.is_absolute() {
+        d.to_path_buf()
+    } else {
+        input.parent().unwrap_or(Path::new(".")).join(d)
+    }
 }
 
 #[tauri::command]
@@ -495,18 +559,8 @@ pub async fn generate_output(state: State<'_, AppState>) -> Result<String, Strin
         // seule Connection SQLite). Alternative future si ça pique : une 2e
         // connexion lecture seule (le WAL permet lectures // écritures).
         let resolutions = store.lock().unwrap().load_map(&pids)?;
-        // Le répertoire vient des réglages (superpopaul.yaml), plus d'un YAML
-        // chargé : un chemin relatif (ou vide) se résout contre le dossier du
-        // fichier d'entrée — join("") le laisse tel quel.
-        let out_dir = {
-            let d = Path::new(&cfg.output.dir);
-            if d.is_absolute() {
-                d.to_path_buf()
-            } else {
-                input.parent().unwrap_or(Path::new(".")).join(d)
-            }
-        };
-        let out = out_dir.join(output::out_file_name(&input, &cfg.output.suffix));
+        let out = resolved_out_dir(&input, &cfg.output.dir)
+            .join(output::out_file_name(&input, &cfg.output.suffix));
         let stamp = cfg
             .output
             .timestamp_suffix
