@@ -522,6 +522,7 @@ pub fn export_report(state: State<'_, AppState>) -> Result<String, String> {
         file_name: &file_name,
         date_longue: &report::date_fr_longue(&now),
         date_heure: &now.format("%d/%m/%Y %H:%M").to_string(),
+        today: now.date_naive(),
         version: env!("CARGO_PKG_VERSION"),
         snapshot: &snapshot,
     });

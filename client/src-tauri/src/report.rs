@@ -14,6 +14,9 @@ pub struct ReportData<'a> {
     pub date_longue: &'a str,
     /// « 16/07/2026 18:42 » — pied de page.
     pub date_heure: &'a str,
+    /// Date du jour : borne « aujourd'hui » des paliers de projection
+    /// (ctc::paliers) — injectée pour des rapports testables.
+    pub today: chrono::NaiveDate,
     pub version: &'a str,
     pub snapshot: &'a Snapshot,
 }
@@ -26,6 +29,7 @@ const CSS: &str = r#"
     --fg: #eae9e2; --muted: #939cb4;
     --green: #4cc268; --gold: #d9a83f; --amber: #e0873a; --red: #e5534b;
     --track: #223050;
+    --green-later: #2f8050; /* prêt plus tard : vert éteint, pris sur le vert */
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--fg);
@@ -46,6 +50,9 @@ const CSS: &str = r#"
   .kpi.green .v { color: var(--green); }
   .kpi.amber .v { color: var(--amber); }
   .kpi.red .v { color: var(--red); }
+  .kpi .proj { color: var(--muted); font-size: 12.5px; margin-top: 6px;
+    padding-top: 6px; border-top: 1px solid var(--border); }
+  .kpi .proj b { color: var(--fg); font-weight: 600; }
   h2 { font-size: 16px; font-weight: 600; margin: 30px 0 14px; }
   h2::after { content: ""; display: block; width: 44px; border-bottom: 2px solid var(--gold); margin-top: 5px; }
   .ring-row { display: flex; gap: 30px; align-items: center; flex-wrap: wrap;
@@ -60,6 +67,15 @@ const CSS: &str = r#"
   .dot { width: 10px; height: 10px; border-radius: 5px; }
   .legend .n { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); white-space: nowrap; }
   .legend .n b { color: var(--fg); }
+  .proj-card { background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px 20px; font-variant-numeric: tabular-nums; }
+  .proj-now { font-size: 15px; font-weight: 600; }
+  .proj-now b { color: var(--green); font-size: 17px; }
+  .proj-row { display: flex; gap: 10px; align-items: baseline; font-size: 14px; padding: 3px 0 0 14px; }
+  .proj-row b { color: var(--fg); }
+  .proj-row .plus { color: var(--green-later); font-weight: 700; min-width: 7.5ch; }
+  .proj-row .det { color: var(--muted); font-size: 12.5px; }
+  .proj-foot { color: var(--muted); font-size: 11.5px; margin: 10px 0 0; }
   .pa { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px; }
   .pa-row { display: grid; grid-template-columns: 170px 1fr 90px; gap: 12px; align-items: center; padding: 5px 0; font-size: 14px; }
   .pa-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -96,17 +112,31 @@ pub fn render(d: &ReportData) -> String {
         fmt_int(s.done_lines),
     ));
 
+    // Paliers de projection (3 max, horizon 2 ans) : partagés entre la tuile
+    // verte (prochain palier) et la carte Projection.
+    let pal = crate::ctc::paliers(&s.ctc_later_dates, d.today);
+
     // Tuiles KPI — verdict inconnu et non résolus seulement si présents.
     // Double lecture : le grand % est en adressages, le détail donne aussi
     // l'équivalent en lignes de fichier.
     html.push_str("<div class=\"kpis\">\n");
-    kpi(&mut html, "gold", s.exists, s.exists_lines, s, "Inscrits dans Peppol");
-    kpi(&mut html, "green", s.ctc, s.ctc_lines, s, "France Invoice UBL Extension");
+    kpi(&mut html, "gold", s.exists, s.exists_lines, s, "Inscrits dans Peppol", None);
+    kpi(
+        &mut html,
+        "green",
+        s.ctc,
+        s.ctc_lines,
+        s,
+        "France Invoice UBL Extension — prêts aujourd'hui",
+        pal.first().map(|p| {
+            format!("<b>+{}</b> au {}", fmt_pct(p.addr, s.done), fmt_date_fr(&p.date))
+        }),
+    );
     if s.no_verdict > 0 {
-        kpi(&mut html, "amber", s.no_verdict, s.no_verdict_lines, s, "Verdict inconnu (catalogue illisible)");
+        kpi(&mut html, "amber", s.no_verdict, s.no_verdict_lines, s, "Verdict inconnu (catalogue illisible)", None);
     }
     if s.failed > 0 {
-        kpi(&mut html, "red", s.failed, s.failed_lines, s, "Non résolus");
+        kpi(&mut html, "red", s.failed, s.failed_lines, s, "Non résolus", None);
     }
     html.push_str("</div>\n");
 
@@ -125,8 +155,8 @@ pub fn render(d: &ReportData) -> String {
     }
     html.push_str(&format!(
         "</g>\n<text x=\"105\" y=\"102\" text-anchor=\"middle\" class=\"ring-center\">{}</text>\n\
-         <text x=\"105\" y=\"122\" text-anchor=\"middle\" class=\"ring-sub\">France Invoice</text>\n\
-         <text x=\"105\" y=\"135\" text-anchor=\"middle\" class=\"ring-sub\">UBL Extension</text>\n</svg>\n",
+         <text x=\"105\" y=\"122\" text-anchor=\"middle\" class=\"ring-sub\">France Invoice UBL Ext.</text>\n\
+         <text x=\"105\" y=\"135\" text-anchor=\"middle\" class=\"ring-sub\">prêts aujourd'hui</text>\n</svg>\n",
         fmt_pct(s.ctc, s.done)
     ));
     html.push_str(
@@ -144,6 +174,42 @@ pub fn render(d: &ReportData) -> String {
         ));
     }
     html.push_str("</div>\n</div>\n");
+
+    // Carte Projection : paliers cumulés — chaque ligne est une vérité
+    // exacte (« au JJ/MM, +x % seront prêts »), les dates omises sont
+    // absorbées par le palier suivant. Absente s'il n'y a rien à projeter
+    // sous l'horizon.
+    if !pal.is_empty() {
+        html.push_str(&format!(
+            "<h2>Projection</h2>\n<div class=\"proj-card\">\n\
+             <div class=\"proj-now\">Prêts aujourd'hui : <b>{}</b></div>\n",
+            fmt_pct(s.ctc, s.done)
+        ));
+        let mut prev = 0u64;
+        for p in &pal {
+            let delta = p.addr - prev;
+            let mut det = if prev == 0 {
+                format!("{} adressages", fmt_int(delta))
+            } else {
+                format!("cumul, {} adressages de plus", fmt_int(delta))
+            };
+            if p.date == crate::ctc::ECHEANCE_REFORME {
+                det.push_str(" — échéance réglementaire");
+            }
+            html.push_str(&format!(
+                "<div class=\"proj-row\"><span class=\"plus\">+{}</span>\
+                 <span>au <b>{}</b></span><span class=\"det\">{det}</span></div>\n",
+                fmt_pct(p.addr, s.done),
+                fmt_date_fr(&p.date)
+            ));
+            prev = p.addr;
+        }
+        html.push_str(
+            "<p class=\"proj-foot\">Paliers cumulés d'après les dates d'activation \
+             annoncées dans Peppol · horizon 2 ans · l'échéance du 01/09/2026 reste \
+             affichée tant qu'elle est à venir.</p>\n</div>\n",
+        );
+    }
 
     // Plateformes constatées — top 5, le reste agrégé.
     let (shown, autres) = pa_rows(s);
@@ -181,15 +247,37 @@ pub fn render(d: &ReportData) -> String {
     html
 }
 
-fn kpi(html: &mut String, color: &str, addr: u64, lignes: u64, s: &Snapshot, label: &str) {
+fn kpi(
+    html: &mut String,
+    color: &str,
+    addr: u64,
+    lignes: u64,
+    s: &Snapshot,
+    label: &str,
+    proj: Option<String>,
+) {
+    // `proj` : ligne de projection sous filet (tuile verte : prochain palier).
+    // HTML déjà formé côté appelant — uniquement à partir de valeurs internes.
+    let proj = proj
+        .map(|p| format!("<div class=\"proj\">{p}</div>"))
+        .unwrap_or_default();
     html.push_str(&format!(
         "<div class=\"kpi {color}\"><div class=\"v\">{}</div><div class=\"l\">{label}</div>\
-         <div class=\"d\">{} adressages</div><div class=\"d\">{} lignes ({})</div></div>\n",
+         <div class=\"d\">{} adressages</div><div class=\"d\">{} lignes ({})</div>{proj}</div>\n",
         fmt_pct(addr, s.done),
         fmt_int(addr),
         fmt_int(lignes),
         fmt_pct(lignes, s.done_lines)
     ));
+}
+
+/// « 2026-09-01 » → « 01/09/2026 » (clé ISO produite par ctc::activation_day).
+fn fmt_date_fr(iso: &str) -> String {
+    let mut it = iso.splitn(3, '-');
+    match (it.next(), it.next(), it.next()) {
+        (Some(y), Some(m), Some(j)) => format!("{j}/{m}/{y}"),
+        _ => iso.to_string(),
+    }
 }
 
 /// Lignes de la légende, dans l'ordre de l'anneau, segments vides omis
@@ -269,15 +357,22 @@ fn fmt_pct(part: u64, total: u64) -> String {
     format!("{p:.1}\u{202F}%").replace('.', ",")
 }
 
-/// Les cinq familles de l'anneau, dans l'ordre : (couleur, libellé, compte
+/// Les six familles de l'anneau, dans l'ordre : (couleur, libellé, compte
 /// en adressages, compte en lignes de fichier). Les comptes dérivés sont en
 /// soustraction saturante : un snapshot incohérent ne doit jamais faire
 /// paniquer un rapport.
-fn ring_parts(s: &Snapshot) -> [(&'static str, &'static str, u64, u64); 5] {
-    let sans_ext = s.exists.saturating_sub(s.ctc).saturating_sub(s.no_verdict);
+fn ring_parts(s: &Snapshot) -> [(&'static str, &'static str, u64, u64); 6] {
+    // Le gap « sans l'extension » est net des prêts plus tard (comptés à
+    // part) — il inclut les supports expirés (dégradation simple).
+    let sans_ext = s
+        .exists
+        .saturating_sub(s.ctc)
+        .saturating_sub(s.ctc_later)
+        .saturating_sub(s.no_verdict);
     let sans_ext_l = s
         .exists_lines
         .saturating_sub(s.ctc_lines)
+        .saturating_sub(s.ctc_later_lines)
         .saturating_sub(s.no_verdict_lines);
     let absents = s.done.saturating_sub(s.exists).saturating_sub(s.failed);
     let absents_l = s
@@ -285,7 +380,8 @@ fn ring_parts(s: &Snapshot) -> [(&'static str, &'static str, u64, u64); 5] {
         .saturating_sub(s.exists_lines)
         .saturating_sub(s.failed_lines);
     [
-        ("green", "France Invoice UBL Extension", s.ctc, s.ctc_lines),
+        ("green", "Prêts aujourd'hui (France Invoice UBL Extension)", s.ctc, s.ctc_lines),
+        ("green-later", "Prêts plus tard (activation à venir)", s.ctc_later, s.ctc_later_lines),
         ("gold", "Inscrits, sans l'extension", sans_ext, sans_ext_l),
         ("amber", "Inscrits, verdict inconnu", s.no_verdict, s.no_verdict_lines),
         ("track", "Absents de Peppol", absents, absents_l),
@@ -373,9 +469,25 @@ mod tests {
             file_name: "clients_2026.csv",
             date_longue: "16 juillet 2026",
             date_heure: "16/07/2026 18:42",
+            today: "2026-07-16".parse().unwrap(),
             version: "0.3.4",
             snapshot: s,
         }
+    }
+
+    /// snap() + 535 « prêts plus tard » (498 au 01/09, 37 au 22/09 — le cas
+    /// réel de la base du 16/07/2026), retranchés du vert.
+    fn snap_avec_futurs() -> Snapshot {
+        let mut s = snap();
+        s.ctc -= 535;
+        s.ctc_lines -= 552;
+        s.ctc_later = 535;
+        s.ctc_later_lines = 552;
+        s.ctc_later_dates = vec![
+            crate::ctc::DateCount { date: "2026-09-01".into(), addr: 498, lines: 514 },
+            crate::ctc::DateCount { date: "2026-09-22".into(), addr: 37, lines: 38 },
+        ];
+        s
     }
 
     #[test]
@@ -404,6 +516,61 @@ mod tests {
         // Autonome et sans script.
         assert!(html.starts_with("<!doctype html>"));
         assert!(!html.contains("<script"), "le rapport ne doit porter aucun JS");
+    }
+
+    #[test]
+    fn verdict_temporel_tuile_legende_et_projection() {
+        let s = snap_avec_futurs();
+        let html = render(&data(&s));
+        // Tuile verte : grand % = prêts aujourd'hui (4 015/11 942 = 33,6 %),
+        // projection (prochain palier) sous le filet.
+        assert!(html.contains("prêts aujourd'hui"), "libellé tuile/centre");
+        assert!(html.contains("33,6\u{202F}%"), "grand % recalculé sans les futurs");
+        assert!(
+            html.contains("+4,2\u{202F}%</b> au 01/09/2026"),
+            "projection de la tuile"
+        );
+        // Anneau : segment vert éteint entre le vert et l'or.
+        assert!(
+            html.contains("stroke=\"var(--green-later)\""),
+            "segment prêts plus tard"
+        );
+        // Légende : ligne dédiée, double lecture.
+        assert!(html.contains("Prêts plus tard"), "ligne de légende");
+        assert!(html.contains(">535<"), "adressages plus tard");
+        assert!(html.contains(">552<"), "lignes plus tard");
+        // Gap « sans l'extension » : exists − ctc − later − nv
+        // = 7 452 − 4 015 − 535 − 609 = 2 293.
+        assert!(html.contains("2\u{202F}293"), "gap net des prêts plus tard");
+        // Carte Projection : paliers cumulés (+4,2 % puis +4,5 %), détails.
+        assert!(html.contains("Projection"), "carte projection");
+        assert!(html.contains("+4,5\u{202F}%"), "palier cumulé");
+        assert!(html.contains("<b>22/09/2026</b>"), "date du palier cumulé");
+        assert!(html.contains("498 adressages"), "détail du premier palier");
+        assert!(html.contains("échéance réglementaire"), "mention échéance");
+        assert!(html.contains("cumul, 37 adressages de plus"), "détail cumulé");
+        assert!(html.contains("horizon 2 ans"), "pied de carte");
+    }
+
+    #[test]
+    fn sans_activation_future_ni_segment_ni_projection() {
+        // snap() : ctc_later = 0 — rien de nouveau dans le rapport.
+        let html = render(&data(&snap()));
+        assert!(!html.contains("Prêts plus tard"));
+        assert!(!html.contains("Projection"));
+        assert!(!html.contains("stroke=\"var(--green-later)\""));
+    }
+
+    #[test]
+    fn projection_bornee_par_l_horizon_meme_avec_des_futurs() {
+        // Un seul futur, à 10 ans (bruit déclaratif) : le segment et la
+        // légende comptent l'adressage, mais aucune carte Projection.
+        let mut s = snap_avec_futurs();
+        s.ctc_later_dates =
+            vec![crate::ctc::DateCount { date: "2036-05-18".into(), addr: 535, lines: 552 }];
+        let html = render(&data(&s));
+        assert!(html.contains("Prêts plus tard"), "toujours comptés");
+        assert!(!html.contains("Projection"), "rien à projeter sous 2 ans");
     }
 
     #[test]
