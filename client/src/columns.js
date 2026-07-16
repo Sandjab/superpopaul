@@ -7,9 +7,13 @@
 const PEPPOL_FIELDS = [
   ["in_peppol", "existe"], ["pa_code", "code PA"], ["pa_name", "nom PA"],
   ["pa_country", "pays PA"], ["ubl_extended", "CTC-FR"],
+  ["ctc_activation", "activation CTC"], ["ctc_expiration", "expiration CTC"],
+  ["ctc_status", "état CTC"],
 ];
 const PEPPOL_SAMPLE = { in_peppol: "true", pa_code: "PA0042", pa_name: "ACME PA",
-                        pa_country: "FR", ubl_extended: "false" };
+                        pa_country: "FR", ubl_extended: "true",
+                        ctc_activation: "2026-09-01", ctc_expiration: "",
+                        ctc_status: "later" };
 
 // SortableJS (vendor/Sortable.min.js) en mode forceFallback : le
 // drag-and-drop HTML5 est avalé par le handler drag-drop natif de la webview

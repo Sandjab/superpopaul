@@ -200,6 +200,11 @@ pub enum PeppolField {
     PaCountry,
     #[serde(alias = "extended_ctc_fr")]
     UblExtended,
+    /// Fenêtre de validité CTC (v0.4.0) : dates SMP brutes, et état calculé
+    /// AU MOMENT DE L'EXPORT (ready / later / expired, vide sans extension).
+    CtcActivation,
+    CtcExpiration,
+    CtcStatus,
 }
 
 /// Bornes des paramètres API — partagées entre la config runtime (set_config)

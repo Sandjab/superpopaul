@@ -8,6 +8,20 @@ use std::fs::File;
 use std::io::{BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 
+/// État CTC calculé au moment de l'export — jamais figé en base : les dates
+/// stockées suffisent, un « later » bascule seul en « ready » le jour venu.
+/// Vide sans extension déclarée (pas d'état à calculer).
+fn ctc_status(r: &crate::store::Resolution, now: chrono::DateTime<chrono::Utc>) -> &'static str {
+    if r.extended_ctc_fr != Some(true) {
+        return "";
+    }
+    match crate::ctc::state(r.ctc_activation.as_deref(), r.ctc_expiration.as_deref(), now) {
+        crate::ctc::CtcState::Ready => "ready",
+        crate::ctc::CtcState::Later => "later",
+        crate::ctc::CtcState::Expired => "expired",
+    }
+}
+
 fn fmt_bool(b: Option<bool>) -> &'static str {
     match b {
         Some(true) => "true",
@@ -23,6 +37,9 @@ pub fn field_name(f: PeppolField) -> &'static str {
         PeppolField::PaName => "pa_name",
         PeppolField::PaCountry => "pa_country",
         PeppolField::UblExtended => "ubl_extended",
+        PeppolField::CtcActivation => "ctc_activation",
+        PeppolField::CtcExpiration => "ctc_expiration",
+        PeppolField::CtcStatus => "ctc_status",
     }
 }
 
@@ -229,6 +246,10 @@ fn write_output(
     wtr.write_record(&out_headers)
         .map_err(|e| format!("écriture {tmp_path:?} ligne 1 : {e}"))?;
 
+    // Un seul « maintenant » pour tout l'export : l'état CTC de chaque ligne
+    // est calculé à cet instant (cohérence du fichier).
+    let now = chrono::Utc::now();
+
     // Numérotation : l'entête est la ligne 1, le premier enregistrement la 2.
     for (line, rec) in (2u64..).zip(rdr.records()) {
         let rec = rec.map_err(|e| format!("lecture {input_path:?} ligne {line} : {e}"))?;
@@ -248,6 +269,9 @@ fn write_output(
                         PeppolField::PaName => r.pa_name.as_deref().unwrap_or(""),
                         PeppolField::PaCountry => r.pa_country.as_deref().unwrap_or(""),
                         PeppolField::UblExtended => fmt_bool(r.extended_ctc_fr),
+                        PeppolField::CtcActivation => r.ctc_activation.as_deref().unwrap_or(""),
+                        PeppolField::CtcExpiration => r.ctc_expiration.as_deref().unwrap_or(""),
+                        PeppolField::CtcStatus => ctc_status(r, now),
                     },
                 },
             })
@@ -316,6 +340,55 @@ mod tests {
         // L'extension de sortie est toujours .csv, même pour une entrée .txt.
         assert_eq!(out_file_name(Path::new("data.txt"), "_peppol"), "data_peppol.csv");
         assert_eq!(out_file_name(Path::new("/x/clients.csv"), ""), "clients.csv");
+    }
+
+    #[test]
+    fn colonnes_ctc_dates_et_etat_calcule_a_l_export() {
+        // L'état n'est PAS en base : il se recalcule au moment de l'export à
+        // partir des dates stockées — un « later » bascule seul en « ready »
+        // le jour venu, sans re-résolution. Dates extrêmes : le test ne
+        // dépend pas du jour. Sans extension : colonnes vides.
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("in.csv");
+        std::fs::File::create(&input)
+            .unwrap()
+            .write_all(b"siren\n0009:pret\n0009:plustard\n0009:expire\n0009:sansext\n")
+            .unwrap();
+        let out = dir.path().join("out.csv");
+        let mk = |ext: bool, act: Option<&str>, exp: Option<&str>| Resolution {
+            participant: String::new(),
+            exists_in_peppol: Some(true),
+            pa_code: None,
+            pa_name: None,
+            pa_country: None,
+            extended_ctc_fr: Some(ext),
+            api_status: "ok".into(),
+            resolved_at: 0,
+            note: None,
+            ctc_activation: act.map(Into::into),
+            ctc_expiration: exp.map(Into::into),
+        };
+        let m = HashMap::from([
+            (canonical("0009:pret"), mk(true, Some("2000-01-01"), None)),
+            (canonical("0009:plustard"), mk(true, Some("2999-01-01T00:00:00Z"), None)),
+            (canonical("0009:expire"), mk(true, Some("2000-01-01"), Some("2001-01-01"))),
+            (canonical("0009:sansext"), mk(false, None, None)),
+        ]);
+        let cols = vec![
+            ColumnSpec::Peppol { field: PeppolField::CtcActivation },
+            ColumnSpec::Peppol { field: PeppolField::CtcExpiration },
+            ColumnSpec::Peppol { field: PeppolField::CtcStatus },
+        ];
+        let meta = CsvMeta { delimiter: b';', encoding: "utf-8" };
+        let written =
+            generate(&input, &meta, "siren", &out_cfg(cols), &m, &out, None).unwrap();
+        let content = std::fs::read_to_string(&written).unwrap();
+        let lines: Vec<&str> = content.trim_start_matches('\u{feff}').lines().collect();
+        assert_eq!(lines[0], "ctc_activation;ctc_expiration;ctc_status");
+        assert_eq!(lines[1], "2000-01-01;;ready", "actif : dates brutes + ready");
+        assert_eq!(lines[2], "2999-01-01T00:00:00Z;;later");
+        assert_eq!(lines[3], "2000-01-01;2001-01-01;expired");
+        assert_eq!(lines[4], ";;", "sans extension : pas d'état CTC");
     }
 
     #[test]
