@@ -52,10 +52,13 @@ const CSS: &str = r#"
     background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 20px; }
   .ring-center { font-size: 30px; font-weight: 700; fill: var(--green); }
   .ring-sub { font-size: 11px; fill: #939cb4; }
-  .legend { flex: 1; min-width: 260px; font-size: 14px; }
-  .legend div { display: flex; align-items: baseline; gap: 9px; padding: 3.5px 0; }
-  .dot { width: 10px; height: 10px; border-radius: 5px; flex: none; align-self: center; }
-  .legend .n { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--muted); }
+  .legend { flex: 1; min-width: 300px; font-size: 14px;
+    display: grid; grid-template-columns: auto 1fr max-content max-content;
+    gap: 4px 14px; align-items: center; }
+  .legend .h { color: var(--muted); font-size: 11px; text-transform: uppercase;
+    letter-spacing: .06em; text-align: right; }
+  .dot { width: 10px; height: 10px; border-radius: 5px; }
+  .legend .n { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); white-space: nowrap; }
   .legend .n b { color: var(--fg); }
   .pa { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px; }
   .pa-row { display: grid; grid-template-columns: 170px 1fr 90px; gap: 12px; align-items: center; padding: 5px 0; font-size: 14px; }
@@ -94,14 +97,16 @@ pub fn render(d: &ReportData) -> String {
     ));
 
     // Tuiles KPI — verdict inconnu et non résolus seulement si présents.
+    // Double lecture : le grand % est en adressages, le détail donne aussi
+    // l'équivalent en lignes de fichier.
     html.push_str("<div class=\"kpis\">\n");
-    kpi(&mut html, "gold", s.exists, s.done, "Inscrits dans Peppol");
-    kpi(&mut html, "green", s.ctc, s.done, "France Invoice UBL Extension");
+    kpi(&mut html, "gold", s.exists, s.exists_lines, s, "Inscrits dans Peppol");
+    kpi(&mut html, "green", s.ctc, s.ctc_lines, s, "France Invoice UBL Extension");
     if s.no_verdict > 0 {
-        kpi(&mut html, "amber", s.no_verdict, s.done, "Verdict inconnu (catalogue illisible)");
+        kpi(&mut html, "amber", s.no_verdict, s.no_verdict_lines, s, "Verdict inconnu (catalogue illisible)");
     }
     if s.failed > 0 {
-        kpi(&mut html, "red", s.failed, s.done, "Non résolus");
+        kpi(&mut html, "red", s.failed, s.failed_lines, s, "Non résolus");
     }
     html.push_str("</div>\n");
 
@@ -124,13 +129,18 @@ pub fn render(d: &ReportData) -> String {
          <text x=\"105\" y=\"135\" text-anchor=\"middle\" class=\"ring-sub\">UBL Extension</text>\n</svg>\n",
         fmt_pct(s.ctc, s.done)
     ));
-    html.push_str("<div class=\"legend\">\n");
-    for (color, label, count) in legend_rows(s) {
+    html.push_str(
+        "<div class=\"legend\">\n<span></span><span></span>\
+         <span class=\"h\">adressages</span><span class=\"h\">lignes</span>\n",
+    );
+    for (color, label, addr, lignes) in legend_rows(s) {
         html.push_str(&format!(
-            "<div><span class=\"dot\" style=\"background:var(--{color})\"></span> {label} \
-             <span class=\"n\"><b>{}</b> · {}</span></div>\n",
-            fmt_int(count),
-            fmt_pct(count, s.done)
+            "<span class=\"dot\" style=\"background:var(--{color})\"></span><span>{label}</span>\
+             <span class=\"n\"><b>{}</b> · {}</span><span class=\"n\"><b>{}</b> · {}</span>\n",
+            fmt_int(addr),
+            fmt_pct(addr, s.done),
+            fmt_int(lignes),
+            fmt_pct(lignes, s.done_lines)
         ));
     }
     html.push_str("</div>\n</div>\n");
@@ -171,20 +181,23 @@ pub fn render(d: &ReportData) -> String {
     html
 }
 
-fn kpi(html: &mut String, color: &str, part: u64, total: u64, label: &str) {
+fn kpi(html: &mut String, color: &str, addr: u64, lignes: u64, s: &Snapshot, label: &str) {
     html.push_str(&format!(
         "<div class=\"kpi {color}\"><div class=\"v\">{}</div><div class=\"l\">{label}</div>\
-         <div class=\"d\">{} adressages</div></div>\n",
-        fmt_pct(part, total),
-        fmt_int(part)
+         <div class=\"d\">{} adressages</div><div class=\"d\">{} lignes ({})</div></div>\n",
+        fmt_pct(addr, s.done),
+        fmt_int(addr),
+        fmt_int(lignes),
+        fmt_pct(lignes, s.done_lines)
     ));
 }
 
-/// Lignes de la légende, dans l'ordre de l'anneau, segments vides omis.
-fn legend_rows(s: &Snapshot) -> Vec<(&'static str, &'static str, u64)> {
+/// Lignes de la légende, dans l'ordre de l'anneau, segments vides omis
+/// (au sens adressages : les lignes suivent).
+fn legend_rows(s: &Snapshot) -> Vec<(&'static str, &'static str, u64, u64)> {
     ring_parts(s)
         .into_iter()
-        .filter(|(_, _, n)| *n > 0)
+        .filter(|(_, _, n, _)| *n > 0)
         .collect()
 }
 
@@ -256,18 +269,27 @@ fn fmt_pct(part: u64, total: u64) -> String {
     format!("{p:.1}\u{202F}%").replace('.', ",")
 }
 
-/// Les cinq familles de l'anneau, dans l'ordre : (couleur, libellé, compte).
-/// Les comptes dérivés sont en soustraction saturante : un snapshot
-/// incohérent ne doit jamais faire paniquer un rapport.
-fn ring_parts(s: &Snapshot) -> [(&'static str, &'static str, u64); 5] {
+/// Les cinq familles de l'anneau, dans l'ordre : (couleur, libellé, compte
+/// en adressages, compte en lignes de fichier). Les comptes dérivés sont en
+/// soustraction saturante : un snapshot incohérent ne doit jamais faire
+/// paniquer un rapport.
+fn ring_parts(s: &Snapshot) -> [(&'static str, &'static str, u64, u64); 5] {
     let sans_ext = s.exists.saturating_sub(s.ctc).saturating_sub(s.no_verdict);
+    let sans_ext_l = s
+        .exists_lines
+        .saturating_sub(s.ctc_lines)
+        .saturating_sub(s.no_verdict_lines);
     let absents = s.done.saturating_sub(s.exists).saturating_sub(s.failed);
+    let absents_l = s
+        .done_lines
+        .saturating_sub(s.exists_lines)
+        .saturating_sub(s.failed_lines);
     [
-        ("green", "France Invoice UBL Extension", s.ctc),
-        ("gold", "Inscrits, sans l'extension", sans_ext),
-        ("amber", "Inscrits, verdict inconnu", s.no_verdict),
-        ("track", "Absents de Peppol", absents),
-        ("red", "Non résolus", s.failed),
+        ("green", "France Invoice UBL Extension", s.ctc, s.ctc_lines),
+        ("gold", "Inscrits, sans l'extension", sans_ext, sans_ext_l),
+        ("amber", "Inscrits, verdict inconnu", s.no_verdict, s.no_verdict_lines),
+        ("track", "Absents de Peppol", absents, absents_l),
+        ("red", "Non résolus", s.failed, s.failed_lines),
     ]
 }
 
@@ -276,13 +298,13 @@ fn ring_parts(s: &Snapshot) -> [(&'static str, &'static str, u64); 5] {
 const RING_C: f64 = 502.6548; // 2π × r=80
 fn ring_segments(s: &Snapshot) -> Vec<(&'static str, f64, f64)> {
     let parts = ring_parts(s);
-    let total: u64 = parts.iter().map(|(_, _, n)| n).sum();
+    let total: u64 = parts.iter().map(|(_, _, n, _)| n).sum();
     if total == 0 {
         return Vec::new();
     }
     let mut out = Vec::new();
     let mut cum = 0.0;
-    for (color, _, n) in parts {
+    for (color, _, n, _) in parts {
         if n == 0 {
             continue;
         }
@@ -318,6 +340,7 @@ mod tests {
             exists_lines: 7_800,
             ctc_lines: 4_700,
             no_verdict_lines: 620,
+            failed_lines: 150,
             http: BTreeMap::new(),
             pa: named(&[
                 ("Docaposte", 2_310),
@@ -364,6 +387,14 @@ mod tests {
         // KPIs : pourcentages base adressages, virgule décimale.
         assert!(html.contains("62,4\u{202F}%"), "KPI inscrits absent");
         assert!(html.contains("38,1\u{202F}%"), "KPI extension absent");
+        // Double lecture : équivalents lignes dans les tuiles…
+        assert!(html.contains("7\u{202F}800 lignes (62,5\u{202F}%)"), "tuile inscrits sans lignes");
+        assert!(html.contains("4\u{202F}700 lignes (37,7\u{202F}%)"), "tuile extension sans lignes");
+        // … et légende en deux colonnes chiffrées avec en-têtes.
+        assert!(html.contains(">adressages<"), "en-tête de colonne adressages");
+        assert!(html.contains(">lignes<"), "en-tête de colonne lignes");
+        // Absents en lignes : 12 480 − 7 800 − 150 = 4 530.
+        assert!(html.contains("4\u{202F}530"), "absents de Peppol en lignes");
         // Pied de page.
         assert!(html.contains("Super Popaul v0.3.4"));
         assert!(html.contains("16/07/2026 18:42"));

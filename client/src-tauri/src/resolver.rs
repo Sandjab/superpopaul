@@ -467,6 +467,7 @@ impl Engine {
                                     }
                                 } else {
                                     failed += 1;
+                                    lines.failed += w;
                                     let motif = r
                                         .api_status
                                         .strip_prefix("error:")
@@ -1109,6 +1110,40 @@ mod tests_engine {
         let s = handle.telemetry.snapshot();
         assert_eq!((s.exists, s.ctc, s.no_verdict), (2, 0, 2));
         assert_eq!((s.exists_lines, s.ctc_lines, s.no_verdict_lines), (4, 0, 4));
+    }
+
+    #[tokio::test]
+    async fn lignes_en_echec_ponderees_par_multiplicite() {
+        // 1 PID sur 2 en erreur item (HalfErrorResolver, indices pairs) ; le
+        // PID en échec couvre 3 lignes du fichier : failed_lines les porte.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/resolve/batch"))
+            .respond_with(HalfErrorResolver)
+            .mount(&server)
+            .await;
+        let store = Arc::new(Mutex::new(Store::open_in_memory().unwrap()));
+        let client = ApiClient::new(&server.uri(), "K", None, None).unwrap();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        let todo = pids(2);
+        let line_counts = HashMap::from([(todo[0].clone(), 3u64)]);
+        let handle = Engine::start(
+            client,
+            EngineParams {
+                batch_size: 10,
+                concurrency: 1,
+            },
+            todo,
+            line_counts,
+            store,
+            tx,
+        );
+        wait_finished(&mut rx).await;
+        let s = handle.telemetry.snapshot();
+        assert_eq!((s.done, s.failed), (2, 1));
+        // PID 0 (3 lignes) en échec, PID 1 (1 ligne, repli) résolu.
+        assert_eq!((s.done_lines, s.failed_lines), (4, 3));
+        assert_eq!((s.exists, s.exists_lines), (1, 1));
     }
 
     #[tokio::test]

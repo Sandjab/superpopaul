@@ -57,6 +57,7 @@ pub struct LineWeights {
     pub exists: u64,
     pub ctc: u64,
     pub no_verdict: u64,
+    pub failed: u64,
 }
 
 /// Un libellé (nom de PA, motif d'échec…) et un nombre d'adressages.
@@ -89,6 +90,7 @@ pub struct Snapshot {
     pub exists_lines: u64,
     pub ctc_lines: u64,
     pub no_verdict_lines: u64,
+    pub failed_lines: u64,
     pub http: BTreeMap<u16, u64>,
     /// PA découvertes, classées par représentativité décroissante
     /// (à égalité : ordre alphabétique, pour un affichage stable).
@@ -186,6 +188,7 @@ impl Telemetry {
         i.lines.exists += lines.exists;
         i.lines.ctc += lines.ctc;
         i.lines.no_verdict += lines.no_verdict;
+        i.lines.failed += lines.failed;
         for (status, n) in http {
             *i.http.entry(*status).or_insert(0) += *n as u64;
         }
@@ -212,6 +215,7 @@ impl Telemetry {
         i.done += addr_failed as u64;
         i.failed += addr_failed as u64;
         i.lines.done += lines_failed;
+        i.lines.failed += lines_failed;
         if addr_failed > 0 {
             // Échec définitif : le motif est le statut HTTP du paquet.
             bump_error(&mut i.errors, &format!("HTTP {http_status}"), addr_failed as u64);
@@ -290,6 +294,7 @@ impl Telemetry {
             exists_lines: lines.exists,
             ctc_lines: lines.ctc,
             no_verdict_lines: lines.no_verdict,
+            failed_lines: lines.failed,
             http,
             pa,
             errors,
@@ -418,10 +423,25 @@ mod tests {
         // définitif couvre aussi ses lignes (dénominateur cohérent).
         let t = Telemetry::new(10);
         t.record_call(&h200(), 100, 2, 1, 1, 0, 0, &vide(),
-            LineWeights { done: 7, exists: 5, ctc: 3, no_verdict: 0 }, &vide());
+            LineWeights { done: 7, exists: 5, ctc: 3, no_verdict: 0, failed: 0 }, &vide());
         t.record_error(400, 2, 4);
         let s = t.snapshot();
         assert_eq!((s.done_lines, s.exists_lines, s.ctc_lines), (11, 5, 3));
+    }
+
+    #[test]
+    fn lignes_en_echec_ponderees() {
+        // Les échecs portent aussi leur poids en lignes — le rapport de fin
+        // de run affiche la double lecture adressages/lignes, y compris pour
+        // les non résolus. Deux chemins : erreurs item d'un appel 200
+        // (LineWeights.failed) et échec HTTP définitif (record_error).
+        let t = Telemetry::new(10);
+        t.record_call(&h200(), 100, 3, 1, 1, 0, 2, &vide(),
+            LineWeights { done: 8, exists: 2, ctc: 2, no_verdict: 0, failed: 6 }, &vide());
+        t.record_error(400, 2, 4);
+        let s = t.snapshot();
+        assert_eq!(s.failed, 4);
+        assert_eq!(s.failed_lines, 10, "6 lignes d'erreurs item + 4 d'échec définitif");
     }
 
     #[test]
@@ -447,7 +467,7 @@ mod tests {
         // « le reste à convertir » (cas Serensia du 15/07 : 2 165 adressages).
         let t = Telemetry::new(100);
         t.record_call(&h200(), 100, 5, 3, 1, 2, 0, &vide(),
-            LineWeights { done: 8, exists: 5, ctc: 2, no_verdict: 3 }, &vide());
+            LineWeights { done: 8, exists: 5, ctc: 2, no_verdict: 3, failed: 0 }, &vide());
         let s = t.snapshot();
         assert_eq!(s.exists, 3);
         assert_eq!(s.ctc, 1);
