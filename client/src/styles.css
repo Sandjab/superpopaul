@@ -8,6 +8,9 @@
   --green: #4cc268; --gold: #d9a83f; --gold-hover: #e6bb5c; --on-gold: #241a02;
   --amber: #e0873a; --red: #e5534b;
   --btn2: #1b2740; --track: #223050;
+  /* Prêt plus tard (v0.4.0) : vert éteint, pris sur le vert — c'était compté
+     prêt, on précise. Jamais l'or (accent) ni l'orange (avertissement). */
+  --green-later: #2f8050;
 }
 * { box-sizing: border-box; }
 body {
@@ -235,6 +238,12 @@ body > .drag-fallback {
 #rate-spark svg { height: 40px; }
 .ctc-gap { margin: 7px 0 0; font-size: 12px; }
 .ctc-gap b { font-size: 13px; }
+/* Prêts plus tard (activation à venir) : ligne masquée à zéro, pastille à la
+   couleur du segment du mini-anneau. */
+.ctc-later { margin: 7px 0 0; font-size: 12px; color: var(--muted); }
+.ctc-later b { font-size: 13px; color: var(--fg); }
+.ctc-later .dot-later { display: inline-block; width: 8px; height: 8px;
+  border-radius: 2px; background: var(--green-later); margin-right: 5px; }
 /* Verdict CTC inconnu (catalogue SMP illisible) : avertissement orange,
    ligne présente seulement quand le compteur est > 0. */
 .ctc-nv { margin: 3px 0 0; font-size: 12px; color: var(--amber); }

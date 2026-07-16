@@ -250,14 +250,19 @@ const HTTP_CATS = [
 /** Mini-anneau d'une tuile : % à l'intérieur (en adressages), absolus à côté
  *  en adressages ET en lignes de fichier (le % des lignes couvertes diffère,
  *  un adressage pouvant porter plusieurs lignes). Tant que rien n'est résolu,
- *  tout reste à « — ». `warnCount` (optionnel) : part « sans verdict »,
- *  segment orange après le vert — absent quand le compteur est à 0. */
-function renderMiniRing(ring, count, outOf, lineCount, linesOutOf, warnCount = 0) {
+ *  tout reste à « — ». Segments optionnels après le vert, absents à 0 :
+ *  `laterCount` (« prêt plus tard », vert éteint — pris sur le vert, qui ne
+ *  compte plus que les prêts aujourd'hui) puis `warnCount` (« sans verdict »,
+ *  orange). */
+function renderMiniRing(ring, count, outOf, lineCount, linesOutOf, warnCount = 0, laterCount = 0) {
   const pct = outOf ? (100 * count / outOf) : 0;
-  const warnTo = outOf ? pct + (100 * warnCount / outOf) : 0;
-  $(`ring-${ring}`).style.background = warnCount > 0
-    ? `conic-gradient(var(--green) ${pct}%, var(--amber) ${pct}% ${warnTo}%, var(--track) ${warnTo}%)`
-    : `conic-gradient(var(--green) ${pct}%, var(--track) ${pct}%)`;
+  const laterTo = outOf ? pct + (100 * laterCount / outOf) : 0;
+  const warnTo = outOf ? laterTo + (100 * warnCount / outOf) : 0;
+  const stops = [`var(--green) ${pct}%`];
+  if (laterCount > 0) stops.push(`var(--green-later) ${pct}% ${laterTo}%`);
+  if (warnCount > 0) stops.push(`var(--amber) ${laterTo}% ${warnTo}%`);
+  stops.push(`var(--track) ${warnTo}%`);
+  $(`ring-${ring}`).style.background = `conic-gradient(${stops.join(", ")})`;
   $(`t-${ring}`).textContent = outOf ? `${pct.toFixed(1)} %` : "—";
   $(`t-${ring}-abs`).textContent = outOf ? fmt(count) : "—";
   $(`t-${ring}-lines`).textContent = linesOutOf ? fmt(lineCount) : "—";
@@ -280,14 +285,28 @@ listen("telemetry", (e) => {
     s.halted ? fmtActive(s.active_s)
              : s.eta_s != null ? fmtDuration(s.eta_s) : "—");
   renderMiniRing("exists", s.exists, s.done, s.exists_lines, s.done_lines);
-  renderMiniRing("ctc", s.ctc, s.done, s.ctc_lines, s.done_lines, s.no_verdict);
+  renderMiniRing("ctc", s.ctc, s.done, s.ctc_lines, s.done_lines, s.no_verdict, s.ctc_later);
+  // Prêts plus tard : total + prochain palier (première date à venir) —
+  // toute la logique vient du snapshot, ici on ne fait qu'afficher.
+  $("t-ctc-later").classList.toggle("hidden", !s.ctc_later);
+  if (s.ctc_later) {
+    $("t-ctc-later-abs").textContent = fmt(s.ctc_later);
+    $("t-ctc-later-lines").textContent = fmt(s.ctc_later_lines);
+    const next = s.ctc_later_dates[0];
+    $("t-ctc-later-next").classList.toggle("hidden", !next);
+    if (next) {
+      $("t-ctc-later-next-n").textContent = fmt(next.addr);
+      $("t-ctc-later-next-d").textContent = fmtDateFr(next.date);
+    }
+  }
   // Reste à convertir : confirmés dans Peppol sans l'extension France — les
-  // « sans verdict » (catalogue SMP illisible) en sont exclus et affichés à
-  // part, sinon ils gonfleraient le chiffre à convertir.
+  // « prêts plus tard » et les « sans verdict » (catalogue SMP illisible) en
+  // sont exclus et affichés à part, sinon ils gonfleraient le chiffre à
+  // convertir ; les supports expirés y restent (dégradation simple).
   $("t-ctc-gap").textContent =
-    s.done ? fmt(Math.max(0, s.exists - s.ctc - s.no_verdict)) : "—";
+    s.done ? fmt(Math.max(0, s.exists - s.ctc - s.ctc_later - s.no_verdict)) : "—";
   $("t-ctc-gap-lines").textContent =
-    s.done ? fmt(Math.max(0, s.exists_lines - s.ctc_lines - s.no_verdict_lines)) : "—";
+    s.done ? fmt(Math.max(0, s.exists_lines - s.ctc_lines - s.ctc_later_lines - s.no_verdict_lines)) : "—";
   $("t-ctc-nv").classList.toggle("hidden", !s.no_verdict);
   $("t-ctc-nv-abs").textContent = fmt(s.no_verdict);
   $("t-ctc-nv-lines").textContent = fmt(s.no_verdict_lines);
@@ -434,6 +453,12 @@ function renderPaGrid(pa, total) {
 }
 
 function fmt(n) { return Number(n).toLocaleString("fr-FR"); }
+
+/** « 2026-09-01 » (clé ISO du snapshot) → « 01/09/2026 ». */
+function fmtDateFr(iso) {
+  const [y, m, d] = iso.split("-");
+  return d && m && y ? `${d}/${m}/${y}` : iso;
+}
 function fmtDuration(s) {
   if (s < 60) return `${s} s`;
   const m = Math.round(s / 60);
@@ -521,8 +546,10 @@ function copyReport(btn) {
   const name = (state.inputPath ?? "").split(/[\\/]/).pop();
   const r = lastRun, s = lastSnap;
   const pct = (a, b) => (b ? `${(100 * a / b).toFixed(1).replace(".", ",")} %` : "—");
+  const next = s?.ctc_later ? s.ctc_later_dates[0] : null;
   const text = `Super Popaul — ${name} : ${fmt(r.done)} résolus, ${fmt(r.failed)} échecs` +
-    (s ? `, ${pct(s.exists, s.done)} dans Peppol, ${pct(s.ctc, s.done)} avec extension France` : "") +
+    (s ? `, ${pct(s.exists, s.done)} dans Peppol, ${pct(s.ctc, s.done)} prêts aujourd'hui (extension France)` : "") +
+    (next ? `, +${fmt(next.addr)} dès le ${fmtDateFr(next.date)}` : "") +
     `, durée ${fmtActive(r.active_s)}.`;
   navigator.clipboard.writeText(text).then(
     () => {

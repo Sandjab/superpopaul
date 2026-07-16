@@ -85,15 +85,16 @@
               </div>
             </div>
           </div>
-          <div class="biz-metric" title="Éligibles à la facturation électronique française (France Invoice UBL Extension, ex-CTC-FR).">
-            <div class="mini-ring" id="ring-ctc"><div class="mini-ring-center"><b id="t-ctc">—</b></div></div>
+          <div class="biz-metric" title="Éligibles à la facturation électronique française (France Invoice UBL Extension, ex-CTC-FR) — le grand % : prêts aujourd'hui.">
+            <div class="mini-ring" id="ring-ctc" title="Vert : prêts aujourd'hui. Vert éteint : prêts plus tard (activation à venir). Orange : verdict inconnu."><div class="mini-ring-center"><b id="t-ctc">—</b></div></div>
             <div>
               <h3><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.2 L14 4.6 L14 11.4 L8 14.8 L2 11.4 L2 4.6 Z"/></svg> France Invoice UBL Extension</h3>
               <div class="ring-abs">
                 <div><b id="t-ctc-abs">—</b> <span class="muted">adressages</span></div>
                 <div><b id="t-ctc-lines">—</b> <span class="muted">lignes</span> <span class="muted" id="t-ctc-lines-pct"></span></div>
               </div>
-              <p class="ctc-gap muted" title="Confirmés dans Peppol sans l'extension : le reste à convertir.">dans Peppol sans l'extension : <b id="t-ctc-gap">—</b> adr · <b id="t-ctc-gap-lines">—</b> lignes</p>
+              <p class="ctc-later hidden" id="t-ctc-later" title="Extension déclarée avec une date d'activation future : prêts sans action de leur part, à la date indiquée — bascule automatique le jour venu."><span class="dot-later"></span>prêts plus tard : <b id="t-ctc-later-abs">—</b> adr · <b id="t-ctc-later-lines">—</b> lignes<span id="t-ctc-later-next" class="hidden"> — dont <b id="t-ctc-later-next-n">—</b> dès le <span id="t-ctc-later-next-d">—</span></span></p>
+              <p class="ctc-gap muted" title="Confirmés dans Peppol sans l'extension : le reste à convertir. Inclut les supports dont la validité a expiré.">dans Peppol sans l'extension : <b id="t-ctc-gap">—</b> adr · <b id="t-ctc-gap-lines">—</b> lignes</p>
               <p class="ctc-nv hidden" id="t-ctc-nv" title="Présents dans Peppol mais catalogue SMP illisible (blocage réseau, panne ou limitation) : impossible de conclure sur l'extension. Cause détaillée dans la base locale (colonne note).">verdict inconnu (SMP illisible) : <b id="t-ctc-nv-abs">—</b> adr · <b id="t-ctc-nv-lines">—</b> lignes</p>
             </div>
           </div>
