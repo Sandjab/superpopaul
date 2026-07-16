@@ -441,6 +441,9 @@ impl Engine {
                             let (mut ex, mut ctc, mut nv, mut failed) = (0u32, 0u32, 0u32, 0u32);
                             let mut pa_counts: BTreeMap<String, u32> = BTreeMap::new();
                             let mut error_counts: BTreeMap<String, u32> = BTreeMap::new();
+                            // Prêts plus tard : jour d'activation → (adr, lignes).
+                            let mut later_counts: BTreeMap<String, (u32, u64)> = BTreeMap::new();
+                            let now_utc = chrono::Utc::now();
                             let mut lines = LineWeights::default();
                             let mut resolutions = Vec::with_capacity(items.len());
                             for (i, item) in items.iter().enumerate() {
@@ -461,9 +464,36 @@ impl Engine {
                                             lines.no_verdict += w;
                                         }
                                     }
+                                    // Verdict temporel : l'extension déclarée
+                                    // se répartit selon la fenêtre de validité.
                                     if r.extended_ctc_fr == Some(true) {
-                                        ctc += 1;
-                                        lines.ctc += w;
+                                        match crate::ctc::state(
+                                            r.ctc_activation.as_deref(),
+                                            r.ctc_expiration.as_deref(),
+                                            now_utc,
+                                        ) {
+                                            crate::ctc::CtcState::Ready => {
+                                                ctc += 1;
+                                                lines.ctc += w;
+                                            }
+                                            crate::ctc::CtcState::Later => {
+                                                // Later ⇒ activation parsable.
+                                                if let Some(day) = r
+                                                    .ctc_activation
+                                                    .as_deref()
+                                                    .and_then(crate::ctc::activation_day)
+                                                {
+                                                    let e = later_counts
+                                                        .entry(day)
+                                                        .or_insert((0, 0));
+                                                    e.0 += 1;
+                                                    e.1 += w;
+                                                }
+                                            }
+                                            // Dégradation simple : plus prêt,
+                                            // point — rejoint le gap exists−ctc.
+                                            crate::ctc::CtcState::Expired => {}
+                                        }
                                     }
                                     // Repli sur le code si l'API n'a pas de nom.
                                     if let Some(pa) =
@@ -502,6 +532,7 @@ impl Engine {
                                 &pa_counts,
                                 lines,
                                 &error_counts,
+                                &later_counts,
                             );
                         }
                         Err(ApiError::Client(code)) => {
@@ -1120,6 +1151,84 @@ mod tests_engine {
         let s = handle.telemetry.snapshot();
         assert_eq!((s.exists, s.ctc, s.no_verdict), (2, 0, 2));
         assert_eq!((s.exists_lines, s.ctc_lines, s.no_verdict_lines), (4, 0, 4));
+    }
+
+    #[tokio::test]
+    async fn verdict_temporel_repartit_prets_maintenant_plus_tard_expires() {
+        // v0.4.0 : extension déclarée ≠ prêt. La fenêtre de validité répartit
+        // en « prêt aujourd'hui » (ctc), « prêt plus tard » (ctc_later, par
+        // jour d'activation, en adressages ET en lignes) et « plus prêt »
+        // (expiré : dégradation simple, rejoint le gap exists−ctc).
+        // Dates volontairement extrêmes : le test ne dépend pas du jour.
+        struct ValidityResolver;
+        impl Respond for ValidityResolver {
+            fn respond(&self, req: &Request) -> ResponseTemplate {
+                let body: serde_json::Value = serde_json::from_slice(&req.body).unwrap();
+                let results: Vec<serde_json::Value> = body["participants"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .enumerate()
+                    .map(|(i, p)| {
+                        let mut it = serde_json::json!({
+                            "participant_id": p, "exists": true,
+                            "supports_extended_ctc_fr": true
+                        });
+                        match i {
+                            0 => {
+                                it["ctc_activation"] = "2000-01-01".into();
+                                it["ctc_expiration"] = "9999-12-31T23:59:59Z".into();
+                            }
+                            1 => it["ctc_activation"] = "2999-01-01T00:00:00Z".into(),
+                            _ => {
+                                it["ctc_activation"] = "2000-01-01".into();
+                                it["ctc_expiration"] = "2001-01-01".into();
+                            }
+                        }
+                        it
+                    })
+                    .collect();
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"results": results}))
+            }
+        }
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/resolve/batch"))
+            .respond_with(ValidityResolver)
+            .mount(&server)
+            .await;
+        let store = Arc::new(Mutex::new(Store::open_in_memory().unwrap()));
+        let client = ApiClient::new(&server.uri(), "K", None, None).unwrap();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        let todo = pids(3);
+        let line_counts = HashMap::from([(todo[1].clone(), 2u64)]);
+        let handle = Engine::start(
+            client,
+            EngineParams {
+                batch_size: 10,
+                concurrency: 1,
+            },
+            todo.clone(),
+            line_counts,
+            store.clone(),
+            tx,
+        );
+        wait_finished(&mut rx).await;
+        let s = handle.telemetry.snapshot();
+        assert_eq!(s.exists, 3);
+        assert_eq!((s.ctc, s.ctc_lines), (1, 1), "seul l'actif est prêt");
+        assert_eq!((s.ctc_later, s.ctc_later_lines), (1, 2));
+        let dates: Vec<(&str, u64, u64)> = s
+            .ctc_later_dates
+            .iter()
+            .map(|d| (d.date.as_str(), d.addr, d.lines))
+            .collect();
+        assert_eq!(dates, vec![("2999-01-01", 1, 2)]);
+        assert_eq!(s.no_verdict, 0, "l'expiré n'est pas un sans-verdict");
+        // Les dates sont persistées telles quelles (l'état se recalcule).
+        let st = store.lock().unwrap();
+        let r1 = st.get(&todo[1]).unwrap().unwrap();
+        assert_eq!(r1.ctc_activation.as_deref(), Some("2999-01-01T00:00:00Z"));
     }
 
     #[tokio::test]

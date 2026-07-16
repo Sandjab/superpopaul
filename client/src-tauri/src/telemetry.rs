@@ -30,6 +30,8 @@ struct Inner {
     http: BTreeMap<u16, u64>,
     pa: BTreeMap<String, u64>, // nom de PA → adressages routés vers elle
     errors: BTreeMap<String, u64>, // motif d'échec → adressages concernés
+    /// Prêts plus tard : jour d'activation future → (adressages, lignes).
+    later: BTreeMap<String, (u64, u64)>,
     lines: LineWeights,        // mêmes compteurs, pondérés en lignes de fichier
     latencies_ms: Vec<u32>,
     calls: VecDeque<(Instant, u32)>, // (instant, adressages traités par l'appel)
@@ -80,7 +82,17 @@ pub struct Snapshot {
     pub done: u64,
     pub total: u64,
     pub exists: u64,
+    /// Prêts AUJOURD'HUI (verdict temporel v0.4.0) : extension déclarée et
+    /// fenêtre de validité active — les activations futures sont dans
+    /// ctc_later, les expirées rejoignent le gap exists−ctc (dégradation
+    /// simple).
     pub ctc: u64,
+    /// Prêts plus tard : extension déclarée, activation à venir.
+    pub ctc_later: u64,
+    pub ctc_later_lines: u64,
+    /// Comptes par jour d'activation future, tri chronologique — matière
+    /// des paliers de projection (ctc::paliers).
+    pub ctc_later_dates: Vec<crate::ctc::DateCount>,
     /// Présents dans Peppol mais sans verdict CTC (catalogue SMP illisible) :
     /// à part du gap exists−ctc, qui ne compte que les confirmés sans extension.
     pub no_verdict: u64,
@@ -131,6 +143,7 @@ impl Telemetry {
                 http: BTreeMap::new(),
                 pa: BTreeMap::new(),
                 errors: BTreeMap::new(),
+                later: BTreeMap::new(),
                 lines: LineWeights::default(),
                 latencies_ms: Vec::new(),
                 calls: VecDeque::new(),
@@ -164,6 +177,8 @@ impl Telemetry {
     /// `pa` : adressages de l'appel agrégés par nom de PA.
     /// `lines` : les mêmes compteurs pondérés en lignes de fichier.
     /// `errors` : adressages en erreur item, agrégés par motif.
+    /// `later` : prêts plus tard, par jour d'activation future —
+    /// jour → (adressages, lignes) ; ces adressages ne sont PAS dans `ctc`.
     #[allow(clippy::too_many_arguments)]
     pub fn record_call(
         &self,
@@ -177,6 +192,7 @@ impl Telemetry {
         pa: &BTreeMap<String, u32>,
         lines: LineWeights,
         errors: &BTreeMap<String, u32>,
+        later: &BTreeMap<String, (u32, u64)>,
     ) {
         let mut i = self.inner.lock().unwrap();
         i.done += addr as u64;
@@ -197,6 +213,11 @@ impl Telemetry {
         }
         for (motif, n) in errors {
             bump_error(&mut i.errors, motif, *n as u64);
+        }
+        for (jour, (a, l)) in later {
+            let e = i.later.entry(jour.clone()).or_insert((0, 0));
+            e.0 += *a as u64;
+            e.1 += *l;
         }
         i.latencies_ms.push(latency_ms.min(u32::MAX as u64) as u32);
         i.calls.push_back((Instant::now(), addr));
@@ -230,7 +251,7 @@ impl Telemetry {
         // Sous le verrou : purge de la fenêtre + copies. Le tri des latences
         // (coûteux à grand volume) se fait HORS verrou pour ne pas bloquer
         // les record_call des workers.
-        let (done, exists, ctc, no_verdict, failed, http, pa, errors, lines, latencies, req_per_s, addr_per_s, active_s) = {
+        let (done, exists, ctc, no_verdict, failed, http, pa, errors, later, lines, latencies, req_per_s, addr_per_s, active_s) = {
             let mut i = self.inner.lock().unwrap();
             let now = Instant::now();
             while let Some((t, _)) = i.calls.front() {
@@ -259,6 +280,7 @@ impl Telemetry {
                 i.http.clone(),
                 i.pa.clone(),
                 i.errors.clone(),
+                i.later.clone(),
                 i.lines,
                 i.latencies_ms.clone(),
                 req_per_s,
@@ -283,11 +305,21 @@ impl Telemetry {
         } else {
             None
         };
+        let (ctc_later, ctc_later_lines) = later
+            .values()
+            .fold((0, 0), |(a, l), (da, dl)| (a + da, l + dl));
+        let ctc_later_dates = later
+            .into_iter() // BTreeMap : clés ISO déjà en ordre chronologique
+            .map(|(date, (addr, lines))| crate::ctc::DateCount { date, addr, lines })
+            .collect();
         Snapshot {
             done,
             total: self.total,
             exists,
             ctc,
+            ctc_later,
+            ctc_later_lines,
+            ctc_later_dates,
             no_verdict,
             failed,
             done_lines: lines.done,
@@ -366,6 +398,11 @@ mod tests {
         BTreeMap::new()
     }
 
+    /// Aucun « prêt plus tard » dans l'appel (le cas de loin majoritaire).
+    fn sans_dates() -> BTreeMap<String, (u32, u64)> {
+        BTreeMap::new()
+    }
+
     /// Carte HTTP d'un appel API nominal : un 200.
     fn h200() -> BTreeMap<u16, u32> {
         BTreeMap::from([(200, 1)])
@@ -393,8 +430,8 @@ mod tests {
     fn compteurs_et_pourcentages() {
         let t = Telemetry::new(1000);
         // 2 appels : 50 adressages ok (30 existent, 20 ctc), puis 25 ok + 5 échecs
-        t.record_call(&h200(), 120, 50, 30, 20, 0, 0, &vide(), LineWeights::default(), &vide());
-        t.record_call(&h200(), 250, 30, 10, 5, 0, 5, &vide(), LineWeights::default(), &vide());
+        t.record_call(&h200(), 120, 50, 30, 20, 0, 0, &vide(), LineWeights::default(), &vide(), &sans_dates());
+        t.record_call(&h200(), 250, 30, 10, 5, 0, 5, &vide(), LineWeights::default(), &vide(), &sans_dates());
         let s = t.snapshot();
         assert_eq!(s.total, 1000);
         assert_eq!(s.done, 80);
@@ -423,7 +460,7 @@ mod tests {
         // définitif couvre aussi ses lignes (dénominateur cohérent).
         let t = Telemetry::new(10);
         t.record_call(&h200(), 100, 2, 1, 1, 0, 0, &vide(),
-            LineWeights { done: 7, exists: 5, ctc: 3, no_verdict: 0, failed: 0 }, &vide());
+            LineWeights { done: 7, exists: 5, ctc: 3, no_verdict: 0, failed: 0 }, &vide(), &sans_dates());
         t.record_error(400, 2, 4);
         let s = t.snapshot();
         assert_eq!((s.done_lines, s.exists_lines, s.ctc_lines), (11, 5, 3));
@@ -437,7 +474,7 @@ mod tests {
         // (LineWeights.failed) et échec HTTP définitif (record_error).
         let t = Telemetry::new(10);
         t.record_call(&h200(), 100, 3, 1, 1, 0, 2, &vide(),
-            LineWeights { done: 8, exists: 2, ctc: 2, no_verdict: 0, failed: 6 }, &vide());
+            LineWeights { done: 8, exists: 2, ctc: 2, no_verdict: 0, failed: 6 }, &vide(), &sans_dates());
         t.record_error(400, 2, 4);
         let s = t.snapshot();
         assert_eq!(s.failed, 4);
@@ -451,8 +488,8 @@ mod tests {
         // de connexion). Mode API : carte {statut: 1}, comme avant.
         let t = Telemetry::new(100);
         t.record_call(&BTreeMap::from([(403u16, 2u32), (0u16, 1u32)]), 100, 3, 0, 0, 0, 3,
-            &vide(), LineWeights::default(), &vide());
-        t.record_call(&h200(), 100, 1, 1, 1, 0, 0, &vide(), LineWeights::default(), &vide());
+            &vide(), LineWeights::default(), &vide(), &sans_dates());
+        t.record_call(&h200(), 100, 1, 1, 1, 0, 0, &vide(), LineWeights::default(), &vide(), &sans_dates());
         let s = t.snapshot();
         assert_eq!(s.http.get(&403), Some(&2));
         assert_eq!(s.http.get(&0), Some(&1));
@@ -467,12 +504,40 @@ mod tests {
         // « le reste à convertir » (cas Serensia du 15/07 : 2 165 adressages).
         let t = Telemetry::new(100);
         t.record_call(&h200(), 100, 5, 3, 1, 2, 0, &vide(),
-            LineWeights { done: 8, exists: 5, ctc: 2, no_verdict: 3, failed: 0 }, &vide());
+            LineWeights { done: 8, exists: 5, ctc: 2, no_verdict: 3, failed: 0 }, &vide(), &sans_dates());
         let s = t.snapshot();
         assert_eq!(s.exists, 3);
         assert_eq!(s.ctc, 1);
         assert_eq!(s.no_verdict, 2);
         assert_eq!(s.no_verdict_lines, 3);
+    }
+
+    #[test]
+    fn prets_plus_tard_comptes_par_date() {
+        // Extension déclarée avec activation FUTURE : ni dans ctc (le grand %
+        // devient « prêts aujourd'hui »), comptés à part et par jour — la
+        // matière des paliers de projection. Les comptes s'accumulent entre
+        // appels, le snapshot les livre triés chronologiquement.
+        let t = Telemetry::new(100);
+        t.record_call(&h200(), 100, 5, 5, 2, 0, 0, &vide(),
+            LineWeights { done: 5, exists: 5, ctc: 2, no_verdict: 0, failed: 0 }, &vide(),
+            &BTreeMap::from([("2026-09-22".to_string(), (1u32, 1u64))]));
+        t.record_call(&h200(), 100, 4, 4, 1, 0, 0, &vide(),
+            LineWeights { done: 4, exists: 4, ctc: 1, no_verdict: 0, failed: 0 }, &vide(),
+            &BTreeMap::from([
+                ("2026-09-01".to_string(), (2u32, 3u64)),
+                ("2026-09-22".to_string(), (1u32, 2u64)),
+            ]));
+        let s = t.snapshot();
+        assert_eq!(s.ctc, 3, "les futurs ne comptent pas dans le vert");
+        assert_eq!(s.ctc_later, 4);
+        assert_eq!(s.ctc_later_lines, 6);
+        let dates: Vec<(&str, u64, u64)> = s
+            .ctc_later_dates
+            .iter()
+            .map(|d| (d.date.as_str(), d.addr, d.lines))
+            .collect();
+        assert_eq!(dates, vec![("2026-09-01", 2, 3), ("2026-09-22", 2, 3)]);
     }
 
     #[test]
@@ -482,9 +547,9 @@ mod tests {
         // à égalité par nom pour un ordre stable.
         let t = Telemetry::new(100);
         t.record_call(&h200(), 100, 8, 8, 0, 0, 0, &BTreeMap::from([("Beta".into(), 5), ("Alpha".into(), 3)]),
-            LineWeights::default(), &vide());
+            LineWeights::default(), &vide(), &sans_dates());
         t.record_call(&h200(), 100, 4, 4, 0, 0, 0, &BTreeMap::from([("Alpha".into(), 4), ("Gamma".into(), 5)]),
-            LineWeights::default(), &vide());
+            LineWeights::default(), &vide(), &sans_dates());
         let s = t.snapshot();
         let ranking: Vec<(&str, u64)> = s.pa.iter().map(|p| (p.name.as_str(), p.count)).collect();
         assert_eq!(
@@ -497,7 +562,7 @@ mod tests {
     fn percentiles_latence() {
         let t = Telemetry::new(100);
         for (i, ms) in (1..=100u64).enumerate() {
-            t.record_call(&h200(), ms, 1, 0, 0, 0, 0, &vide(), LineWeights::default(), &vide());
+            t.record_call(&h200(), ms, 1, 0, 0, 0, 0, &vide(), LineWeights::default(), &vide(), &sans_dates());
             let _ = i;
         }
         let s = t.snapshot();
@@ -515,7 +580,7 @@ mod tests {
         // 2 erreurs item « timeout SMP », 1 « participant invalide » dans un
         // appel 200 ; puis un échec HTTP définitif de 10 adressages.
         t.record_call(&h200(), 100, 5, 2, 0, 0, 3, &vide(), LineWeights::default(),
-            &BTreeMap::from([("timeout SMP".into(), 2), ("participant invalide".into(), 1)]));
+            &BTreeMap::from([("timeout SMP".into(), 2), ("participant invalide".into(), 1)]), &sans_dates());
         t.record_error(404, 10, 10);
         let s = t.snapshot();
         let top: Vec<(&str, u64)> = s.errors.iter().map(|e| (e.name.as_str(), e.count)).collect();
@@ -542,7 +607,7 @@ mod tests {
         let t = Telemetry::new(1000);
         for i in 0..25 {
             t.record_call(&h200(), 100, 1, 0, 0, 0, 1, &vide(), LineWeights::default(),
-                &BTreeMap::from([(format!("motif {i:02}"), 1u32)]));
+                &BTreeMap::from([(format!("motif {i:02}"), 1u32)]), &sans_dates());
         }
         let s = t.snapshot();
         assert_eq!(s.errors.len(), 21); // 20 motifs + « (autres) »
@@ -554,7 +619,7 @@ mod tests {
     fn histogramme_de_latences_par_tranches() {
         let t = Telemetry::new(10);
         for ms in [10u64, 60, 150, 700, 6000] {
-            t.record_call(&h200(), ms, 1, 0, 0, 0, 0, &vide(), LineWeights::default(), &vide());
+            t.record_call(&h200(), ms, 1, 0, 0, 0, 0, &vide(), LineWeights::default(), &vide(), &sans_dates());
         }
         let hist = t.snapshot().latency_hist;
         // Bornes fixes ≤50, ≤100, ≤200, ≤500, ≤1000, ≤2000, ≤5000, au-delà.
@@ -580,7 +645,7 @@ mod tests {
         // 1 requête portant 50 adressages : addr_per_s ≈ 50 × req_per_s.
         // Un swap des deux champs ne passerait pas ce test.
         let t = Telemetry::new(1000);
-        t.record_call(&h200(), 100, 50, 0, 0, 0, 0, &vide(), LineWeights::default(), &vide());
+        t.record_call(&h200(), 100, 50, 0, 0, 0, 0, &vide(), LineWeights::default(), &vide(), &sans_dates());
         let s = t.snapshot();
         assert!(s.req_per_s > 0.0);
         let ratio = s.addr_per_s / s.req_per_s;
@@ -591,7 +656,7 @@ mod tests {
     fn eta_present_des_qu_il_y_a_du_debit() {
         let t = Telemetry::new(1000);
         assert!(t.snapshot().eta_s.is_none()); // rien traité
-        t.record_call(&h200(), 100, 100, 0, 0, 0, 0, &vide(), LineWeights::default(), &vide());
+        t.record_call(&h200(), 100, 100, 0, 0, 0, 0, &vide(), LineWeights::default(), &vide(), &sans_dates());
         let s = t.snapshot();
         assert!(s.addr_per_s > 0.0);
         assert!(s.eta_s.is_some());
