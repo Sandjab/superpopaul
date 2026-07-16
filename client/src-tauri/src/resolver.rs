@@ -911,6 +911,8 @@ mod tests_engine {
             pa: None,
             supports_extended_ctc_fr: None,
             note: Some("ServiceGroup HTTP 403 on https://smp.example".into()),
+            ctc_activation: None,
+            ctc_expiration: None,
             error: None,
         };
         let r = to_resolution(&item, "a::1", 42);
@@ -928,6 +930,8 @@ mod tests_engine {
             pa: None,
             supports_extended_ctc_fr: None,
             note: Some("détail transitoire".into()),
+            ctc_activation: None,
+            ctc_expiration: None,
             error: Some("HTTP 503".into()),
         };
         let r = to_resolution(&err, "a::2", 42);

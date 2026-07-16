@@ -563,11 +563,16 @@ impl DirectClient {
                         item.pa = Some(pa);
                     }
                 }
-                // Mesure : bornes de validité déclarées du support CTC (le
+                // Bornes de validité déclarées du support CTC (le
                 // ServiceMetadata téléchargé est celui du doctype CTC quand
-                // supports est vrai). Verdict inchangé.
+                // supports est vrai) : toutes en note diagnostique, la
+                // fenêtre pertinente en champs structurés (parité serveur).
                 if supports {
                     item.note = service_dates_note(&md_xml);
+                    let (act, exp) =
+                        crate::ctc::pick_window(&endpoint_dates(&md_xml), chrono::Utc::now());
+                    item.ctc_activation = act;
+                    item.ctc_expiration = exp;
                 }
             }
         }
@@ -639,6 +644,8 @@ fn item_base(pid_full: &str, exists: Option<bool>, supports: Option<bool>) -> Ap
         pa: None,
         supports_extended_ctc_fr: supports,
         note: None,
+        ctc_activation: None,
+        ctc_expiration: None,
         error: None,
     }
 }
@@ -651,6 +658,8 @@ fn item_error(pid_full: &str, error: &str) -> ApiItem {
         pa: None,
         supports_extended_ctc_fr: None,
         note: None,
+        ctc_activation: None,
+        ctc_expiration: None,
         error: Some(error.to_string()),
     }
 }
@@ -717,6 +726,29 @@ fn service_dates_note(xml: &str) -> Option<String> {
         parts.push(format!("expiration {}", expirations.join("/")));
     }
     Some(format!("support CTC : {}", parts.join(", ")))
+}
+
+/// Paires (activation, expiration) par élément <Endpoint> d'un
+/// ServiceMetadata — le pairage compte pour choisir la fenêtre pertinente
+/// (ctc::pick_window), là où la note agrège tout le document.
+fn endpoint_dates(xml: &str) -> Vec<(Option<String>, Option<String>)> {
+    let Ok(doc) = roxmltree::Document::parse(xml) else {
+        return Vec::new();
+    };
+    doc.descendants()
+        .filter(|n| n.tag_name().name() == "Endpoint")
+        .map(|ep| {
+            let get = |tag: &str| {
+                ep.descendants()
+                    .find(|n| n.tag_name().name() == tag)
+                    .and_then(|n| n.text())
+                    .map(str::trim)
+                    .filter(|t| !t.is_empty())
+                    .map(str::to_string)
+            };
+            (get("ServiceActivationDate"), get("ServiceExpirationDate"))
+        })
+        .collect()
 }
 
 /// Premier élément <Certificate> (contenu base64) d'un ServiceMetadata.
@@ -1059,6 +1091,89 @@ mod tests {
                  <ServiceActivationDate>2026-09-01</ServiceActivationDate></Endpoint>
                </ServiceInformation></ServiceMetadata></SignedServiceMetadata>"#
         )
+    }
+
+    /// Deux endpoints : un expiré, un actif jusqu'en 9999 — dates stables
+    /// dans le temps (le test ne dépend pas de l'horloge du jour).
+    fn md_xml_expire_puis_actif(cert_b64: &str) -> String {
+        format!(
+            r#"<?xml version="1.0"?><SignedServiceMetadata xmlns="http://busdox.org/serviceMetadata/publishing/1.0/">
+               <ServiceMetadata><ServiceInformation>
+               <Endpoint><Certificate>{cert_b64}</Certificate>
+                 <ServiceActivationDate>2020-01-01</ServiceActivationDate>
+                 <ServiceExpirationDate>2021-01-01</ServiceExpirationDate></Endpoint>
+               <Endpoint><Certificate>{cert_b64}</Certificate>
+                 <ServiceActivationDate>2020-06-01</ServiceActivationDate>
+                 <ServiceExpirationDate>9999-12-31T23:59:59.999999Z</ServiceExpirationDate></Endpoint>
+               </ServiceInformation></ServiceMetadata></SignedServiceMetadata>"#
+        )
+    }
+
+    #[test]
+    fn dates_extraites_par_endpoint_pour_la_fenetre() {
+        // Le pairage activation/expiration par endpoint est préservé
+        // (service_dates_note, elle, agrège tout le document).
+        assert_eq!(
+            endpoint_dates(&md_xml_expire_puis_actif(TEST_CERT_B64)),
+            vec![
+                (Some("2020-01-01".into()), Some("2021-01-01".into())),
+                (
+                    Some("2020-06-01".into()),
+                    Some("9999-12-31T23:59:59.999999Z".into())
+                ),
+            ]
+        );
+        assert_eq!(
+            endpoint_dates(&md_xml(TEST_CERT_B64)),
+            vec![(None, None)]
+        );
+    }
+
+    #[tokio::test]
+    async fn fenetre_ctc_portee_en_champs_structures() {
+        let server = MockServer::start().await;
+        let sg_path = format!("/{}", utf8_percent_encode(PID, PID_ENCODE));
+        Mock::given(method("GET"))
+            .and(path(sg_path))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(sg_xml(&server.uri(), &[FR_CTC_PRIMARY_INVOICE])),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!(
+                "/x/services/{}",
+                utf8_percent_encode(
+                    &format!("busdox-docid-qns::{FR_CTC_PRIMARY_INVOICE}"),
+                    PID_ENCODE
+                )
+            )))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(md_xml_expire_puis_actif(TEST_CERT_B64)),
+            )
+            .mount(&server)
+            .await;
+
+        let c = DirectClient::for_tests(
+            fake_dns(&host_for_pid(), SmlLookup::Found(server.uri())),
+            ZONE,
+        );
+        let (items, _) = c.resolve_batch(&[PID.to_string()]).await.unwrap();
+        let it = &items[0];
+        // La fenêtre est celle de l'endpoint pertinent (l'actif), pas un
+        // min/max sur le document ; la note diagnostique garde tout.
+        assert_eq!(it.ctc_activation.as_deref(), Some("2020-06-01"));
+        assert_eq!(
+            it.ctc_expiration.as_deref(),
+            Some("9999-12-31T23:59:59.999999Z")
+        );
+        assert_eq!(
+            it.note.as_deref(),
+            Some("support CTC : activation 2020-01-01/2020-06-01, \
+                  expiration 2021-01-01/9999-12-31T23:59:59.999999Z")
+        );
     }
 
     #[test]

@@ -71,6 +71,13 @@ pub struct ApiItem {
     pub supports_extended_ctc_fr: Option<bool>,
     #[serde(default)]
     pub note: Option<String>,
+    /// Fenêtre de validité du support CTC (v0.4.0) : dates SMP brutes,
+    /// absentes si le support est actif sans borne. L'état (prêt / prêt plus
+    /// tard / plus prêt) n'est jamais figé — calculé à la consultation.
+    #[serde(default)]
+    pub ctc_activation: Option<String>,
+    #[serde(default)]
+    pub ctc_expiration: Option<String>,
     #[serde(default)]
     pub error: Option<String>,
 }
@@ -358,7 +365,9 @@ mod tests {
                 "results": [
                     {"participant_id": "iso6523-actorid-upis::0009:1", "exists": true,
                      "pa": {"code": "PA0042", "name": "ACME PA", "country": "FR"},
-                     "supports_extended_ctc_fr": true, "note": null},
+                     "supports_extended_ctc_fr": true, "note": null,
+                     "ctc_activation": "2026-09-01T00:00:00Z",
+                     "ctc_expiration": "2036-09-01T00:00:00Z"},
                     {"participant": "0009:zz", "error": "Identifiant invalide."}
                 ]
             })))
@@ -377,6 +386,16 @@ mod tests {
             items[0].pa.as_ref().unwrap().code.as_deref(),
             Some("PA0042")
         );
+        // Fenêtre de validité CTC (v0.4.0) : brute, absente si non émise.
+        assert_eq!(
+            items[0].ctc_activation.as_deref(),
+            Some("2026-09-01T00:00:00Z")
+        );
+        assert_eq!(
+            items[0].ctc_expiration.as_deref(),
+            Some("2036-09-01T00:00:00Z")
+        );
+        assert_eq!(items[1].ctc_activation, None);
         assert_eq!(items[1].error.as_deref(), Some("Identifiant invalide."));
     }
 

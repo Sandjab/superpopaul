@@ -1,6 +1,7 @@
 pub mod api;
 pub mod commands;
 pub mod config;
+pub mod ctc;
 pub mod csv_io;
 pub mod direct;
 pub mod modes;
