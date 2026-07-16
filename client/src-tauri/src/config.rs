@@ -214,6 +214,9 @@ fn validate_api(api: &ApiConfig) -> Result<(), String> {
     if !(1..=256).contains(&api.dns_concurrency) {
         return Err("dns_concurrency doit être entre 1 et 256".into());
     }
+    // Couple résolveur/secours cohérent (panachage DoH/classique refusé) —
+    // vérifié dès l'enregistrement, pas seulement au lancement d'un run.
+    crate::direct::parse_resolver_spec(api.resolver.as_deref(), Some(&api.resolver_fallback))?;
     Ok(())
 }
 
@@ -611,6 +614,30 @@ mod tests {
                 separator: cfg.output.separator,
             },
         }
+    }
+
+    #[test]
+    fn resolver_panache_refuse_a_l_enregistrement() {
+        // Un couple résolveur/secours incohérent (panachage DoH/classique)
+        // doit être refusé dès l'enregistrement des réglages — même erreur
+        // qu'au run, mais au moment où l'utilisateur peut la corriger.
+        let mut s = settings_exemple();
+        s.api.resolver = Some("https://a.example/dns-query".into());
+        s.api.resolver_fallback = "1.1.1.1".into();
+        let e = s.validate().unwrap_err();
+        assert!(e.contains("secours"), "message : {e}");
+        // Homogène : accepté.
+        s.api.resolver_fallback = "https://b.example/dns-query".into();
+        assert!(s.validate().is_ok());
+        // Classique homogène : accepté aussi.
+        s.api.resolver = Some("8.8.8.8".into());
+        s.api.resolver_fallback = "1.1.1.1".into();
+        assert!(s.validate().is_ok());
+        // Pas de résolveur choisi (mode API ou DNS système) : rien à valider,
+        // le secours (toujours renseigné par l'IHM) ne bloque jamais.
+        s.api.resolver = None;
+        s.api.resolver_fallback = "n'importe quoi".into();
+        assert!(s.validate().is_ok());
     }
 
     #[test]

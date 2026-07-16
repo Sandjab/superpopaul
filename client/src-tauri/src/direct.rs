@@ -314,26 +314,35 @@ pub struct DirectClient {
     sml_zone: String,
 }
 
-/// Résolveur depuis la config : vide = DNS système ; une IP = DNS classique
-/// sur ce serveur ; une URL https = DoH (RFC 8484). Tout le reste est une
-/// erreur explicite — jamais de repli silencieux sur le DNS système.
+/// Forme validée du couple résolveur/secours, sans rien construire —
+/// partagée entre la validation des réglages (config::validate_api, pour
+/// refuser dès l'enregistrement) et la fabrique `dns_from_spec`.
+pub enum ResolverSpec {
+    System,
+    /// Principal puis secours éventuel (failover, l'ordre compte).
+    Classic(Vec<std::net::IpAddr>),
+    Doh { url: String, fallback: Option<String> },
+}
+
+/// Vide = DNS système ; une IP = DNS classique sur ce serveur ; une URL
+/// https = DoH (RFC 8484). Tout le reste est une erreur explicite — jamais
+/// de repli silencieux sur le DNS système.
 /// `fallback` : résolveur de secours (failover pur, pas de lissage), de même
 /// nature que le principal — IP derrière une IP, URL https derrière une URL
 /// https ; le panachage est refusé (jamais de changement de transport
 /// silencieux). Ignoré en DNS système (pas de principal explicite — le champ,
 /// toujours renseigné par l'IHM, n'y a pas de sens), et quand il est vide ou
 /// identique au principal.
-pub fn dns_from_spec(
+pub fn parse_resolver_spec(
     spec: Option<&str>,
     fallback: Option<&str>,
-    http: &reqwest::Client,
-) -> Result<Dns, String> {
+) -> Result<ResolverSpec, String> {
     let Some(spec) = spec.map(str::trim).filter(|s| !s.is_empty()) else {
-        return Dns::system();
+        return Ok(ResolverSpec::System);
     };
     if spec.starts_with("https://") {
         let fb = match fallback.map(str::trim).filter(|s| !s.is_empty() && *s != spec) {
-            Some(fb) if fb.starts_with("https://") => Some(fb),
+            Some(fb) if fb.starts_with("https://") => Some(fb.to_string()),
             Some(fb) => {
                 return Err(format!(
                     "résolveur de secours « {fb} » : attendu une URL https://… \
@@ -342,7 +351,10 @@ pub fn dns_from_spec(
             }
             None => None,
         };
-        return Ok(Dns::doh(spec, fb, http.clone()));
+        return Ok(ResolverSpec::Doh {
+            url: spec.to_string(),
+            fallback: fb,
+        });
     }
     match spec.parse::<std::net::IpAddr>() {
         Ok(ip) => {
@@ -355,12 +367,27 @@ pub fn dns_from_spec(
                     ips.push(fb_ip);
                 }
             }
-            Ok(Dns::udp(&ips))
+            Ok(ResolverSpec::Classic(ips))
         }
         Err(_) => Err(format!(
             "résolveur « {spec} » : attendu une IP (DNS classique), \
              une URL https://… (DoH), ou vide (DNS système)"
         )),
+    }
+}
+
+/// Résolveur depuis la config : voir `parse_resolver_spec` pour le contrat.
+pub fn dns_from_spec(
+    spec: Option<&str>,
+    fallback: Option<&str>,
+    http: &reqwest::Client,
+) -> Result<Dns, String> {
+    match parse_resolver_spec(spec, fallback)? {
+        ResolverSpec::System => Dns::system(),
+        ResolverSpec::Classic(ips) => Ok(Dns::udp(&ips)),
+        ResolverSpec::Doh { url, fallback } => {
+            Ok(Dns::doh(&url, fallback.as_deref(), http.clone()))
+        }
     }
 }
 
