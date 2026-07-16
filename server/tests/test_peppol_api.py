@@ -5,6 +5,7 @@ Le résolveur réseau est remplacé par des sorties factices (aucun appel Peppol
 import json
 import threading
 import unittest
+from datetime import datetime, timezone
 import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
@@ -149,6 +150,108 @@ class CtcServiceDatesTests(unittest.TestCase):
         # RESULT_OK_EXT n'a pas de clé endpoints : aucune note, pas d'erreur.
         v = peppol_api.simple_view(RESULT_OK_EXT)
         self.assertIsNone(v.get("note"))
+
+
+class CtcWindowTests(unittest.TestCase):
+    """Verdict temporel (v0.4.0) : la fenêtre (ctc_activation, ctc_expiration)
+    exposée est celle de l'endpoint CTC pertinent — l'état n'est jamais figé,
+    il sera calculé côté client à partir de ces dates. Priorité : endpoint
+    actif (expiration la plus lointaine, « sans limite » gagnant) > activation
+    future la plus proche > expiré le plus récent."""
+
+    NOW = datetime(2026, 7, 16, 12, 0, tzinfo=timezone.utc)
+
+    def win(self, endpoints):
+        return peppol_api.ctc_window(endpoints, self.NOW)
+
+    def test_endpoint_actif_fenetre_emise_brute(self):
+        self.assertEqual(
+            self.win([_ep(FR_CTC_PRIMARY_INVOICE, "2026-01-01", "2027-01-01")]),
+            ("2026-01-01", "2027-01-01"))
+
+    def test_actif_sans_dates_gagne_sur_activation_future(self):
+        # Un endpoint valide sans borne : prêt sans limite, aucune fenêtre à émettre.
+        self.assertEqual(
+            self.win([_ep(FR_CTC_PRIMARY_INVOICE),
+                      _ep(FR_CTC_PRIMARY_INVOICE, "2026-09-01")]),
+            (None, None))
+
+    def test_expire_plus_futur_choisit_le_futur(self):
+        # Un min/max naïf donnerait (2025-01-01, 2026-03-05) : « prêt », faux.
+        self.assertEqual(
+            self.win([_ep(FR_CTC_PRIMARY_INVOICE, "2025-01-01", "2026-03-05"),
+                      _ep(FR_CTC_PRIMARY_INVOICE, "2026-09-01")]),
+            ("2026-09-01", None))
+
+    def test_deux_futurs_activation_la_plus_proche(self):
+        self.assertEqual(
+            self.win([_ep(FR_CTC_PRIMARY_INVOICE, "2026-09-22"),
+                      _ep(FR_CTC_PRIMARY_INVOICE, "2026-09-01")]),
+            ("2026-09-01", None))
+
+    def test_deux_actifs_expiration_la_plus_lointaine(self):
+        self.assertEqual(
+            self.win([_ep(FR_CTC_PRIMARY_INVOICE, "2025-01-01", "2026-08-01"),
+                      _ep(FR_CTC_PRIMARY_INVOICE, "2025-01-01", "2036-01-01")]),
+            ("2025-01-01", "2036-01-01"))
+
+    def test_tous_expires_le_plus_recent(self):
+        self.assertEqual(
+            self.win([_ep(FR_CTC_PRIMARY_INVOICE, "2024-01-01", "2025-01-01"),
+                      _ep(FR_CTC_PRIMARY_INVOICE, "2024-01-01", "2026-06-01")]),
+            ("2024-01-01", "2026-06-01"))
+
+    def test_formats_iso_varies_parses(self):
+        # Z, offset explicite, microsecondes « sans limite » : tous actifs,
+        # l'expiration 9999 n'est pas un cas spécial (jamais expirée).
+        self.assertEqual(
+            self.win([_ep(FR_CTC_PRIMARY_INVOICE, "2026-07-09T00:00:00+00:00",
+                          "9999-12-31T23:59:59.999999Z")]),
+            ("2026-07-09T00:00:00+00:00", "9999-12-31T23:59:59.999999Z"))
+
+    def test_borne_illisible_ignoree(self):
+        # Activation imparsable = borne absente : endpoint actif, seule
+        # l'expiration (valide) est émise.
+        self.assertEqual(
+            self.win([_ep(FR_CTC_PRIMARY_INVOICE, "n/a", "2027-01-01")]),
+            (None, "2027-01-01"))
+
+    def test_autres_doctypes_ignores(self):
+        self.assertEqual(
+            self.win([_ep("other-doctype", "2026-09-01", "2027-01-01")]),
+            (None, None))
+
+
+class CtcWindowSimpleViewTests(unittest.TestCase):
+    """simple_view expose la fenêtre en champs structurés ; la note
+    diagnostique (toutes les dates) reste inchangée."""
+
+    def _ok_ext(self, endpoints):
+        return dict(RESULT_OK_EXT, endpoints=endpoints)
+
+    def test_champs_emis_avec_la_note(self):
+        v = peppol_api.simple_view(self._ok_ext(
+            [_ep(FR_CTC_PRIMARY_INVOICE, "2020-01-01", "9999-12-31T23:59:59Z")]))
+        self.assertTrue(v["supports_extended_ctc_fr"])
+        self.assertEqual(v["ctc_activation"], "2020-01-01")
+        self.assertEqual(v["ctc_expiration"], "9999-12-31T23:59:59Z")
+        self.assertIn("support CTC", v["note"])
+
+    def test_pas_de_champs_sans_dates(self):
+        v = peppol_api.simple_view(RESULT_OK_EXT)
+        self.assertNotIn("ctc_activation", v)
+        self.assertNotIn("ctc_expiration", v)
+
+    def test_note_garde_toutes_les_dates_champs_la_fenetre(self):
+        # Deux endpoints datés : la note trace tout, les champs structurés ne
+        # portent que la fenêtre pertinente (ici l'actif sans expiration).
+        v = peppol_api.simple_view(self._ok_ext(
+            [_ep(FR_CTC_PRIMARY_INVOICE, "2020-01-01"),
+             _ep(FR_CTC_PRIMARY_INVOICE, "2024-01-01", "2025-01-01")]))
+        self.assertIn("activation 2020-01-01/2024-01-01", v["note"])
+        self.assertIn("expiration 2025-01-01", v["note"])
+        self.assertEqual(v["ctc_activation"], "2020-01-01")
+        self.assertNotIn("ctc_expiration", v)
 
 
 class ConstantTests(unittest.TestCase):

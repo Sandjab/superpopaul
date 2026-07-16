@@ -92,6 +92,7 @@ import threading
 import time
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, NamedTuple
@@ -319,10 +320,9 @@ def _pick_primary_ap(access_points: list[dict[str, Any]], supports: bool) -> dic
 
 def ctc_service_dates_note(endpoints: list[dict[str, Any]]) -> str | None:
     """Bornes de validité déclarées (ServiceActivation/ExpirationDate, spec
-    SMP) sur les endpoints du doctype CTC — étape de MESURE : tracées dans la
-    note diagnostique, le verdict n'en tient pas compte. On décidera d'un
-    verdict temporel quand on saura si le phénomène existe en vrai (ces
-    champs optionnels sont rarement renseignés par les SMP)."""
+    SMP) sur les endpoints du doctype CTC, toutes tracées dans la note
+    diagnostique. Le verdict temporel se calcule côté client à partir de la
+    fenêtre structurée (ctc_window) ; la note reste l'outil de diagnostic."""
     ctc = [e for e in endpoints
            if e.get("document_identifier") == FR_CTC_PRIMARY_INVOICE]
     activations = sorted({e["service_activation_date"] for e in ctc
@@ -337,6 +337,54 @@ def ctc_service_dates_note(endpoints: list[dict[str, Any]]) -> str | None:
     if expirations:
         parts.append("expiration " + "/".join(expirations))
     return "support CTC : " + ", ".join(parts)
+
+
+def _parse_smp_date(raw: str | None) -> datetime | None:
+    """Date SMP ISO 8601 (« Z », offset explicite, microsecondes) ; une valeur
+    illisible vaut borne absente — même règle côté client (mode direct)."""
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def ctc_window(endpoints: list[dict[str, Any]],
+               now: datetime | None = None) -> tuple[str | None, str | None]:
+    """Fenêtre de validité (activation, expiration — chaînes brutes du SMP) de
+    l'endpoint CTC PERTINENT : celle qui détermine l'état, jamais figé, calculé
+    côté client à partir de ces dates. Priorité : endpoint actif (expiration la
+    plus lointaine, « sans limite » gagnant) > activation future la plus proche
+    > expiré le plus récent. Un min/max naïf sur l'ensemble fabriquerait des
+    fenêtres fantômes (actif apparent entre un expiré et un futur)."""
+    now = now or datetime.now(timezone.utc)
+    actifs, futurs, expires = [], [], []
+    for e in endpoints:
+        if e.get("document_identifier") != FR_CTC_PRIMARY_INVOICE:
+            continue
+        act = _parse_smp_date(e.get("service_activation_date"))
+        exp = _parse_smp_date(e.get("service_expiration_date"))
+        # Brutes réémises telles quelles, mais seulement si parsables.
+        w = (act, exp,
+             e.get("service_activation_date") if act else None,
+             e.get("service_expiration_date") if exp else None)
+        if act and act > now:
+            futurs.append(w)
+        elif exp and exp <= now:
+            expires.append(w)
+        else:
+            actifs.append(w)
+    if actifs:
+        best = max(actifs, key=lambda w: w[1] or datetime.max.replace(tzinfo=timezone.utc))
+    elif futurs:
+        best = min(futurs, key=lambda w: w[0])
+    elif expires:
+        best = max(expires, key=lambda w: w[1])
+    else:
+        return (None, None)
+    return (best[2], best[3])
 
 
 def sml_lookup_error(result: dict[str, Any]) -> str | None:
@@ -388,6 +436,11 @@ def simple_view(result: dict[str, Any]) -> dict[str, Any]:
         note = ctc_service_dates_note(result.get("endpoints") or [])
         if note:
             out["note"] = note
+        act, exp = ctc_window(result.get("endpoints") or [])
+        if act:
+            out["ctc_activation"] = act
+        if exp:
+            out["ctc_expiration"] = exp
 
     ap = _pick_primary_ap(aps, supports)
     if ap is not None:
@@ -488,6 +541,25 @@ def openapi_spec() -> dict[str, Any]:
                             },
                         },
                         "access_point_count": {"type": "integer"},
+                        "ctc_activation": {
+                            "type": "string",
+                            "description": (
+                                "Début de validité déclaré du support "
+                                "EXTENDED-CTC-FR (ServiceActivationDate SMP, "
+                                "ISO 8601) — absent si le support est déjà "
+                                "actif sans borne. L'état (prêt / prêt plus "
+                                "tard / plus prêt) se calcule à la date de "
+                                "consultation."
+                            ),
+                        },
+                        "ctc_expiration": {
+                            "type": "string",
+                            "description": (
+                                "Fin de validité déclarée du support "
+                                "EXTENDED-CTC-FR (ServiceExpirationDate SMP, "
+                                "ISO 8601) — absent si sans limite."
+                            ),
+                        },
                         "note": {"type": "string"},
                     },
                 },
