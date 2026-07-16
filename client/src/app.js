@@ -215,13 +215,17 @@ function syncSettingsForm() {
   c.api.url = $("api-url").value.trim();
   c.api.key = $("api-key").value.trim();
   // Case DoH = aide de saisie : une IP cochée DoH est enregistrée sous sa
-  // forme canonique https://<ip>/dns-query (l'interprétation du champ —
-  // vide/IP/URL — reste côté Rust, dns_from_spec).
+  // forme canonique https://<ip>/dns-query — résolveur ET secours, qui doit
+  // être de même nature que le principal (l'interprétation des champs —
+  // vide/IP/URL, panachage refusé — reste côté Rust, parse_resolver_spec).
   let resolver = $("dns-resolver").value.trim();
-  if (resolver && $("dns-doh").checked && !resolver.startsWith("https://"))
-    resolver = `https://${resolver}/dns-query`;
+  let fallback = $("dns-fallback").value.trim();
+  if (resolver && $("dns-doh").checked) {
+    if (!resolver.startsWith("https://")) resolver = `https://${resolver}/dns-query`;
+    if (fallback && !fallback.startsWith("https://")) fallback = `https://${fallback}/dns-query`;
+  }
   c.api.resolver = resolver || null;
-  c.api.resolver_fallback = $("dns-fallback").value.trim();
+  c.api.resolver_fallback = fallback;
   c.api.dns_concurrency = +$("dns-conc").value || 32;
   // Deux champs Concurrence (un par bloc de mode), miroirs l'un de l'autre :
   // on lit celui du mode courant.
@@ -275,13 +279,12 @@ $("api-mode").addEventListener("change", syncModeUi);
 /** Le secours ne sert qu'au DNS classique : grisé en DNS système (champ
  *  vide) comme en DoH (case cochée ou URL saisie) — la valeur reste
  *  enregistrée, Rust l'ignore hors mode classique. */
+/** Le secours suit le principal (IP ou DoH) : grisé seulement sans résolveur
+ *  choisi (DNS système, où il n'a pas de sens). */
 function syncDnsUi() {
-  const spec = $("dns-resolver").value.trim();
-  $("dns-fallback").disabled =
-    !spec || spec.startsWith("https://") || $("dns-doh").checked;
+  $("dns-fallback").disabled = !$("dns-resolver").value.trim();
 }
 $("dns-resolver").addEventListener("input", syncDnsUi);
-$("dns-doh").addEventListener("change", syncDnsUi);
 
 /** Grise toute la zone Proxy tant que la case (dans la légende, donc épargnée
  *  par le disabled natif du fieldset) n'est pas cochée. */

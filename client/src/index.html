@@ -173,8 +173,8 @@
           <p><label for="dns-resolver">Résolveur (optionnel)</label>
              <input id="dns-resolver" size="20" placeholder="vide = système · IP · https://…" title="Vide : DNS système · IP : ce serveur · https://… : DoH, passe par le proxy.">
              <label for="dns-fallback">Secours</label>
-             <input id="dns-fallback" size="12" value="1.1.1.1" title="IP de secours si le résolveur principal ne répond plus (failover).">
-             <label for="dns-doh" title="Transforme l'IP saisie en https://<ip>/dns-query à l'enregistrement."><input type="checkbox" id="dns-doh"> DoH</label></p>
+             <input id="dns-fallback" size="12" value="1.1.1.1" title="Résolveur de secours si le principal ne répond plus (failover) — même nature que le principal : IP, ou https://… en DoH.">
+             <label for="dns-doh" title="Transforme les IP saisies (résolveur et secours) en https://<ip>/dns-query à l'enregistrement."><input type="checkbox" id="dns-doh"> DoH</label></p>
           <p><label for="direct-conc">Concurrence</label>
              <input id="direct-conc" type="number" value="8" min="1" max="256" title="Résolutions simultanées (workers SML + SMP).">
              <label for="dns-conc">Rafale DNS</label>
