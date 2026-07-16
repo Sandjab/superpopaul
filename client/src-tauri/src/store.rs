@@ -15,6 +15,11 @@ pub struct Resolution {
     /// Note diagnostique du résolveur (ex. « ServiceGroup HTTP 403 on … »)
     /// quand exists=1 sans PA ni verdict CTC : catalogue SMP illisible.
     pub note: Option<String>,
+    /// Fenêtre de validité du support CTC (dates SMP brutes, v0.4.0).
+    /// On stocke les dates, JAMAIS l'état : il se recalcule à la lecture
+    /// (bascule automatique en « prêt » le jour de l'activation).
+    pub ctc_activation: Option<String>,
+    pub ctc_expiration: Option<String>,
 }
 
 pub struct Store {
@@ -31,21 +36,25 @@ CREATE TABLE IF NOT EXISTS resolutions (
   extended_ctc_fr   INTEGER,
   api_status        TEXT NOT NULL,
   resolved_at       INTEGER NOT NULL,
-  note              TEXT
+  note              TEXT,
+  ctc_activation    TEXT,
+  ctc_expiration    TEXT
 );
 ";
 
 const UPSERT_SQL: &str = "INSERT INTO resolutions
  (participant, exists_in_peppol, pa_code, pa_name, pa_country,
-  extended_ctc_fr, api_status, resolved_at, note)
- VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)
+  extended_ctc_fr, api_status, resolved_at, note, ctc_activation,
+  ctc_expiration)
+ VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)
  ON CONFLICT(participant) DO UPDATE SET
    exists_in_peppol=excluded.exists_in_peppol,
    pa_code=excluded.pa_code, pa_name=excluded.pa_name,
    pa_country=excluded.pa_country,
    extended_ctc_fr=excluded.extended_ctc_fr,
    api_status=excluded.api_status, resolved_at=excluded.resolved_at,
-   note=excluded.note";
+   note=excluded.note, ctc_activation=excluded.ctc_activation,
+   ctc_expiration=excluded.ctc_expiration";
 
 impl Store {
     pub fn open(path: &Path) -> Result<Self, String> {
@@ -68,15 +77,17 @@ impl Store {
 
     fn init(conn: Connection) -> Result<Self, String> {
         conn.execute_batch(SCHEMA).map_err(|e| e.to_string())?;
-        // Migration : les bases d'avant la colonne note sont complétées
-        // à l'ouverture.
-        let a_note: bool = conn
-            .prepare("SELECT 1 FROM pragma_table_info('resolutions') WHERE name='note'")
-            .and_then(|mut s| s.exists([]))
-            .map_err(|e| e.to_string())?;
-        if !a_note {
-            conn.execute("ALTER TABLE resolutions ADD COLUMN note TEXT", [])
+        // Migration : les bases d'avant une colonne sont complétées à
+        // l'ouverture (note : v0.3.2 ; fenêtre CTC : v0.4.0).
+        for col in ["note", "ctc_activation", "ctc_expiration"] {
+            let present: bool = conn
+                .prepare("SELECT 1 FROM pragma_table_info('resolutions') WHERE name=?1")
+                .and_then(|mut s| s.exists([col]))
                 .map_err(|e| e.to_string())?;
+            if !present {
+                conn.execute(&format!("ALTER TABLE resolutions ADD COLUMN {col} TEXT"), [])
+                    .map_err(|e| e.to_string())?;
+            }
         }
         Ok(Store { conn })
     }
@@ -117,6 +128,8 @@ impl Store {
             &r.api_status,
             &r.resolved_at,
             &r.note,
+            &r.ctc_activation,
+            &r.ctc_expiration,
         )
     }
 
@@ -124,7 +137,8 @@ impl Store {
         self.conn
             .query_row(
                 "SELECT participant, exists_in_peppol, pa_code, pa_name, pa_country,
-                        extended_ctc_fr, api_status, resolved_at, note
+                        extended_ctc_fr, api_status, resolved_at, note,
+                        ctc_activation, ctc_expiration
                  FROM resolutions WHERE participant = ?1",
                 params![pid],
                 Self::row_to_resolution,
@@ -142,7 +156,8 @@ impl Store {
             let placeholders = vec!["?"; chunk.len()].join(",");
             let sql = format!(
                 "SELECT participant, exists_in_peppol, pa_code, pa_name, pa_country,
-                        extended_ctc_fr, api_status, resolved_at, note
+                        extended_ctc_fr, api_status, resolved_at, note,
+                        ctc_activation, ctc_expiration
                  FROM resolutions WHERE participant IN ({placeholders})"
             );
             let mut stmt = self.conn.prepare_cached(&sql).map_err(|e| e.to_string())?;
@@ -168,6 +183,8 @@ impl Store {
             api_status: row.get(6)?,
             resolved_at: row.get(7)?,
             note: row.get(8)?,
+            ctc_activation: row.get(9)?,
+            ctc_expiration: row.get(10)?,
         })
     }
 }
@@ -187,6 +204,8 @@ mod tests {
             api_status: if ok { "ok".into() } else { "error:503".into() },
             resolved_at: at,
             note: None,
+            ctc_activation: None,
+            ctc_expiration: None,
         }
     }
 
@@ -260,6 +279,67 @@ mod tests {
         // Sans note : None en relecture (upsert écrase aussi la note).
         s.upsert(&res("a::note", true, 2)).unwrap();
         assert!(s.get("a::note").unwrap().unwrap().note.is_none());
+    }
+
+    #[test]
+    fn fenetre_ctc_persistee_en_aller_retour() {
+        // On stocke les DATES, jamais l'état : un adressage « activation
+        // 01/09 » doit basculer seul en « prêt » le jour venu — l'état se
+        // recalcule à chaque lecture à partir de ces colonnes.
+        let s = Store::open_in_memory().unwrap();
+        let mut r = res("a::fenetre", true, 1);
+        r.ctc_activation = Some("2026-09-01T00:00:00Z".into());
+        r.ctc_expiration = Some("2036-09-01".into());
+        s.upsert(&r).unwrap();
+        let lu = s.get("a::fenetre").unwrap().unwrap();
+        assert_eq!(lu.ctc_activation.as_deref(), Some("2026-09-01T00:00:00Z"));
+        assert_eq!(lu.ctc_expiration.as_deref(), Some("2036-09-01"));
+        // Re-résolution sans dates : l'upsert écrase (support sans borne).
+        s.upsert(&res("a::fenetre", true, 2)).unwrap();
+        let lu = s.get("a::fenetre").unwrap().unwrap();
+        assert!(lu.ctc_activation.is_none());
+        assert!(lu.ctc_expiration.is_none());
+    }
+
+    #[test]
+    fn ouverture_migre_une_base_v03_sans_colonnes_dates() {
+        // Base v0.3.x : colonne note présente, pas les colonnes dates.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("v03.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE resolutions (
+                   participant       TEXT PRIMARY KEY,
+                   exists_in_peppol  INTEGER,
+                   pa_code           TEXT,
+                   pa_name           TEXT,
+                   pa_country        TEXT,
+                   extended_ctc_fr   INTEGER,
+                   api_status        TEXT NOT NULL,
+                   resolved_at       INTEGER NOT NULL,
+                   note              TEXT
+                 );
+                 INSERT INTO resolutions VALUES
+                   ('a::v03', 1, NULL, NULL, NULL, 1, 'ok', 42,
+                    'support CTC : activation 2026-09-01');",
+            )
+            .unwrap();
+        }
+        let s = Store::open(&path).unwrap();
+        let vieux = s.get("a::v03").unwrap().unwrap();
+        assert!(vieux.ctc_activation.is_none());
+        assert_eq!(
+            vieux.note.as_deref(),
+            Some("support CTC : activation 2026-09-01")
+        );
+        let mut r = res("a::neuf", true, 43);
+        r.ctc_activation = Some("2026-09-01".into());
+        s.upsert(&r).unwrap();
+        assert_eq!(
+            s.get("a::neuf").unwrap().unwrap().ctc_activation.as_deref(),
+            Some("2026-09-01")
+        );
     }
 
     #[test]

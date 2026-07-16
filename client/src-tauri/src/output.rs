@@ -302,6 +302,8 @@ mod tests {
                 api_status: "ok".into(),
                 resolved_at: 0,
                 note: None,
+                ctc_activation: None,
+                ctc_expiration: None,
             },
         );
         m

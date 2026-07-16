@@ -264,6 +264,8 @@ fn to_resolution(item: &ApiItem, sent: &str, at: i64) -> Resolution {
             api_status: format!("error:{e}"),
             resolved_at: at,
             note: item.note.clone(),
+            ctc_activation: None,
+            ctc_expiration: None,
         },
         None => Resolution {
             participant,
@@ -275,6 +277,8 @@ fn to_resolution(item: &ApiItem, sent: &str, at: i64) -> Resolution {
             api_status: "ok".into(),
             resolved_at: at,
             note: item.note.clone(),
+            ctc_activation: item.ctc_activation.clone(),
+            ctc_expiration: item.ctc_expiration.clone(),
         },
     }
 }
@@ -294,6 +298,8 @@ fn client_error_resolutions(chunk: &[String], code: u16, at: i64) -> Vec<Resolut
             api_status: format!("error:HTTP {code}"),
             resolved_at: at,
             note: None,
+            ctc_activation: None,
+            ctc_expiration: None,
         })
         .collect()
 }
