@@ -10,40 +10,60 @@
 
   <header>
     <nav id="stepper">
-      <button data-step="file"    class="step active">1. Fichier</button>
-      <button data-step="columns" class="step" disabled>2. Colonnes</button>
+      <button data-step="file"    class="step active">1. Fichiers</button>
+      <button data-step="columns" class="step" disabled>2. Format</button>
       <button data-step="run"     class="step" disabled>3. Run</button>
     </nav>
     <span class="cfg-btns">
       <button id="btn-settings" class="btn-ghost" title="Réglages — appliqués et enregistrés à la fermeture.">⚙</button>
-      <button id="btn-load-cfg" title="Charger un profil YAML — reprend directement à l'étape Run.">Charger…</button>
-      <button id="btn-save-cfg" title="Sauvegarder le profil (fichier, colonne des adressages, colonnes de sortie) en YAML.">Sauvegarder…</button>
     </span>
   </header>
 
   <div id="banner" class="hidden"></div>
 
   <main>
-    <!-- Étape 1 : fichier d'entrée -->
+    <!-- Étape 1 : hub de dépôt (fichier principal ; companions plus tard) -->
     <section id="step-file" class="panel">
-      <h2>Fichier d'entrée</h2>
-      <div id="dropzone">Dépose un fichier CSV ici, ou <button id="btn-browse">Parcourir…</button></div>
+      <h2>Fichiers</h2>
+      <div id="dropzone">Dépose le fichier principal (CSV) ici, ou <button id="btn-browse">Parcourir…</button></div>
       <div id="file-info" class="hidden">
         <p id="file-meta" class="muted"></p>
         <table id="preview-table"></table>
-        <p><label for="pid-column">Colonne des adressages :</label> <select id="pid-column" title="Colonne contenant les adressages Peppol à résoudre (ex. SIREN/SIRET)."></select>
-           <span id="pid-hint" class="muted"></span></p>
       </div>
     </section>
 
-    <!-- Étape 2 : colonnes de sortie (aperçu manipulable) -->
+    <!-- Étape 2 : format d'entrée/sortie du fichier principal -->
     <section id="step-columns" class="panel hidden">
-      <h2>Colonnes du fichier de sortie</h2>
+      <div id="format-head">
+        <h2>Format du fichier principal</h2>
+        <span>
+          <button id="btn-load-cfg" title="Charger un profil YAML — appliqué si ses colonnes correspondent au fichier ouvert.">Charger profil…</button>
+          <button id="btn-save-cfg" title="Sauvegarder le format courant (colonne des adressages, colonnes, encodage, séparateur) en YAML.">Sauvegarder…</button>
+        </span>
+      </div>
+      <p><label for="pid-column">Colonne des adressages :</label>
+         <select id="pid-column" title="Colonne contenant les adressages Peppol à résoudre (ex. SIREN/SIRET) — 🔑 dans le tableau."></select>
+         <span id="pid-hint" class="muted"></span></p>
       <p class="muted">Glisse les en-têtes : réordonne-les dans le tableau, écarte-les vers la
          zone du bas, réintègre-les où tu veux. Double-clic : écarte une colonne, ou la
          réintègre en dernière position. L'aperçu montre le résultat final.</p>
       <table id="out-preview"></table>
       <div id="col-zone"></div>
+      <p id="out-format">Fichier de sortie :
+        <label for="out-encoding">Encodage</label>
+        <select id="out-encoding" title="UTF-8 avec BOM garantit les accents dans Excel FR.">
+          <option value="utf-8-bom">UTF-8 avec BOM (Excel FR)</option>
+          <option value="utf-8">UTF-8 sans BOM</option>
+          <option value="windows-1252">Windows-1252</option>
+        </select>
+        <label for="out-sep">Séparateur</label>
+        <select id="out-sep" title="« Identique à l'entrée » reprend le séparateur détecté au dépôt.">
+          <option value="auto">Identique à l'entrée</option>
+          <option value=";">Point-virgule ;</option>
+          <option value=",">Virgule ,</option>
+          <option value="|">Pipe |</option>
+          <option value="&#9;">Tabulation</option>
+        </select></p>
     </section>
 
     <!-- Étape 3 : cockpit -->
@@ -139,20 +159,6 @@
         <p><label for="out-suffix">Suffixe</label>
            <input id="out-suffix" size="12" value="_enrichi" title="clients.csv → clients_enrichi.csv.">
            <label title="Évite d'écraser une sortie précédente."><input type="checkbox" id="out-stamp" checked> Suffixer avec la date/heure</label></p>
-        <p><label for="out-encoding">Encodage</label>
-           <select id="out-encoding" title="UTF-8 avec BOM garantit les accents dans Excel FR.">
-             <option value="utf-8-bom">UTF-8 avec BOM (Excel FR)</option>
-             <option value="utf-8">UTF-8 sans BOM</option>
-             <option value="windows-1252">Windows-1252</option>
-           </select>
-           <label for="out-sep">Séparateur</label>
-           <select id="out-sep" title="« Identique à l'entrée » reprend le séparateur détecté à l'étape 1.">
-             <option value="auto">Identique à l'entrée</option>
-             <option value=";">Point-virgule ;</option>
-             <option value=",">Virgule ,</option>
-             <option value="|">Pipe |</option>
-             <option value="&#9;">Tabulation</option>
-           </select></p>
       </fieldset>
       <fieldset><legend>API</legend>
         <p><label for="api-mode">Résolution</label>
