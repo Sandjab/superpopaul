@@ -257,6 +257,10 @@ listen("tauri://drag-drop", (e) => {
   const x = pos.x / dpr, y = pos.y / dpr;
   const r = ddz.getBoundingClientRect();
   if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) {
+    if (!/\.(csv|txt)$/i.test(paths[0])) {
+      banner("warn", `Ce fichier n'est pas un CSV (.csv ou .txt attendu) : ${paths[0]}`);
+      return;
+    }
     loadDirectory("file", paths[0]);
   } else {
     pickInput(paths[0]);
@@ -305,7 +309,11 @@ function setDirBusy(busy) {
   }
 }
 
+let dirBusy = false;
+
 async function loadDirectory(kind, arg) {
+  if (dirBusy) return;            // garde anti-concurrence (drop pendant un chargement)
+  dirBusy = true;
   setDirBusy(true);
   $("dir-status").classList.add("hidden");
   try {
@@ -316,6 +324,7 @@ async function loadDirectory(kind, arg) {
   } catch (err) {
     banner("error", `Annuaire Peppol : ${err}`);
   } finally {
+    dirBusy = false;
     setDirBusy(false);
     $("dir-status").classList.remove("hidden");
   }
@@ -335,11 +344,13 @@ listen("directory://progress", (e) => {
       $("dir-prog-num").textContent = `${mo(done)} Mo / ${mo(total)} Mo · ${pct} %`;
     } else {
       bar.classList.add("indet");
+      bar.firstElementChild.style.width = "";
       $("dir-prog-text").textContent = "Téléchargement de l'annuaire…";
       $("dir-prog-num").textContent = `${mo(done)} Mo`;
     }
   } else {
     bar.classList.add("indet");
+    bar.firstElementChild.style.width = "";
     $("dir-prog-text").textContent = "Analyse et chargement en base…";
     $("dir-prog-num").textContent = `${done.toLocaleString("fr-FR")} lignes lues`;
   }
