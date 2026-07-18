@@ -753,9 +753,13 @@ $("btn-saveas-cfg").addEventListener("click", async () => {
       ? `${dflt.defaultPath}/${state.profile.name}` : state.profile.name;
   const f = await save({ filters: [{ name: "YAML", extensions: ["yaml", "yml"] }], ...dflt });
   if (!f) return;
+  // Payload et instantané capturés AVANT l'await : une mutation pendant
+  // l'aller-retour IPC ne doit pas être marquée « enregistrée » à tort.
+  const payload = currentProfilePayload();
+  const ref = profileSnapshot();
   try {
-    await invoke("save_profile", { path: f, profile: currentProfilePayload() });
-    state.profile = { path: f, name: f.split(/[\\/]/).pop() ?? f, ref: profileSnapshot() };
+    await invoke("save_profile", { path: f, profile: payload });
+    state.profile = { path: f, name: f.split(/[\\/]/).pop() ?? f, ref };
     hideBanner();
   } catch (e) {
     banner("error", `${e}`);
@@ -764,9 +768,11 @@ $("btn-saveas-cfg").addEventListener("click", async () => {
 });
 
 $("btn-save-cfg").addEventListener("click", async () => {
+  const payload = currentProfilePayload();
+  const ref = profileSnapshot();
   try {
-    await invoke("save_profile", { path: state.profile.path, profile: currentProfilePayload() });
-    state.profile.ref = profileSnapshot();
+    await invoke("save_profile", { path: state.profile.path, profile: payload });
+    state.profile.ref = ref;
     hideBanner();
   } catch (e) {
     banner("error", `${e}`);
