@@ -124,6 +124,7 @@ async function pickInput(path) {
   try {
     const p = await invoke("preview_csv", { path });
     const prevHeaders = state.preview ? state.preview.headers : null;
+    const prevPid = state.config.input.pid_column;
     state.inputPath = path;
     state.preview = p;
     state.config.input = {
@@ -138,6 +139,9 @@ async function pickInput(path) {
     const headersChanged = !prevHeaders
       || prevHeaders.length !== p.headers.length
       || prevHeaders.some((name, i) => name !== p.headers[i]);
+    // Signature identique : la désignation existante prime sur la suggestion —
+    // symétrique de la conservation du mapping (et du contexte profil).
+    if (!headersChanged && prevPid) state.config.input.pid_column = prevPid;
     if (state.config.output.columns.length === 0 || headersChanged) {
       state.config.output.columns = [
         ...p.headers.map((name) => ({ source: "input", name })),
