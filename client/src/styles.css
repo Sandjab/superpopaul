@@ -122,13 +122,13 @@ fieldset { border: 1px solid var(--border); border-radius: 8px; margin: 12px 0; 
 #file-meta b { color: var(--fg); }
 /* Colonne des adressages choisie : surbrillance à la couleur d'accent (même
    langage que th.peppol / td.temp de l'étape 2). */
-#preview-table th.pid-col { color: var(--pid); border-color: var(--pid); }
+#preview-table th.pid-col { color: var(--pid); box-shadow: inset 0 0 0 1px var(--pid); }
 #preview-table td.pid-col { background: color-mix(in srgb, var(--pid) 10%, transparent); }
 table { border-collapse: collapse; margin: 12px 0; width: 100%; }
 th, td { border: 1px solid var(--border); padding: 4px 10px; text-align: left; }
 th { background: var(--card); }
 #out-preview th { cursor: grab; user-select: none; white-space: nowrap; }
-#out-preview th.peppol { color: var(--gold); border-color: var(--gold); }
+#out-preview th.peppol { color: var(--gold); box-shadow: inset 0 0 0 1px var(--gold); }
 /* Drag des colonnes (SortableJS forceFallback) : placeholder or translucide
    dans le tableau, clone flottant ombré qui suit le curseur (fallbackOnBody). */
 #out-preview th.drag-ghost { opacity: .4; background: rgba(217, 168, 63, .16); }
@@ -157,7 +157,8 @@ body > .drag-fallback {
 #format-head h2 { margin-right: auto; }
 #profile-name { font-size: .85em; }
 .profile-dirty { color: var(--gold); }
-#out-preview th.pid, #out-preview td.pid { color: var(--pid); border-color: var(--pid); }
+#out-preview th.pid { color: var(--pid); box-shadow: inset 0 0 0 1px var(--pid); }
+#out-preview td.pid { background: color-mix(in srgb, var(--pid) 10%, transparent); }
 .key-btn { background: none; border: none; padding: 0 2px; cursor: pointer; opacity: 0; }
 .key-btn:hover:not(:disabled) { border: none; }
 #out-preview th.input:not(.pid):hover .key-btn { opacity: .45; }
