@@ -565,6 +565,32 @@ pub fn directory_status(state: State<'_, AppState>) -> Result<Option<crate::stor
     state.store.lock().unwrap().peppol_directory_status()
 }
 
+/// Parse un fichier annuaire (chemin local ou temporaire de téléchargement) et
+/// le charge en base. BLOQUANT (jusqu'à 5,2 M lignes) : à appeler depuis
+/// `spawn_blocking`. Émet la progression phase "parse" sur `directory://progress`.
+fn parse_and_store_directory(
+    path: &Path,
+    store: &Arc<Mutex<Store>>,
+    source: &str,
+    app: &AppHandle,
+) -> Result<DirLoadResult, String> {
+    let reader = std::io::BufReader::new(
+        std::fs::File::open(path).map_err(|e| format!("ouverture {path:?} : {e}"))?,
+    );
+    let values = crate::directory::stream_0225_values(reader, |lines| {
+        let _ = app.emit(
+            "directory://progress",
+            DirProgress { phase: "parse", done: lines, total: None },
+        );
+    })?;
+    let loaded_at = chrono::Utc::now().timestamp();
+    let count = store
+        .lock()
+        .unwrap()
+        .replace_peppol_directory(&values, source, loaded_at)?;
+    Ok(DirLoadResult { loaded_at, count })
+}
+
 /// Charge un fichier annuaire local (drop / Parcourir). Parsing bloquant hors
 /// executor ; progression phase "parse" émise sur `directory://progress`.
 #[tauri::command]
@@ -575,19 +601,7 @@ pub async fn load_directory_file(
 ) -> Result<DirLoadResult, String> {
     let store = state.store.clone();
     tokio::task::spawn_blocking(move || {
-        let reader = std::io::BufReader::new(std::fs::File::open(&path).map_err(|e| e.to_string())?);
-        let values = crate::directory::stream_0225_values(reader, |lines| {
-            let _ = app.emit(
-                "directory://progress",
-                DirProgress { phase: "parse", done: lines, total: None },
-            );
-        })?;
-        let loaded_at = chrono::Utc::now().timestamp();
-        let count = store
-            .lock()
-            .unwrap()
-            .replace_peppol_directory(&values, "file", loaded_at)?;
-        Ok(DirLoadResult { loaded_at, count })
+        parse_and_store_directory(Path::new(&path), &store, "file", &app)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -623,19 +637,7 @@ pub async fn download_directory(
     let path = tmp.path().to_path_buf();
     let store = state.store.clone();
     let result = tokio::task::spawn_blocking(move || {
-        let reader = std::io::BufReader::new(std::fs::File::open(&path).map_err(|e| e.to_string())?);
-        let values = crate::directory::stream_0225_values(reader, |lines| {
-            let _ = app.emit(
-                "directory://progress",
-                DirProgress { phase: "parse", done: lines, total: None },
-            );
-        })?;
-        let loaded_at = chrono::Utc::now().timestamp();
-        let count = store
-            .lock()
-            .unwrap()
-            .replace_peppol_directory(&values, "download", loaded_at)?;
-        Ok::<_, String>(DirLoadResult { loaded_at, count })
+        parse_and_store_directory(&path, &store, "download", &app)
     })
     .await
     .map_err(|e| e.to_string())?;
