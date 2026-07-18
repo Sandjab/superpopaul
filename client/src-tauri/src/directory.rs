@@ -67,7 +67,7 @@ pub async fn download_to_temp(
     mut on_progress: impl FnMut(u64, Option<u64>),
 ) -> Result<tempfile::NamedTempFile, String> {
     use std::io::Write;
-    let mut b = reqwest::Client::builder();
+    let mut b = reqwest::Client::builder().connect_timeout(std::time::Duration::from_secs(10));
     if let Some(purl) = proxy_url {
         let mut p = reqwest::Proxy::all(purl).map_err(|e| format!("proxy : {e}"))?;
         if let Some(c) = creds {
@@ -209,5 +209,31 @@ mod tests {
         let content = std::fs::read_to_string(tmp.path()).unwrap();
         assert_eq!(content, body);
         assert_eq!(last_done, body.len() as u64);
+    }
+
+    #[tokio::test]
+    async fn download_statut_erreur_remonte_une_err() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/export/participants-csv"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+
+        let res = download_to_temp(
+            &format!("{}/export/participants-csv", server.uri()),
+            None,
+            None,
+            |_, _| {},
+        )
+        .await;
+        assert!(res.is_err(), "un statut HTTP non-2xx doit remonter une Err");
+        assert!(
+            res.unwrap_err().contains("HTTP 500"),
+            "le message doit mentionner le code HTTP"
+        );
     }
 }
