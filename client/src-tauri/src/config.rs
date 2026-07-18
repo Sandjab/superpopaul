@@ -257,7 +257,8 @@ pub struct Settings {
 }
 
 /// La partie « forme » d'OutputConfig, sans les colonnes (qui appartiennent
-/// au profil) ni le champ legacy `path`.
+/// au profil), sans l'encodage et le séparateur (déménagés dans les profils),
+/// ni le champ legacy `path`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OutputSettings {
@@ -267,10 +268,6 @@ pub struct OutputSettings {
     #[serde(default = "suffix_default", skip_serializing_if = "suffix_is_default")]
     pub suffix: String,
     pub timestamp_suffix: bool,
-    #[serde(default)]
-    pub encoding: OutputEncoding,
-    #[serde(default)]
-    pub separator: OutputSeparator,
 }
 
 impl Settings {
@@ -619,8 +616,6 @@ mod tests {
                 dir: cfg.output.dir,
                 suffix: cfg.output.suffix,
                 timestamp_suffix: cfg.output.timestamp_suffix,
-                encoding: cfg.output.encoding,
-                separator: cfg.output.separator,
             },
         }
     }
@@ -662,6 +657,17 @@ mod tests {
         // Corrompu : erreur montrée, pas avalée.
         std::fs::write(&p, "version: [oops").unwrap();
         assert!(load_settings_file(&p).is_err());
+    }
+
+    #[test]
+    fn reglages_anciens_avec_encodage_rejetes() {
+        // encodage/séparateur ont déménagé dans les profils : un
+        // superpopaul.yaml d'avant la refonte est rejeté avec une erreur
+        // claire au démarrage (montrée, pas avalée), l'utilisateur recrée.
+        let mut yaml = serde_yaml::to_string(&settings_exemple()).unwrap();
+        // `output` est le dernier bloc du YAML : l'ajout indenté y atterrit.
+        yaml.push_str("  encoding: utf-8-bom\n");
+        assert!(serde_yaml::from_str::<Settings>(&yaml).is_err());
     }
 
     #[test]
