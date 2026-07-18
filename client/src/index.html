@@ -30,6 +30,24 @@
         <p id="file-meta" class="muted"></p>
         <table id="preview-table"></table>
       </div>
+
+      <div id="dir-card">
+        <div class="dir-head">
+          <h3>Annuaire Peppol <span class="chip-ref">référence</span></h3>
+          <span class="muted">Déclaratif : un participant listé ici n'est pas forcément provisionné dans le réseau — et inversement.</span>
+        </div>
+        <div id="dir-dropzone">
+          <span>Dépose <code>export-all-participants.csv</code> ici</span>
+          <span class="dir-spacer"></span>
+          <button id="dir-browse">Parcourir…</button>
+          <button id="dir-download" class="btn-primary">⤓ Télécharger</button>
+        </div>
+        <p id="dir-status" class="muted">Jamais chargé.</p>
+        <div id="dir-prog" class="hidden">
+          <div class="dir-prog-lbl"><span id="dir-prog-text"></span><span id="dir-prog-num"></span></div>
+          <div id="dir-bar" class="dir-bar"><span></span></div>
+        </div>
+      </div>
     </section>
 
     <!-- Étape 2 : format d'entrée/sortie du fichier principal -->
