@@ -159,9 +159,9 @@ pub fn portable_dir() -> Option<String> {
 #[tauri::command]
 pub fn load_profile(state: State<'_, AppState>, path: String) -> Result<ProfileLoad, String> {
     let p = PathBuf::from(&path);
-    let (profile, legacy) = config::load_profile_file(&p)?;
+    let profile = config::load_profile_file(&p)?;
     *state.base.lock().unwrap() = p.parent().map(PathBuf::from);
-    Ok(ProfileLoad { profile, legacy })
+    Ok(ProfileLoad { profile, legacy: false })
 }
 
 #[tauri::command]

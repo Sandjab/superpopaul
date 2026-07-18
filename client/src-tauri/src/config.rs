@@ -300,22 +300,38 @@ pub fn load_settings_file(path: &Path) -> Result<Option<Settings>, String> {
 }
 
 // --- Profils de chargement (sauvegarde/chargement explicites) -----------------
-// Ce qui décrit COMMENT traiter un fichier : le fichier lui-même, la colonne
-// des adressages, le mapping des colonnes de sortie. Ni clé API ni réglages.
+// Ce qui décrit COMMENT parser l'entrée et générer la sortie : colonne des
+// adressages, signature des colonnes d'entrée, forme de sortie, mapping.
+// Jamais le fichier lui-même (le profil s'applique à tout fichier de même
+// signature), ni la clé API, ni les réglages.
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Profile {
     pub version: u32,
     pub input: ProfileInput,
+    pub output: ProfileOutput,
     pub columns: Vec<ColumnSpec>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProfileInput {
-    pub path: String,
     pub pid_column: String,
+    /// Signature des en-têtes du fichier d'entrée (csv_io::columns_hash) —
+    /// un profil ne s'applique qu'à un fichier de même signature.
+    pub columns_hash: String,
+}
+
+/// La forme de la sortie portée par le profil (encodage, séparateur) — le
+/// reste de la forme (dossier, suffixe, horodatage) vit dans les réglages ⚙.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProfileOutput {
+    #[serde(default)]
+    pub encoding: OutputEncoding,
+    #[serde(default)]
+    pub separator: OutputSeparator,
 }
 
 impl Profile {
@@ -323,39 +339,27 @@ impl Profile {
         if self.input.pid_column.is_empty() {
             return Err("le profil doit indiquer la colonne des adressages".into());
         }
-        // Un profil columns: [] chargerait vers un tableau sans ligne
-        // d'en-têtes — aucune cible de drop, utilisateur coincé.
-        if self.columns.is_empty() {
-            return Err("le profil doit contenir au moins une colonne de sortie".into());
+        if self.input.columns_hash.is_empty() {
+            return Err("le profil doit porter la signature des colonnes d'entrée".into());
+        }
+        // La colonne d'adressage est obligatoire en sortie : une sortie sans
+        // la clé est injoignable. Subsume « au moins une colonne ».
+        let pid_en_sortie = self.columns.iter().any(
+            |c| matches!(c, ColumnSpec::Input { name } if name == &self.input.pid_column),
+        );
+        if !pid_en_sortie {
+            return Err("le profil doit inclure la colonne des adressages en sortie".into());
         }
         Ok(())
     }
 }
 
-/// Lit un profil ; le booléen indique un ancien format (config complète
-/// d'avant la séparation réglages/profils), dont seuls fichier, colonne
-/// d'adressage et colonnes sont repris.
-pub fn profile_from_yaml(s: &str) -> Result<(Profile, bool), String> {
-    let err_new = match serde_yaml::from_str::<Profile>(s) {
-        Ok(p) => {
-            p.validate()?;
-            return Ok((p, false));
-        }
-        Err(e) => e,
-    };
-    if let Ok(cfg) = from_yaml(s) {
-        let p = Profile {
-            version: 1,
-            input: ProfileInput {
-                path: cfg.input.path,
-                pid_column: cfg.input.pid_column,
-            },
-            columns: cfg.output.columns,
-        };
-        p.validate()?;
-        return Ok((p, true));
-    }
-    Err(format!("profil : {err_new}"))
+/// Lit un profil v1. Les anciens formats (profil avec chemin, config
+/// complète) sont rejetés : pas de migration, l'utilisateur recrée.
+pub fn profile_from_yaml(s: &str) -> Result<Profile, String> {
+    let p: Profile = serde_yaml::from_str(s).map_err(|e| format!("profil : {e}"))?;
+    p.validate()?;
+    Ok(p)
 }
 
 pub fn save_profile_file(path: &Path, p: &Profile) -> Result<(), String> {
@@ -363,7 +367,7 @@ pub fn save_profile_file(path: &Path, p: &Profile) -> Result<(), String> {
     atomic_write(path, &serde_yaml::to_string(p).map_err(|e| e.to_string())?)
 }
 
-pub fn load_profile_file(path: &Path) -> Result<(Profile, bool), String> {
+pub fn load_profile_file(path: &Path) -> Result<Profile, String> {
     let s = std::fs::read_to_string(path).map_err(|e| format!("lecture {path:?} : {e}"))?;
     profile_from_yaml(&s).map_err(|e| format!("{path:?} : {e}"))
 }
@@ -677,8 +681,12 @@ mod tests {
         Profile {
             version: 1,
             input: ProfileInput {
-                path: "./clients.csv".into(),
                 pid_column: "siren".into(),
+                columns_hash: "ec46ac4b9e99375d".into(),
+            },
+            output: ProfileOutput {
+                encoding: OutputEncoding::Utf8Bom,
+                separator: OutputSeparator::Auto,
             },
             columns: config_exemple().output.columns,
         }
@@ -689,30 +697,29 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("clients.profil.yaml");
         save_profile_file(&p, &profile_exemple()).unwrap();
-        let (back, legacy) = load_profile_file(&p).unwrap();
-        assert!(!legacy);
+        let back = load_profile_file(&p).unwrap();
         assert_eq!(back.input.pid_column, "siren");
+        assert_eq!(back.input.columns_hash, "ec46ac4b9e99375d");
+        assert_eq!(back.output.encoding, OutputEncoding::Utf8Bom);
         assert_eq!(back.columns, profile_exemple().columns);
-        // Ni clé API ni réglages dans le fichier.
+        // Ni clé API, ni réglages, ni chemin de fichier dans le YAML.
         let yaml = std::fs::read_to_string(&p).unwrap();
-        assert!(!yaml.contains("key"));
-        assert!(!yaml.contains("api"));
-        // Typo dans un profil neuf : rejet (pas d'aspiration par le fallback
-        // legacy, qui exige la forme complète api/input/output).
-        let bad = serde_yaml::to_string(&back).unwrap().replace("pid_column:", "pid_colum:");
+        assert!(!yaml.contains("key") && !yaml.contains("api"));
+        assert!(!yaml.contains("path"), "le profil ne porte plus de chemin");
+        // Typo : rejet net (deny_unknown_fields, plus de fallback à aspirer).
+        let bad = yaml.replace("pid_column:", "pid_colum:");
         assert!(profile_from_yaml(&bad).is_err());
     }
 
     #[test]
-    fn profil_depuis_yaml_ancien_format_complet() {
-        // Charger une vieille config complète reste possible : on n'en reprend
-        // que le profil (fichier, colonne d'adressage, colonnes) — l'API et la
-        // sortie vivent désormais dans superpopaul.yaml.
-        let (p, legacy) = profile_from_yaml(yaml_ancien()).unwrap();
-        assert!(legacy);
-        assert_eq!(p.input.path, "./a.csv");
-        assert_eq!(p.input.pid_column, "siren");
-        assert_eq!(p.columns.len(), 1);
+    fn profil_anciens_formats_rejetes_sans_migration() {
+        // Ancienne config complète et ancien profil (avec input.path) :
+        // rejet net, l'utilisateur recrée ses fichiers — pas de migration.
+        assert!(profile_from_yaml(yaml_ancien()).is_err());
+        let ancien_profil = "version: 1\n\
+                             input:\n  path: ./a.csv\n  pid_column: siren\n\
+                             columns:\n  - source: input\n    name: siren\n";
+        assert!(profile_from_yaml(ancien_profil).is_err());
     }
 
     #[test]
@@ -727,17 +734,28 @@ mod tests {
         let ancien = yaml
             .replace("in_peppol", "exists")
             .replace("ubl_extended", "extended_ctc_fr");
-        let (back, _) = profile_from_yaml(&ancien).unwrap();
+        let back = profile_from_yaml(&ancien).unwrap();
         assert_eq!(back.columns, p.columns);
     }
 
     #[test]
-    fn profil_rejette_colonnes_vides_et_pid_manquant() {
-        let mut p = profile_exemple();
-        p.columns.clear();
-        assert!(p.validate().is_err());
+    fn profil_exige_pid_hash_et_pid_en_sortie() {
         let mut p = profile_exemple();
         p.input.pid_column.clear();
+        assert!(p.validate().is_err());
+
+        let mut p = profile_exemple();
+        p.input.columns_hash.clear();
+        assert!(p.validate().is_err());
+
+        // La colonne d'adressage est obligatoire en sortie (une sortie sans
+        // la clé est injoignable) — subsume « au moins une colonne ».
+        let mut p = profile_exemple();
+        p.columns
+            .retain(|c| !matches!(c, ColumnSpec::Input { name } if name == "siren"));
+        assert!(p.validate().is_err());
+        let mut p = profile_exemple();
+        p.columns.clear();
         assert!(p.validate().is_err());
     }
 
