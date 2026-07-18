@@ -130,4 +130,20 @@ mod tests {
         let vals = stream_0225_values(std::io::Cursor::new("\"Participant ID\"\n"), |_| {}).unwrap();
         assert!(vals.is_empty());
     }
+
+    #[test]
+    fn stream_csv_malforme_remonte_une_erreur() {
+        // Un CSV incohérent (ligne à 2 champs alors que l'en-tête en a 1)
+        // doit faire échouer tout l'import plutôt que produire un annuaire
+        // partiel silencieux — « fail loud ». Le lecteur csv est en mode
+        // strict (flexible=false par défaut) : nombre de champs incohérent =
+        // erreur.
+        let csv = "\"Participant ID\"\n\"iso6523-actorid-upis::0225:000122308\",\"en trop\"\n";
+        let res = stream_0225_values(std::io::Cursor::new(csv), |_| {});
+        assert!(res.is_err(), "un CSV malformé doit remonter une Err");
+        assert!(
+            res.unwrap_err().contains("lecture CSV de l'annuaire"),
+            "le message d'erreur doit être celui de l'annuaire"
+        );
+    }
 }
