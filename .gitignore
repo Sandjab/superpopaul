@@ -23,3 +23,6 @@ Desktop.ini
 $RECYCLE.BIN/
 *.lnk
 *.stackdump
+
+# Maquettes du compagnon visuel (sessions de brainstorm)
+.superpowers/
