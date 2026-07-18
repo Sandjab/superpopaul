@@ -56,6 +56,42 @@ pub fn stream_0225_values<R: Read>(
     Ok(out)
 }
 
+/// Télécharge l'annuaire (streaming, chunk par chunk) dans un fichier
+/// temporaire supprimé au Drop — le brut 214 Mo n'est jamais conservé.
+/// `on_progress(octets_reçus, content_length)` alimente la barre.
+/// Honore le proxy configuré (même construction que `api.rs`).
+pub async fn download_to_temp(
+    url: &str,
+    proxy_url: Option<&str>,
+    creds: Option<&crate::api::ProxyCreds>,
+    mut on_progress: impl FnMut(u64, Option<u64>),
+) -> Result<tempfile::NamedTempFile, String> {
+    use std::io::Write;
+    let mut b = reqwest::Client::builder();
+    if let Some(purl) = proxy_url {
+        let mut p = reqwest::Proxy::all(purl).map_err(|e| format!("proxy : {e}"))?;
+        if let Some(c) = creds {
+            p = p.basic_auth(&c.username, &c.password);
+        }
+        b = b.proxy(p);
+    }
+    let client = b.build().map_err(|e| e.to_string())?;
+    let mut resp = client.get(url).send().await.map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("téléchargement de l'annuaire : HTTP {}", resp.status().as_u16()));
+    }
+    let total = resp.content_length();
+    let mut tmp = tempfile::NamedTempFile::new().map_err(|e| e.to_string())?;
+    let mut done: u64 = 0;
+    while let Some(chunk) = resp.chunk().await.map_err(|e| e.to_string())? {
+        tmp.write_all(&chunk).map_err(|e| e.to_string())?;
+        done += chunk.len() as u64;
+        on_progress(done, total);
+    }
+    tmp.flush().map_err(|e| e.to_string())?;
+    Ok(tmp)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -145,5 +181,33 @@ mod tests {
             res.unwrap_err().contains("lecture CSV de l'annuaire"),
             "le message d'erreur doit être celui de l'annuaire"
         );
+    }
+
+    #[tokio::test]
+    async fn download_ecrit_le_corps_et_rapporte_la_progression() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let body = "\"Participant ID\"\n\"iso6523-actorid-upis::0225:000122308\"\n";
+        Mock::given(method("GET"))
+            .and(path("/export/participants-csv"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .mount(&server)
+            .await;
+
+        let mut last_done = 0u64;
+        let tmp = download_to_temp(
+            &format!("{}/export/participants-csv", server.uri()),
+            None,
+            None,
+            |done, _total| last_done = done,
+        )
+        .await
+        .unwrap();
+
+        let content = std::fs::read_to_string(tmp.path()).unwrap();
+        assert_eq!(content, body);
+        assert_eq!(last_done, body.len() as u64);
     }
 }

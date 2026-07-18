@@ -29,6 +29,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots"] }
 encoding_rs = "0.8"
 encoding_rs_io = "0.1"
+tempfile = "3"                # fichier temporaire du téléchargement annuaire (supprimé après parsing)
 thiserror = "1"
 # Résolution directe SML+SMP (mode « direct », parité peppol_resolver.py)
 sha2 = "0.10"
@@ -44,7 +45,6 @@ libc = "0.2"                  # setrlimit : relever le soft 256 fd des apps GUI 
 
 [dev-dependencies]
 wiremock = "0.6"
-tempfile = "3"
 # start_paused pour les tests du breaker (le backoff 30 s s'écoule en virtuel)
 tokio = { version = "1", features = ["test-util"] }
 
