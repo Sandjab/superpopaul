@@ -79,7 +79,10 @@ pub fn run() {
             commands::stop_run,
             commands::clear_run,
             commands::generate_output,
-            commands::export_report
+            commands::export_report,
+            commands::directory_status,
+            commands::load_directory_file,
+            commands::download_directory
         ])
         .run(tauri::generate_context!())
         .expect("erreur au lancement de Super Popaul");

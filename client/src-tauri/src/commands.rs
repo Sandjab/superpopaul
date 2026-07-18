@@ -545,6 +545,104 @@ pub async fn generate_output(state: State<'_, AppState>) -> Result<String, Strin
     .map_err(|e| e.to_string())?
 }
 
+/// Progression émise pendant le chargement de l'annuaire.
+/// phase = "download" (done/total en octets) | "parse" (done = lignes, total = None).
+#[derive(Clone, Serialize)]
+pub struct DirProgress {
+    pub phase: &'static str,
+    pub done: u64,
+    pub total: Option<u64>,
+}
+
+#[derive(Serialize)]
+pub struct DirLoadResult {
+    pub loaded_at: i64,
+    pub count: usize,
+}
+
+#[tauri::command]
+pub fn directory_status(state: State<'_, AppState>) -> Result<Option<crate::store::DirStatus>, String> {
+    state.store.lock().unwrap().peppol_directory_status()
+}
+
+/// Charge un fichier annuaire local (drop / Parcourir). Parsing bloquant hors
+/// executor ; progression phase "parse" émise sur `directory://progress`.
+#[tauri::command]
+pub async fn load_directory_file(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<DirLoadResult, String> {
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || {
+        let reader = std::io::BufReader::new(std::fs::File::open(&path).map_err(|e| e.to_string())?);
+        let values = crate::directory::stream_0225_values(reader, |lines| {
+            let _ = app.emit(
+                "directory://progress",
+                DirProgress { phase: "parse", done: lines, total: None },
+            );
+        })?;
+        let loaded_at = chrono::Utc::now().timestamp();
+        let count = store
+            .lock()
+            .unwrap()
+            .replace_peppol_directory(&values, "file", loaded_at)?;
+        Ok(DirLoadResult { loaded_at, count })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Télécharge l'annuaire puis le charge. Progression phase "download" pendant
+/// le transfert, puis "parse" pendant l'analyse. Le temporaire est supprimé.
+#[tauri::command]
+pub async fn download_directory(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<DirLoadResult, String> {
+    // Proxy éventuel — la config peut être absente (aucun run configuré).
+    let (proxy, creds) = {
+        let cfg = state.config.lock().unwrap().clone();
+        let proxy = cfg.as_ref().and_then(|c| c.api.proxy.as_ref()).map(|p| p.url.clone());
+        let creds = state.proxy_creds.lock().unwrap().clone();
+        (proxy, creds)
+    };
+    let app_dl = app.clone();
+    let tmp = crate::directory::download_to_temp(
+        crate::directory::DIRECTORY_URL,
+        proxy.as_deref(),
+        creds.as_ref(),
+        move |done, total| {
+            let _ = app_dl.emit(
+                "directory://progress",
+                DirProgress { phase: "download", done, total },
+            );
+        },
+    )
+    .await?;
+    let path = tmp.path().to_path_buf();
+    let store = state.store.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let reader = std::io::BufReader::new(std::fs::File::open(&path).map_err(|e| e.to_string())?);
+        let values = crate::directory::stream_0225_values(reader, |lines| {
+            let _ = app.emit(
+                "directory://progress",
+                DirProgress { phase: "parse", done: lines, total: None },
+            );
+        })?;
+        let loaded_at = chrono::Utc::now().timestamp();
+        let count = store
+            .lock()
+            .unwrap()
+            .replace_peppol_directory(&values, "download", loaded_at)?;
+        Ok::<_, String>(DirLoadResult { loaded_at, count })
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    drop(tmp); // suppression du temporaire (214 Mo) après parsing
+    result
+}
+
 #[cfg(test)]
 mod tests_calibration_prerequisites {
     use super::*;
