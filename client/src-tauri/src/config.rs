@@ -667,7 +667,11 @@ mod tests {
         let mut yaml = serde_yaml::to_string(&settings_exemple()).unwrap();
         // `output` est le dernier bloc du YAML : l'ajout indenté y atterrit.
         yaml.push_str("  encoding: utf-8-bom\n");
-        assert!(serde_yaml::from_str::<Settings>(&yaml).is_err());
+        let err = serde_yaml::from_str::<Settings>(&yaml).unwrap_err().to_string();
+        assert!(
+            err.contains("unknown field"),
+            "rejet attendu pour champ inconnu (deny_unknown_fields), obtenu : {err}"
+        );
     }
 
     #[test]
