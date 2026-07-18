@@ -4,6 +4,7 @@ pub mod config;
 pub mod ctc;
 pub mod csv_io;
 pub mod direct;
+pub mod directory;
 pub mod modes;
 pub mod output;
 pub mod pid;
