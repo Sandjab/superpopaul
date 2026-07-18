@@ -18,10 +18,6 @@ pub struct AppState {
     pub store: Arc<Mutex<Store>>,
     /// Fichier des réglages auto-persistés (superpopaul.yaml, dossier données).
     pub settings_path: PathBuf,
-    /// Répertoire du dernier profil chargé/sauvé — base des chemins relatifs
-    /// du fichier d'entrée. Indépendant de la config : le profil est chargé
-    /// avant que l'UI ne pousse la config assemblée (set_config).
-    pub base: Mutex<Option<PathBuf>>,
     pub config: Mutex<Option<Config>>,
     pub proxy_creds: Mutex<Option<ProxyCreds>>,
     pub run: Mutex<Option<Arc<RunHandle>>>,
@@ -44,7 +40,6 @@ impl AppState {
         AppState {
             store: Arc::new(Mutex::new(store)),
             settings_path,
-            base: Mutex::new(None),
             config: Mutex::new(None),
             proxy_creds: Mutex::new(None),
             run: Mutex::new(None),
@@ -53,26 +48,20 @@ impl AppState {
         }
     }
 
-    fn current_config(&self) -> Result<(Option<PathBuf>, Config), String> {
-        let cfg = self
-            .config
+    fn current_config(&self) -> Result<Config, String> {
+        self.config
             .lock()
             .unwrap()
             .clone()
-            .ok_or_else(|| String::from("Aucune configuration active."))?;
-        Ok((self.base.lock().unwrap().clone(), cfg))
+            .ok_or_else(|| String::from("Aucune configuration active."))
     }
 
     fn input_path(&self) -> Result<PathBuf, String> {
-        let (base, cfg) = self.current_config()?;
-        Ok(match base {
-            Some(dir) => config::resolve_relative(&dir.join("x.yaml"), &cfg.input.path),
-            None => PathBuf::from(&cfg.input.path),
-        })
+        Ok(PathBuf::from(&self.current_config()?.input.path))
     }
 
     fn client(&self) -> Result<ApiClient, String> {
-        let (_, cfg) = self.current_config()?;
+        let cfg = self.current_config()?;
         let creds = self.proxy_creds.lock().unwrap().clone();
         let proxy = cfg.api.proxy.as_ref().map(|p| p.url.as_str());
         match cfg.api.mode {
@@ -141,14 +130,6 @@ pub fn save_settings(state: State<'_, AppState>, settings: config::Settings) -> 
     config::save_settings_file(&state.settings_path, &settings)
 }
 
-#[derive(Serialize)]
-pub struct ProfileLoad {
-    pub profile: config::Profile,
-    /// Ancien format (config complète) : seuls fichier/adressage/colonnes
-    /// sont repris — l'UI le signale.
-    pub legacy: bool,
-}
-
 /// Some(répertoire) si le mode portable est actif — sert de defaultPath aux
 /// dialogues de profils ; None en mode installé (comportement OS inchangé).
 #[tauri::command]
@@ -157,30 +138,13 @@ pub fn portable_dir() -> Option<String> {
 }
 
 #[tauri::command]
-pub fn load_profile(state: State<'_, AppState>, path: String) -> Result<ProfileLoad, String> {
-    let p = PathBuf::from(&path);
-    let profile = config::load_profile_file(&p)?;
-    *state.base.lock().unwrap() = p.parent().map(PathBuf::from);
-    Ok(ProfileLoad { profile, legacy: false })
+pub fn load_profile(path: String) -> Result<config::Profile, String> {
+    config::load_profile_file(Path::new(&path))
 }
 
 #[tauri::command]
-pub fn save_profile(
-    state: State<'_, AppState>,
-    path: String,
-    profile: config::Profile,
-) -> Result<(), String> {
-    let p = PathBuf::from(&path);
-    config::save_profile_file(&p, &profile)?;
-    *state.base.lock().unwrap() = p.parent().map(PathBuf::from);
-    Ok(())
-}
-
-/// Chemin absolu du fichier d'entrée (résolu relativement au YAML chargé) —
-/// l'UI ne duplique pas la logique de résolution de chemins.
-#[tauri::command]
-pub fn resolved_input_path(state: State<'_, AppState>) -> Result<String, String> {
-    Ok(state.input_path()?.display().to_string())
+pub fn save_profile(path: String, profile: config::Profile) -> Result<(), String> {
+    config::save_profile_file(Path::new(&path), &profile)
 }
 
 #[tauri::command]
@@ -239,7 +203,7 @@ pub struct InputStats {
 /// présélection du mode.
 #[tauri::command]
 pub async fn analyze_input(state: State<'_, AppState>) -> Result<InputStats, String> {
-    let (_, cfg) = state.current_config()?;
+    let cfg = state.current_config()?;
     let input = state.input_path()?;
     let store = state.store.clone();
     // Scan CSV (500k lignes possibles) + load_map SQLite : bloquants, hors
@@ -296,7 +260,7 @@ pub async fn calibrate_api(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<CalibrationReport, String> {
-    let (_, cfg) = state.current_config()?;
+    let cfg = state.current_config()?;
     if cfg.api.mode == ApiMode::Direct {
         // Marteler les SMP distribués pour trouver un plafond n'a pas de
         // sens (et serait impoli) : il n'y a pas de serveur unique à calibrer.
@@ -348,7 +312,7 @@ pub async fn start_run(
     if state.run.lock().unwrap().is_some() {
         return Err("Un run est déjà en cours.".into());
     }
-    let (_, cfg) = state.current_config()?;
+    let cfg = state.current_config()?;
     let input = state.input_path()?;
     let pid_column = cfg.input.pid_column.clone();
     let store = state.store.clone();
@@ -515,7 +479,7 @@ pub fn export_report(state: State<'_, AppState>) -> Result<String, String> {
             .ok_or_else(|| String::from("Aucun run terminé à rapporter."))?;
         (last.snapshot.clone(), last.file_name.clone())
     };
-    let (_, cfg) = state.current_config()?;
+    let cfg = state.current_config()?;
     let input = state.input_path()?;
     let now = chrono::Local::now();
     let html = report::render(&report::ReportData {
@@ -548,7 +512,7 @@ fn resolved_out_dir(input: &Path, dir: &str) -> PathBuf {
 
 #[tauri::command]
 pub async fn generate_output(state: State<'_, AppState>) -> Result<String, String> {
-    let (_, cfg) = state.current_config()?;
+    let cfg = state.current_config()?;
     let input = state.input_path()?;
     let store = state.store.clone();
     // Tout le corps est bloquant (scan CSV, load_map SQLite, écriture CSV) :

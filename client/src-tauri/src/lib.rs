@@ -66,7 +66,6 @@ pub fn run() {
             commands::portable_dir,
             commands::load_profile,
             commands::save_profile,
-            commands::resolved_input_path,
             commands::set_proxy_creds,
             commands::update_api_key,
             commands::test_api,

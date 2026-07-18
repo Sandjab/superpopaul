@@ -424,16 +424,6 @@ pub fn portable_dir_of_current_exe() -> Option<PathBuf> {
     }
 }
 
-/// Résout un chemin de la config relativement au répertoire du fichier YAML.
-pub fn resolve_relative(yaml_path: &Path, p: &str) -> PathBuf {
-    let pb = PathBuf::from(p);
-    if pb.is_absolute() {
-        pb
-    } else {
-        yaml_path.parent().unwrap_or(Path::new(".")).join(pb)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -872,17 +862,6 @@ mod tests {
             .unwrap()
             .replace("encoding: utf-8-bom", "encoding: utf-16");
         assert!(from_yaml(&bad).is_err());
-    }
-
-    #[test]
-    fn chemins_resolus_relativement_au_yaml() {
-        let p = resolve_relative(
-            std::path::Path::new("/tmp/projet/conf.yaml"),
-            "./clients.csv",
-        );
-        assert_eq!(p, std::path::PathBuf::from("/tmp/projet/./clients.csv"));
-        let abs = resolve_relative(std::path::Path::new("/tmp/projet/conf.yaml"), "/data/x.csv");
-        assert_eq!(abs, std::path::PathBuf::from("/data/x.csv"));
     }
 
     #[test]
