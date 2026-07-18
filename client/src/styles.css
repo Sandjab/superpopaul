@@ -100,9 +100,22 @@ fieldset { border: 1px solid var(--border); border-radius: 8px; margin: 12px 0; 
 #banner.error { background: #331518; color: var(--red); }
 #banner.warn { background: #2e2010; color: var(--amber); }
 
+/* Carte « fichier principal » : héro de l'onglet Fichiers (bordure dorée +
+   fin halo doré) — l'entrée primaire prime sur la carte annuaire (référence). */
+#main-card {
+  border: 1px solid var(--gold); background: var(--card); border-radius: 12px;
+  padding: 16px 18px; box-shadow: 0 0 0 1px color-mix(in srgb, var(--gold) 15%, transparent);
+}
+#main-card > h3 {
+  font-size: 15px; margin: 0 0 12px; display: flex; align-items: center; gap: 8px; color: var(--fg);
+}
+.chip-main {
+  font-size: 11px; font-weight: 600; letter-spacing: .3px; text-transform: uppercase;
+  color: var(--on-gold); background: var(--gold); border-radius: 20px; padding: 1px 9px;
+}
 #dropzone {
-  border: 2px dashed var(--border); border-radius: 10px; padding: 40px;
-  text-align: center; color: var(--muted);
+  border: 2px dashed var(--muted); border-radius: 10px; padding: 28px 16px;
+  text-align: center; color: var(--fg);
 }
 #dropzone.over { border-color: var(--gold); color: var(--fg); }
 /* Nom du fichier chargé : en évidence dans la ligne meta atténuée. */
@@ -358,11 +371,12 @@ footer .logo a:hover { color: var(--gold); text-decoration: underline; }
 #calibrate-status { font-size: 12px; color: var(--muted); margin-top: 6px; }
 #calibrate-status.done { color: var(--green); }
 
-/* --- Carte Annuaire Peppol (onglet Fichiers) --- */
-#dir-card { margin-top: 18px; border: 1px solid var(--border); background: var(--card);
-            border-radius: 12px; padding: 16px 18px; }
+/* --- Carte Annuaire Peppol (onglet Fichiers) : référence secondaire, fond
+   transparent et titre atténué pour laisser la primauté au fichier principal. --- */
+#dir-card { margin-top: 16px; border: 1px solid var(--border); background: transparent;
+            border-radius: 12px; padding: 14px 16px; }
 .dir-head { display: flex; flex-direction: column; gap: 3px; margin-bottom: 12px; }
-.dir-head h3 { font-size: 15px; margin: 0; display: flex; align-items: center; gap: 8px; }
+.dir-head h3 { font-size: 13.5px; margin: 0; display: flex; align-items: center; gap: 8px; color: var(--muted); }
 .chip-ref { font-size: 11px; font-weight: 600; letter-spacing: .3px; text-transform: uppercase;
             color: var(--gold); border: 1px solid var(--gold); border-radius: 20px; padding: 1px 9px; }
 #dir-dropzone { border: 2px dashed var(--border); border-radius: 10px; padding: 16px 14px;

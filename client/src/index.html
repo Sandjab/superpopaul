@@ -25,10 +25,13 @@
     <!-- Étape 1 : hub de dépôt (fichier principal ; companions plus tard) -->
     <section id="step-file" class="panel">
       <h2>Fichiers</h2>
-      <div id="dropzone">Dépose le fichier principal (CSV) ici, ou <button id="btn-browse">Parcourir…</button></div>
-      <div id="file-info" class="hidden">
-        <p id="file-meta" class="muted"></p>
-        <table id="preview-table"></table>
+      <div id="main-card">
+        <h3>Fichier principal <span class="chip-main">à enrichir</span></h3>
+        <div id="dropzone">Dépose le fichier principal (CSV) ici, ou <button id="btn-browse" class="btn-primary">Parcourir…</button></div>
+        <div id="file-info" class="hidden">
+          <p id="file-meta" class="muted"></p>
+          <table id="preview-table"></table>
+        </div>
       </div>
 
       <div id="dir-card">
@@ -40,7 +43,7 @@
           <span>Dépose <code>export-all-participants.csv</code> ici</span>
           <span class="dir-spacer"></span>
           <button id="dir-browse">Parcourir…</button>
-          <button id="dir-download" class="btn-primary">⤓ Télécharger</button>
+          <button id="dir-download">⤓ Télécharger</button>
         </div>
         <p id="dir-status" class="muted">Jamais chargé.</p>
         <div id="dir-prog" class="hidden">
