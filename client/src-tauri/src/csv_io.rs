@@ -167,6 +167,27 @@ pub fn suggest_pid_column(p: &Preview) -> Option<usize> {
     best.map(|(i, _)| i)
 }
 
+fn fnv1a(mut h: u64, bytes: &[u8]) -> u64 {
+    for &b in bytes {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
+}
+
+/// Signature des en-têtes d'entrée : FNV-1a 64 bits sur les octets UTF-8,
+/// chaque en-tête préfixé par sa longueur (8 octets little-endian). Ordre et
+/// casse significatifs, aucune normalisation. Valeur PERSISTÉE dans les
+/// profils : l'algorithme ne doit jamais changer (test avec valeur en dur).
+pub fn columns_hash(headers: &[String]) -> String {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for name in headers {
+        h = fnv1a(h, &(name.len() as u64).to_le_bytes());
+        h = fnv1a(h, name.as_bytes());
+    }
+    format!("{h:016x}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -264,5 +285,28 @@ mod tests {
             encoding: "utf-8".into(),
         };
         assert_eq!(suggest_pid_column(&p), None);
+    }
+
+    #[test]
+    fn columns_hash_stable_ordre_casse_et_non_ambigu() {
+        let h = |names: &[&str]| {
+            columns_hash(&names.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+        };
+        // Valeur en dur : le hash est PERSISTÉ dans les profils — si cette
+        // assertion casse, l'algorithme a changé et tous les profils existants
+        // deviennent incompatibles. Ne jamais « corriger » la valeur attendue.
+        assert_eq!(h(&["SIREN", "RAISON_SOCIALE", "VILLE"]), "ec46ac4b9e99375d");
+        // L'ordre des colonnes est significatif.
+        assert_ne!(
+            h(&["SIREN", "RAISON_SOCIALE", "VILLE"]),
+            h(&["VILLE", "RAISON_SOCIALE", "SIREN"])
+        );
+        // La casse est significative (la résolution des colonnes l'est aussi).
+        assert_ne!(
+            h(&["SIREN", "RAISON_SOCIALE", "VILLE"]),
+            h(&["siren", "raison_sociale", "ville"])
+        );
+        // Préfixage par longueur : pas d'ambiguïté de concaténation.
+        assert_ne!(h(&["ab", "c"]), h(&["a", "bc"]));
     }
 }
