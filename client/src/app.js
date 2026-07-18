@@ -23,6 +23,9 @@ function h(tag, attrs = {}, ...children) {
 const state = {
   inputPath: null,
   preview: null, // {headers, rows, delimiter, encoding, columns_hash, size_bytes, suggested_pid_column}
+  // Profil courant (session seulement) : chemin/nom du YAML et instantané de
+  // référence (profileSnapshot) — null tant qu'aucun profil chargé/enregistré.
+  profile: null, // { path, name, ref }
   config: {
     version: 1,
     // Résolveur direct par défaut : 8.8.8.8 avec 1.1.1.1 en secours (failover
@@ -147,9 +150,13 @@ async function pickInput(path) {
     const pid = state.config.input.pid_column;
     if (pid && !state.config.output.columns.some((c) => c.source === "input" && c.name === pid))
       state.config.output.columns.push({ source: "input", name: pid });
+    // Le contexte profil ne survit pas à un changement de signature de
+    // colonnes : le profil chargé ne décrit plus ce fichier.
+    if (state.profile && headersChanged) state.profile = null;
     // output.dir vide = « dossier du fichier d'entrée » (résolu côté Rust) :
     // pas de valeur à poser ici, le réglage persiste d'un fichier à l'autre.
     renderFilePanel();
+    renderProfileBar();
     hideBanner();
   } catch (e) {
     banner("error", `Impossible de lire ce fichier : ${e}`);
@@ -192,8 +199,8 @@ function renderPidSelect() {
   $("pid-hint").textContent =
     state.preview && state.preview.suggested_pid_column != null
       ? "(suggestion automatique)" : "";
-  // Un profil sans désignation serait invalide : sauvegarde grisée.
-  $("btn-save-cfg").disabled = !state.config.input.pid_column;
+  // Un profil sans désignation serait invalide : « Enregistrer sous… » grisé.
+  $("btn-saveas-cfg").disabled = !state.config.input.pid_column;
 }
 
 /** Désignation — LE point d'entrée unique (liste ou clé 🔑 du tableau).
@@ -341,8 +348,8 @@ function fillOutFormat() {
   $("out-encoding").value = state.config.output.encoding;
   $("out-sep").value = state.config.output.separator;
 }
-$("out-encoding").addEventListener("change", (e) => { state.config.output.encoding = e.target.value; });
-$("out-sep").addEventListener("change", (e) => { state.config.output.separator = e.target.value; });
+$("out-encoding").addEventListener("change", (e) => { state.config.output.encoding = e.target.value; renderProfileBar(); });
+$("out-sep").addEventListener("change", (e) => { state.config.output.separator = e.target.value; renderProfileBar(); });
 
 // --- Réglages : persistance (superpopaul.yaml, dossier données de l'app) -----------
 /** La tranche de l'état qui va dans le fichier de réglages : API + forme de la
@@ -698,23 +705,73 @@ async function profileDialogDefault() {
   return dir ? { defaultPath: dir } : {};
 }
 
-$("btn-save-cfg").addEventListener("click", async () => {
-  const f = await save({ filters: [{ name: "YAML", extensions: ["yaml", "yml"] }],
-                         ...(await profileDialogDefault()) });
+/** Empreinte de l'état que porte un profil. La référence (`state.profile.ref`)
+ *  est prise au chargement et à chaque enregistrement réussi ; « modifié » =
+ *  divergence par comparaison — aucun point de mutation à instrumenter. */
+function profileSnapshot() {
+  const c = state.config;
+  return JSON.stringify({ pid: c.input.pid_column, columns: c.output.columns,
+                          encoding: c.output.encoding, separator: c.output.separator });
+}
+
+/** Le payload envoyé à save_profile — partagé par Enregistrer et
+ *  Enregistrer sous… (la validation vit côté Rust, Profile::validate). */
+function currentProfilePayload() {
+  return {
+    version: 1,
+    input: { pid_column: state.config.input.pid_column,
+             columns_hash: state.preview.columns_hash },
+    output: { encoding: state.config.output.encoding,
+              separator: state.config.output.separator },
+    columns: state.config.output.columns,
+  };
+}
+
+/** Barre Format : nom du profil courant, « • modifié » si l'état diverge de
+ *  l'instantané, grisage de 💾 (profil courant ET modifié requis). */
+function renderProfileBar() {
+  const el = $("profile-name");
+  const p = state.profile;
+  const dirty = p ? profileSnapshot() !== p.ref : false;
+  el.replaceChildren();
+  if (p) {
+    el.append(p.name + " ");
+    if (dirty) el.append(h("span", { class: "profile-dirty" }, "• modifié"));
+  }
+  $("btn-save-cfg").disabled = !(p && dirty);
+}
+// Hook optionnel appelé par columns.js après chaque rendu du tableau (drag,
+// double-clic…) — même motif que window.updateRunModeHint (cockpit.js).
+window.updateProfileBar = renderProfileBar;
+
+$("btn-saveas-cfg").addEventListener("click", async () => {
+  const dflt = await profileDialogDefault();
+  // Propose le nom du profil courant comme point de départ (dans le dossier
+  // portable le cas échéant).
+  if (state.profile)
+    dflt.defaultPath = dflt.defaultPath
+      ? `${dflt.defaultPath}/${state.profile.name}` : state.profile.name;
+  const f = await save({ filters: [{ name: "YAML", extensions: ["yaml", "yml"] }], ...dflt });
   if (!f) return;
   try {
-    await invoke("save_profile", { path: f, profile: {
-      version: 1,
-      input: { pid_column: state.config.input.pid_column,
-               columns_hash: state.preview.columns_hash },
-      output: { encoding: state.config.output.encoding,
-                separator: state.config.output.separator },
-      columns: state.config.output.columns,
-    } });
+    await invoke("save_profile", { path: f, profile: currentProfilePayload() });
+    state.profile = { path: f, name: f.split(/[\\/]/).pop() ?? f, ref: profileSnapshot() };
     hideBanner();
   } catch (e) {
     banner("error", `${e}`);
   }
+  renderProfileBar();
+});
+
+$("btn-save-cfg").addEventListener("click", async () => {
+  try {
+    await invoke("save_profile", { path: state.profile.path, profile: currentProfilePayload() });
+    state.profile.ref = profileSnapshot();
+    hideBanner();
+  } catch (e) {
+    banner("error", `${e}`);
+  }
+  renderProfileBar();
 });
 
 $("btn-load-cfg").addEventListener("click", async () => {
@@ -738,10 +795,12 @@ $("btn-load-cfg").addEventListener("click", async () => {
   state.config.output.columns = p.columns;
   state.config.output.encoding = p.output.encoding;
   state.config.output.separator = p.output.separator;
+  state.profile = { path: f, name: f.split(/[\\/]/).pop() ?? f, ref: profileSnapshot() };
   hideBanner();
   renderPidSelect();
   fillOutFormat();
   renderOutPreview();
   highlightPidColumn();
   syncStepperGating();
+  renderProfileBar();
 });

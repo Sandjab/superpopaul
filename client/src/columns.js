@@ -166,6 +166,9 @@ function renderOutPreview() {
   // sort: false — on drag vers/depuis la zone, jamais dedans : son ordre est
   // canonique au render et un tri manuel serait défait au re-render suivant.
   sortZone = new Sortable($("col-zone"), { ...common, group: "columns", sort: false });
+  // Toute manipulation du tableau peut faire diverger l'état du profil
+  // courant — app.js recalcule la barre (nom • modifié, grisage de 💾).
+  window.updateProfileBar?.();
 }
 
 // Raccourci sans drag : double-clic sur un en-tête = écarter la colonne,
