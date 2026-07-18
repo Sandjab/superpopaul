@@ -22,7 +22,7 @@ function h(tag, attrs = {}, ...children) {
 // --- État global -------------------------------------------------------------
 const state = {
   inputPath: null,
-  preview: null, // {headers, rows, delimiter, encoding, suggested_pid_column}
+  preview: null, // {headers, rows, delimiter, encoding, columns_hash, size_bytes, suggested_pid_column}
   config: {
     version: 1,
     // Résolveur direct par défaut : 8.8.8.8 avec 1.1.1.1 en secours (failover
@@ -52,6 +52,7 @@ function showStep(i) {
     btn.classList.toggle("done", j < i);
     if (j <= i) btn.disabled = false;
   });
+  syncStepperGating(); // l'état a le dernier mot sur le déverrouillage par progression
   $("btn-prev").classList.toggle("hidden", i === 0);
   syncNextBtn();
   if (STEPS[i] === "columns") { renderPidSelect(); fillOutFormat(); renderOutPreview(); }
@@ -66,6 +67,14 @@ function syncNextBtn() {
   $("btn-next").classList.toggle("hidden", hide);
 }
 syncNextBtn(); // état initial : étape Fichier, aucun fichier
+
+/** Le stepper suit l'état, pas seulement la progression : Format exige un
+ *  fichier, Run exige une désignation — re-verrouillés si l'état régresse. */
+function syncStepperGating() {
+  document.querySelector('#stepper [data-step="columns"]').disabled = !state.inputPath;
+  document.querySelector('#stepper [data-step="run"]').disabled =
+    !state.inputPath || !state.config.input.pid_column;
+}
 
 /** Message d'erreur si l'étape courante est incomplète, sinon null. */
 function validateStep() {
@@ -133,6 +142,11 @@ async function pickInput(path) {
         { source: "peppol", field: "ubl_extended" },
       ];
     }
+    // Invariant « adressage obligatoire en sortie » : la pré-désignation doit
+    // réintégrer la colonne si un mapping conservé l'avait écartée.
+    const pid = state.config.input.pid_column;
+    if (pid && !state.config.output.columns.some((c) => c.source === "input" && c.name === pid))
+      state.config.output.columns.push({ source: "input", name: pid });
     // output.dir vide = « dossier du fichier d'entrée » (résolu côté Rust) :
     // pas de valeur à poser ici, le réglage persiste d'un fichier à l'autre.
     renderFilePanel();
@@ -149,13 +163,14 @@ function renderFilePanel() {
   const meta = $("file-meta");
   meta.replaceChildren(
     h("b", {}, state.inputPath.split(/[\\/]/).pop() ?? ""),
-    ` — ${Math.round(p.size_bytes / 1024)} Ko · séparateur « ${p.delimiter} », encodage ${p.encoding}`);
+    ` — ${Math.max(1, Math.round(p.size_bytes / 1024))} Ko · séparateur « ${p.delimiter} », encodage ${p.encoding}`);
   meta.title = state.inputPath;
   $("preview-table").replaceChildren(
     h("tr", {}, ...p.headers.map((hd) => h("th", {}, hd))),
-    ...p.rows.map((r) => h("tr", {}, ...r.map((c) => h("td", {}, c)))),
+    ...p.rows.slice(0, 3).map((r) => h("tr", {}, ...r.map((c) => h("td", {}, c)))),
   );
   highlightPidColumn();
+  syncStepperGating();
 }
 
 /** Liste de désignation de l'étape Format — miroir de state…pid_column.
@@ -163,7 +178,7 @@ function renderFilePanel() {
 function renderPidSelect() {
   const headers = state.preview ? state.preview.headers : [];
   const opts = headers.map((hd) => {
-    const o = h("option", {}, hd);
+    const o = h("option", { value: hd }, hd);
     o.selected = hd === state.config.input.pid_column;
     return o;
   });
@@ -192,6 +207,7 @@ function designatePid(name) {
   renderPidSelect();
   renderOutPreview();
   highlightPidColumn();
+  syncStepperGating();
 }
 
 /** Surligne dans l'aperçu la colonne des adressages choisie (couleur d'accent,
