@@ -743,4 +743,5 @@ $("btn-load-cfg").addEventListener("click", async () => {
   fillOutFormat();
   renderOutPreview();
   highlightPidColumn();
+  syncStepperGating();
 });
