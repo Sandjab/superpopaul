@@ -16,6 +16,9 @@ pub struct Preview {
     pub rows: Vec<Vec<String>>,
     pub delimiter: String,
     pub encoding: String,
+    /// Signature des en-têtes (columns_hash) — comparée à celle des profils.
+    pub columns_hash: String,
+    pub size_bytes: u64,
 }
 
 /// Détecte séparateur et encodage sur les premiers 64 Ko.
@@ -96,7 +99,7 @@ fn reader(path: &Path, meta: &CsvMeta) -> Result<csv::Reader<Box<dyn Read>>, Str
 pub fn preview(path: &Path, n: usize) -> Result<Preview, String> {
     let meta = sniff(path)?;
     let mut rdr = reader(path, &meta)?;
-    let headers = rdr
+    let headers: Vec<String> = rdr
         .headers()
         .map_err(|e| e.to_string())?
         .iter()
@@ -107,11 +110,17 @@ pub fn preview(path: &Path, n: usize) -> Result<Preview, String> {
         let rec = rec.map_err(|e| e.to_string())?;
         rows.push(rec.iter().map(String::from).collect());
     }
+    let size_bytes = std::fs::metadata(path)
+        .map_err(|e| format!("métadonnées {path:?} : {e}"))?
+        .len();
+    let hash = columns_hash(&headers);
     Ok(Preview {
         headers,
         rows,
         delimiter: (meta.delimiter as char).to_string(),
         encoding: meta.encoding.to_string(),
+        columns_hash: hash,
+        size_bytes,
     })
 }
 
@@ -272,6 +281,8 @@ mod tests {
             ],
             delimiter: ";".into(),
             encoding: "utf-8".into(),
+            columns_hash: String::new(),
+            size_bytes: 0,
         };
         assert_eq!(suggest_pid_column(&p), Some(1));
     }
@@ -283,6 +294,8 @@ mod tests {
             rows: vec![vec!["ACME".into()], vec!["GLOBEX".into()]],
             delimiter: ";".into(),
             encoding: "utf-8".into(),
+            columns_hash: String::new(),
+            size_bytes: 0,
         };
         assert_eq!(suggest_pid_column(&p), None);
     }
@@ -308,5 +321,16 @@ mod tests {
         );
         // Préfixage par longueur : pas d'ambiguïté de concaténation.
         assert_ne!(h(&["ab", "c"]), h(&["a", "bc"]));
+    }
+
+    #[test]
+    fn preview_expose_hash_des_colonnes_et_taille() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("x.csv");
+        std::fs::write(&p, "a;b\n1;2\n").unwrap();
+        let prev = preview(&p, 5).unwrap();
+        assert_eq!(prev.columns_hash, columns_hash(&prev.headers));
+        assert_eq!(prev.columns_hash, "41c80da72d0aec94"); // ["a", "b"], valeur en dur
+        assert_eq!(prev.size_bytes, 8); // "a;b\n1;2\n"
     }
 }
