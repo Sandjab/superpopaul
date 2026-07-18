@@ -242,14 +242,120 @@ $("btn-browse").addEventListener("click", async (e) => {
 });
 $("pid-column").addEventListener("change", (e) => designatePid(e.target.value));
 const dz = $("dropzone");
+const ddz = $("dir-dropzone");
 dz.addEventListener("dragover", (e) => { e.preventDefault(); dz.classList.add("over"); });
 dz.addEventListener("dragleave", () => dz.classList.remove("over"));
-// Le drop de fichier natif arrive par l'événement Tauri drag-drop.
+// Le drop de fichier natif arrive par l'événement Tauri drag-drop. Deux cibles
+// dans l'étape Fichiers : on route selon la position (px physiques → CSS).
 listen("tauri://drag-drop", (e) => {
-  const paths = e.payload.paths || [];
-  if (paths.length && STEPS[current] === "file") pickInput(paths[0]);
   dz.classList.remove("over");
+  ddz.classList.remove("over");
+  const paths = e.payload.paths || [];
+  if (!paths.length || STEPS[current] !== "file") return;
+  const pos = e.payload.position || { x: 0, y: 0 };
+  const dpr = window.devicePixelRatio || 1;
+  const x = pos.x / dpr, y = pos.y / dpr;
+  const r = ddz.getBoundingClientRect();
+  if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) {
+    loadDirectory("file", paths[0]);
+  } else {
+    pickInput(paths[0]);
+  }
 });
+
+// --- Annuaire Peppol (référence déclarative, onglet Fichiers) ---------------
+
+/** Rend la ligne d'état à partir d'un DirStatus (ou null = jamais chargé).
+ *  Données via textContent uniquement (le compteur vient du backend, mais on
+ *  ne fait jamais confiance à une entrée dérivée d'un CSV). */
+function renderDirStatus(st) {
+  const el = $("dir-status");
+  el.textContent = "";
+  if (!st) {
+    el.className = "muted empty";
+    el.append(
+      h("b", {}, "Jamais chargé."),
+      " Téléchargez l'annuaire ou déposez le CSV pour peupler la base."
+    );
+    return;
+  }
+  const when = new Date(st.loaded_at * 1000).toLocaleString("fr-FR", {
+    day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit",
+  });
+  const origine = st.source === "download" ? "téléchargé" : "depuis le fichier";
+  el.className = "muted";
+  el.append(
+    h("span", { class: "dot" }, "●"),
+    " Dernier chargement : ",
+    h("b", {}, when),
+    " — ",
+    h("b", {}, st.count.toLocaleString("fr-FR")),
+    ` adressages 0225 (${origine}).`
+  );
+}
+
+/** Active/désactive les contrôles et affiche/masque la barre de progression. */
+function setDirBusy(busy) {
+  $("dir-browse").disabled = busy;
+  $("dir-download").disabled = busy;
+  $("dir-prog").classList.toggle("hidden", !busy);
+  if (!busy) {
+    $("dir-bar").classList.remove("indet");
+    $("dir-bar").firstElementChild.style.width = "0";
+  }
+}
+
+async function loadDirectory(kind, arg) {
+  setDirBusy(true);
+  $("dir-status").classList.add("hidden");
+  try {
+    const r = kind === "download"
+      ? await invoke("download_directory")
+      : await invoke("load_directory_file", { path: arg });
+    renderDirStatus({ loaded_at: r.loaded_at, count: r.count, source: kind === "download" ? "download" : "file" });
+  } catch (err) {
+    banner("error", `Annuaire Peppol : ${err}`);
+  } finally {
+    setDirBusy(false);
+    $("dir-status").classList.remove("hidden");
+  }
+}
+
+// Progression : phase "download" (octets, barre en %) puis "parse" (lignes, indéterminée).
+listen("directory://progress", (e) => {
+  const { phase, done, total } = e.payload;
+  const bar = $("dir-bar");
+  if (phase === "download") {
+    bar.classList.remove("indet");
+    const mo = (n) => (n / 1048576).toFixed(0);
+    if (total) {
+      const pct = Math.round((done / total) * 100);
+      bar.firstElementChild.style.width = pct + "%";
+      $("dir-prog-text").textContent = "Téléchargement de l'annuaire…";
+      $("dir-prog-num").textContent = `${mo(done)} Mo / ${mo(total)} Mo · ${pct} %`;
+    } else {
+      bar.classList.add("indet");
+      $("dir-prog-text").textContent = "Téléchargement de l'annuaire…";
+      $("dir-prog-num").textContent = `${mo(done)} Mo`;
+    }
+  } else {
+    bar.classList.add("indet");
+    $("dir-prog-text").textContent = "Analyse et chargement en base…";
+    $("dir-prog-num").textContent = `${done.toLocaleString("fr-FR")} lignes lues`;
+  }
+});
+
+$("dir-browse").addEventListener("click", async () => {
+  const f = await open({ multiple: false, filters: [{ name: "CSV", extensions: ["csv", "txt"] }] });
+  if (f) await loadDirectory("file", f);
+});
+$("dir-download").addEventListener("click", () => loadDirectory("download"));
+
+ddz.addEventListener("dragover", (e) => { e.preventDefault(); ddz.classList.add("over"); });
+ddz.addEventListener("dragleave", () => ddz.classList.remove("over"));
+
+// Statut initial au démarrage.
+invoke("directory_status").then(renderDirStatus).catch(() => {});
 
 // --- Réglages : formulaire ↔ état ---------------------------------------------------
 function syncSettingsForm() {
