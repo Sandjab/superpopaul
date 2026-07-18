@@ -22,6 +22,14 @@ pub struct Resolution {
     pub ctc_expiration: Option<String>,
 }
 
+/// État du dernier chargement de l'annuaire Peppol (table meta 1-ligne).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DirStatus {
+    pub loaded_at: i64,
+    pub count: i64,
+    pub source: String,
+}
+
 pub struct Store {
     conn: Connection,
 }
@@ -39,6 +47,12 @@ CREATE TABLE IF NOT EXISTS resolutions (
   note              TEXT,
   ctc_activation    TEXT,
   ctc_expiration    TEXT
+);
+CREATE TABLE IF NOT EXISTS peppol_directory_meta (
+  id         INTEGER PRIMARY KEY CHECK (id = 1),
+  loaded_at  INTEGER NOT NULL,
+  count      INTEGER NOT NULL,
+  source     TEXT NOT NULL
 );
 ";
 
@@ -186,6 +200,64 @@ impl Store {
             ctc_activation: row.get(9)?,
             ctc_expiration: row.get(10)?,
         })
+    }
+
+    /// Recrée entièrement `peppol_directory` (DROP+CREATE) et y insère les
+    /// valeurs (INSERT OR IGNORE — la PK déduplique), puis met à jour la meta,
+    /// le tout dans UNE transaction : un échec laisse l'ancien contenu intact
+    /// et l'horodatage ne peut pas diverger du contenu. Renvoie le nombre de
+    /// lignes distinctes réellement en table.
+    pub fn replace_peppol_directory(
+        &self,
+        values: &[String],
+        source: &str,
+        loaded_at: i64,
+    ) -> Result<usize, String> {
+        let tx = self.conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        tx.execute_batch(
+            "DROP TABLE IF EXISTS peppol_directory;
+             CREATE TABLE peppol_directory (value TEXT PRIMARY KEY);",
+        )
+        .map_err(|e| e.to_string())?;
+        {
+            let mut stmt = tx
+                .prepare_cached("INSERT OR IGNORE INTO peppol_directory (value) VALUES (?1)")
+                .map_err(|e| e.to_string())?;
+            for v in values {
+                stmt.execute(params![v]).map_err(|e| e.to_string())?;
+            }
+        }
+        let count: i64 = tx
+            .query_row("SELECT COUNT(*) FROM peppol_directory", [], |r| r.get(0))
+            .map_err(|e| e.to_string())?;
+        tx.execute(
+            "INSERT INTO peppol_directory_meta (id, loaded_at, count, source)
+             VALUES (1, ?1, ?2, ?3)
+             ON CONFLICT(id) DO UPDATE SET
+               loaded_at=excluded.loaded_at, count=excluded.count, source=excluded.source",
+            params![loaded_at, count, source],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(count as usize)
+    }
+
+    /// État du dernier chargement de l'annuaire ; `None` si jamais chargé.
+    pub fn peppol_directory_status(&self) -> Result<Option<DirStatus>, String> {
+        self.conn
+            .query_row(
+                "SELECT loaded_at, count, source FROM peppol_directory_meta WHERE id = 1",
+                [],
+                |r| {
+                    Ok(DirStatus {
+                        loaded_at: r.get(0)?,
+                        count: r.get(1)?,
+                        source: r.get(2)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(|e| e.to_string())
     }
 }
 
@@ -387,5 +459,59 @@ mod tests {
         assert_eq!(m.len(), 600);
         assert!(m.contains_key("c::0"));
         assert!(m.contains_key("c::599"));
+    }
+
+    #[test]
+    fn directory_charge_dedup_et_compte() {
+        let s = Store::open_in_memory().unwrap();
+        let vals = vec!["000122308".to_string(), "0559".to_string(), "000122308".to_string()];
+        let n = s.replace_peppol_directory(&vals, "file", 1000).unwrap();
+        assert_eq!(n, 2, "la PK déduplique le doublon");
+        let st = s.peppol_directory_status().unwrap().unwrap();
+        assert_eq!(st.count, 2);
+        assert_eq!(st.loaded_at, 1000);
+        assert_eq!(st.source, "file");
+    }
+
+    #[test]
+    fn directory_est_recreee_a_chaque_chargement() {
+        let s = Store::open_in_memory().unwrap();
+        s.replace_peppol_directory(&["a".into(), "b".into(), "c".into()], "file", 1).unwrap();
+        // Deuxième chargement : contenu entièrement remplacé, pas cumulé.
+        let n = s.replace_peppol_directory(&["x".into()], "download", 2).unwrap();
+        assert_eq!(n, 1);
+        let st = s.peppol_directory_status().unwrap().unwrap();
+        assert_eq!(st.count, 1);
+        assert_eq!(st.source, "download");
+        assert_eq!(st.loaded_at, 2);
+    }
+
+    #[test]
+    fn directory_status_none_avant_tout_chargement() {
+        let s = Store::open_in_memory().unwrap();
+        assert!(s.peppol_directory_status().unwrap().is_none());
+    }
+
+    #[test]
+    fn ouverture_cree_la_table_meta_annuaire() {
+        // Une base préexistante sans peppol_directory_meta doit rester
+        // ouvrable et gagner la table (migration idempotente).
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sans_meta.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE resolutions (
+                   participant TEXT PRIMARY KEY, exists_in_peppol INTEGER,
+                   pa_code TEXT, pa_name TEXT, pa_country TEXT,
+                   extended_ctc_fr INTEGER, api_status TEXT NOT NULL,
+                   resolved_at INTEGER NOT NULL );",
+            )
+            .unwrap();
+        }
+        let s = Store::open(&path).unwrap();
+        assert!(s.peppol_directory_status().unwrap().is_none());
+        s.replace_peppol_directory(&["z".into()], "file", 7).unwrap();
+        assert_eq!(s.peppol_directory_status().unwrap().unwrap().count, 1);
     }
 }
