@@ -345,9 +345,15 @@ listen("directory://progress", (e) => {
   }
 });
 
-$("dir-browse").addEventListener("click", async () => {
-  const f = await open({ multiple: false, filters: [{ name: "CSV", extensions: ["csv", "txt"] }] });
-  if (f) await loadDirectory("file", f);
+$("dir-browse").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  btn.disabled = true; // garde de ré-entrance pendant le dialog (cf. btn-browse)
+  try {
+    const f = await open({ multiple: false, filters: [{ name: "CSV", extensions: ["csv", "txt"] }] });
+    if (f) await loadDirectory("file", f);
+  } finally {
+    btn.disabled = false;
+  }
 });
 $("dir-download").addEventListener("click", () => loadDirectory("download"));
 
