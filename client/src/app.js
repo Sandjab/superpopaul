@@ -54,7 +54,7 @@ function showStep(i) {
   });
   $("btn-prev").classList.toggle("hidden", i === 0);
   syncNextBtn();
-  if (STEPS[i] === "columns") renderOutPreview(); // columns.js
+  if (STEPS[i] === "columns") { renderPidSelect(); fillOutFormat(); renderOutPreview(); }
   if (STEPS[i] === "run") enterRunStep();          // cockpit.js
 }
 
@@ -70,12 +70,9 @@ syncNextBtn(); // état initial : étape Fichier, aucun fichier
 /** Message d'erreur si l'étape courante est incomplète, sinon null. */
 function validateStep() {
   const s = STEPS[current];
-  if (s === "file") {
-    if (!state.inputPath) return "Choisis d'abord un fichier CSV.";
-    if (!state.config.input.pid_column) return "Indique la colonne des adressages.";
-  }
-  if (s === "columns" && state.config.output.columns.length === 0)
-    return "Il faut au moins une colonne en sortie.";
+  if (s === "file" && !state.inputPath) return "Choisis d'abord un fichier CSV.";
+  if (s === "columns" && !state.config.input.pid_column)
+    return "Désigne la colonne des adressages (🔑).";
   // La clé API (mode api) est vérifiée au lancement du run (cockpit.js),
   // les réglages n'étant plus une étape du wizard.
   return null;
@@ -149,24 +146,51 @@ function renderFilePanel() {
   const p = state.preview;
   syncNextBtn(); // un fichier vient d'être chargé : « Suivant » devient utile
   $("file-info").classList.remove("hidden");
-  // Nom du fichier seul, en gras — le chemin complet reste en tooltip
-  // (même traitement que le titre de l'étape Run).
   const meta = $("file-meta");
   meta.replaceChildren(
     h("b", {}, state.inputPath.split(/[\\/]/).pop() ?? ""),
-    ` — séparateur « ${p.delimiter} », encodage ${p.encoding}`);
+    ` — ${Math.round(p.size_bytes / 1024)} Ko · séparateur « ${p.delimiter} », encodage ${p.encoding}`);
   meta.title = state.inputPath;
   $("preview-table").replaceChildren(
     h("tr", {}, ...p.headers.map((hd) => h("th", {}, hd))),
     ...p.rows.map((r) => h("tr", {}, ...r.map((c) => h("td", {}, c)))),
   );
-  $("pid-column").replaceChildren(...p.headers.map((hd) => {
+  highlightPidColumn();
+}
+
+/** Liste de désignation de l'étape Format — miroir de state…pid_column.
+ *  Sans désignation (aucune suggestion) : placeholder « — choisir — ». */
+function renderPidSelect() {
+  const headers = state.preview ? state.preview.headers : [];
+  const opts = headers.map((hd) => {
     const o = h("option", {}, hd);
     o.selected = hd === state.config.input.pid_column;
     return o;
-  }));
+  });
+  if (!state.config.input.pid_column) {
+    const ph = h("option", { value: "" }, "— choisir —");
+    ph.selected = true;
+    ph.disabled = true;
+    opts.unshift(ph);
+  }
+  $("pid-column").replaceChildren(...opts);
   $("pid-hint").textContent =
-    p.suggested_pid_column != null ? "(suggestion automatique)" : "";
+    state.preview && state.preview.suggested_pid_column != null
+      ? "(suggestion automatique)" : "";
+  // Un profil sans désignation serait invalide : sauvegarde grisée.
+  $("btn-save-cfg").disabled = !state.config.input.pid_column;
+}
+
+/** Désignation — LE point d'entrée unique (liste ou clé 🔑 du tableau).
+ *  La colonne désignée est obligatoire en sortie : si elle était écartée,
+ *  elle est réintégrée d'office ; l'ancienne redevient écartable. */
+function designatePid(name) {
+  state.config.input.pid_column = name;
+  const cols = state.config.output.columns;
+  if (!cols.some((c) => c.source === "input" && c.name === name))
+    cols.push({ source: "input", name });
+  renderPidSelect();
+  renderOutPreview();
   highlightPidColumn();
 }
 
@@ -189,10 +213,7 @@ $("btn-browse").addEventListener("click", async (e) => {
     btn.disabled = false;
   }
 });
-$("pid-column").addEventListener("change", (e) => {
-  state.config.input.pid_column = e.target.value;
-  highlightPidColumn();
-});
+$("pid-column").addEventListener("change", (e) => designatePid(e.target.value));
 const dz = $("dropzone");
 dz.addEventListener("dragover", (e) => { e.preventDefault(); dz.classList.add("over"); });
 dz.addEventListener("dragleave", () => dz.classList.remove("over"));
@@ -209,8 +230,6 @@ function syncSettingsForm() {
   c.output.dir = $("out-dir").value.trim();
   c.output.suffix = $("out-suffix").value.trim();
   c.output.timestamp_suffix = $("out-stamp").checked;
-  c.output.encoding = $("out-encoding").value;
-  c.output.separator = $("out-sep").value;
   c.api.mode = $("api-mode").value;
   c.api.url = $("api-url").value.trim();
   c.api.key = $("api-key").value.trim();
@@ -241,8 +260,6 @@ function fillSettingsForm() {
   $("out-dir").value = c.output.dir;
   $("out-suffix").value = c.output.suffix;
   $("out-stamp").checked = c.output.timestamp_suffix;
-  $("out-encoding").value = c.output.encoding;
-  $("out-sep").value = c.output.separator;
   $("api-mode").value = c.api.mode || "api";
   $("api-url").value = c.api.url;
   $("api-key").value = c.api.key;
@@ -303,14 +320,22 @@ $("btn-out-browse").addEventListener("click", async () => {
   if (d) $("out-dir").value = d;
 });
 
+// --- Étape Format : forme de sortie (encodage, séparateur) --------------------
+function fillOutFormat() {
+  $("out-encoding").value = state.config.output.encoding;
+  $("out-sep").value = state.config.output.separator;
+}
+$("out-encoding").addEventListener("change", (e) => { state.config.output.encoding = e.target.value; });
+$("out-sep").addEventListener("change", (e) => { state.config.output.separator = e.target.value; });
+
 // --- Réglages : persistance (superpopaul.yaml, dossier données de l'app) -----------
 /** La tranche de l'état qui va dans le fichier de réglages : API + forme de la
  *  sortie. Ni le fichier d'entrée ni les colonnes (ça, c'est le profil). */
 function currentSettings() {
   const c = state.config;
-  const { dir, suffix, timestamp_suffix, encoding, separator } = c.output;
+  const { dir, suffix, timestamp_suffix } = c.output;
   return { version: 1, api: c.api,
-           output: { dir, suffix, timestamp_suffix, encoding, separator } };
+           output: { dir, suffix, timestamp_suffix } };
 }
 /** Fusion sur les défauts de l'état : les champs à leur valeur par défaut sont
  *  absents du YAML (serde skip_serializing_if), un remplacement les perdrait. */
@@ -645,8 +670,10 @@ function ensureProxyCreds(force = false) {
 }
 
 // --- Profils de chargement : sauvegarde / chargement explicites -------------------
-// Un profil décrit COMMENT traiter un fichier (chemin, colonne des adressages,
-// colonnes de sortie) ; les réglages (API, sortie), eux, sont auto-persistés.
+// Un profil décrit COMMENT traiter un fichier (colonne des adressages, signature
+// de colonnes, colonnes de sortie, encodage/séparateur) ; sans chemin — un profil
+// s'applique au fichier ouvert, pas à un chemin figé. Les réglages (API), eux,
+// sont auto-persistés séparément.
 
 // En mode portable les dialogues de profils s'ouvrent à côté de l'exe ;
 // en mode installé, pas de defaultPath (dernier dossier visité, comportement OS).
@@ -656,21 +683,19 @@ async function profileDialogDefault() {
 }
 
 $("btn-save-cfg").addEventListener("click", async () => {
-  if (!state.inputPath || !state.config.input.pid_column) {
-    banner("warn", "Choisis d'abord le fichier et la colonne des adressages " +
-      "avant de sauvegarder un profil.");
-    return;
-  }
   const f = await save({ filters: [{ name: "YAML", extensions: ["yaml", "yml"] }],
                          ...(await profileDialogDefault()) });
   if (!f) return;
   try {
     await invoke("save_profile", { path: f, profile: {
       version: 1,
-      input: { path: state.inputPath, pid_column: state.config.input.pid_column },
+      input: { pid_column: state.config.input.pid_column,
+               columns_hash: state.preview.columns_hash },
+      output: { encoding: state.config.output.encoding,
+                separator: state.config.output.separator },
       columns: state.config.output.columns,
     } });
-    hideBanner(); // plus de clé API dans le fichier : plus d'avertissement
+    hideBanner();
   } catch (e) {
     banner("error", `${e}`);
   }
@@ -680,47 +705,26 @@ $("btn-load-cfg").addEventListener("click", async () => {
   const f = await open({ multiple: false, filters: [{ name: "YAML", extensions: ["yaml", "yml"] }],
                          ...(await profileDialogDefault()) });
   if (!f) return;
-  let r;
+  let p;
   try {
-    r = await invoke("load_profile", { path: f });
+    p = await invoke("load_profile", { path: f });
   } catch (e) {
     banner("error", `Chargement impossible : ${e}`);
     return;
   }
-  state.config.input.path = r.profile.input.path;
-  state.config.input.pid_column = r.profile.input.pid_column;
-  state.config.output.columns = r.profile.columns;
-  let path = r.profile.input.path;
-  try {
-    // Pose la config assemblée AVANT resolved_input_path (qui lit la config
-    // active), puis recharge l'aperçu SANS écraser le mapping du profil.
-    await invoke("set_config", { cfg: state.config });
-    path = await invoke("resolved_input_path");
-    state.preview = await invoke("preview_csv", { path });
-    state.inputPath = path;
-    renderFilePanel();
-    if (r.legacy)
-      banner("warn", "Ancien format : seuls le fichier, la colonne des adressages et " +
-        "les colonnes ont été repris — l'API et la sortie se règlent désormais dans ⚙.");
-    else hideBanner();
-    // Directement à l'étape Run (spec) — analyze_input y détecte la reprise.
-    // showStep() a un early-return si on est déjà sur l'étape courante (cas du
-    // clic sur l'onglet actif) : quand on charge un profil depuis l'étape Run,
-    // ce serait un no-op et enterRunStep() (donc analyze_input et la bannière
-    // de reprise) ne serait jamais rappelé. On force donc l'entrée dans
-    // l'étape Run dans ce cas précis, plutôt que de passer par showStep().
-    const runIdx = STEPS.indexOf("run");
-    if (current === runIdx) enterRunStep();
-    else showStep(runIdx);
-  } catch {
-    // Profil chargé mais CSV introuvable/illisible : le profil reste en
-    // place (l'utilisateur ne re-choisit que le fichier), l'état d'entrée
-    // est remis à zéro pour rester cohérent et actionnable.
-    state.inputPath = null;
-    state.preview = null;
-    banner("warn", `Profil chargé, mais le fichier d'entrée ${path} est introuvable — ` +
-      "re-sélectionne-le à l'étape 1.");
-    showStep(0);
-    syncNextBtn(); // showStep(0) early-return si on y était déjà
+  // Refus sec : un profil forcé sur d'autres colonnes produirait une sortie
+  // silencieusement fausse. Aucun état modifié.
+  if (p.input.columns_hash !== state.preview.columns_hash) {
+    banner("error", "Profil incompatible avec le fichier ouvert — colonnes différentes.");
+    return;
   }
+  state.config.input.pid_column = p.input.pid_column;
+  state.config.output.columns = p.columns;
+  state.config.output.encoding = p.output.encoding;
+  state.config.output.separator = p.output.separator;
+  hideBanner();
+  renderPidSelect();
+  fillOutFormat();
+  renderOutPreview();
+  highlightPidColumn();
 });
