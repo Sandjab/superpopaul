@@ -40,11 +40,29 @@ function colLabel(c) {
        : "⚡ " + PEPPOL_FIELDS.find(([f]) => f === c.field)[1];
 }
 
+const isPidSpec = (c) =>
+  c.source === "input" && c.name === state.config.input.pid_column;
+
 function makeHeader(c) {
-  const attrs = { class: c.source, "data-key": colKey(c) };
+  const pid = isPidSpec(c);
+  const attrs = { class: pid ? "input pid" : c.source, "data-key": colKey(c) };
   if (c.source === "peppol")
     attrs.title = "Champ calculé par l'API Peppol — les valeurs affichées sont un exemple.";
-  return h("th", attrs, `⠿ ${colLabel(c)}`);
+  if (pid)
+    attrs.title = "Colonne des adressages — obligatoire en sortie, non écartable.";
+  const th = h("th", attrs, "⠿ ");
+  if (c.source === "input") {
+    const k = h("button", {
+      class: "key-btn",
+      title: pid ? "Colonne des adressages"
+                 : "Désigner comme colonne des adressages",
+    }, "🔑");
+    if (!pid) k.addEventListener("click", () => designatePid(c.name)); // app.js
+    else k.disabled = true;
+    th.append(k, " ");
+  }
+  th.append(colLabel(c));
+  return th;
 }
 
 // Cellule du corps pour la colonne c et la ligne r du preview. `temp` marque
@@ -55,7 +73,8 @@ function makeCell(c, r, temp) {
     return h("td", { class: temp ? "muted temp" : "muted", "data-key": key },
       PEPPOL_SAMPLE[c.field]);
   const idx = state.preview.headers.indexOf(c.name);
-  return h("td", { class: temp ? "temp" : "", "data-key": key },
+  const cls = [temp ? "temp" : "", isPidSpec(c) ? "pid" : ""].join(" ").trim();
+  return h("td", { class: cls, "data-key": key },
     idx >= 0 ? (r[idx] ?? "") : "");
 }
 
@@ -136,8 +155,13 @@ function renderOutPreview() {
   };
   sortHead = new Sortable(head, {
     ...common,
-    // Garde « minimum 1 colonne » : la dernière colonne refuse de partir.
-    group: { name: "columns", pull: () => head.children.length > 1, put: true },
+    filter: ".key-btn",       // le clic 🔑 désigne, il ne drague pas
+    preventOnFilter: false,   // laisser le click natif partir
+    // Garde : la colonne des adressages est obligatoire en sortie — son
+    // en-tête refuse de partir vers la zone d'écartement.
+    group: { name: "columns",
+             pull: (_to, _from, dragEl) => !dragEl.classList.contains("pid"),
+             put: true },
   });
   // sort: false — on drag vers/depuis la zone, jamais dedans : son ordre est
   // canonique au render et un tri manuel serait défait au re-render suivant.
@@ -147,15 +171,13 @@ function renderOutPreview() {
 // Raccourci sans drag : double-clic sur un en-tête = écarter la colonne,
 // double-clic sur une chip = la réintégrer en dernière position. Délégation
 // sur les conteneurs (ils survivent aux re-renders), même source de vérité
-// (columns → renderOutPreview) et même garde « minimum 1 colonne » que le
-// pull du drag.
+// (columns → renderOutPreview) et même garde 🔑 que le pull du drag.
 $("out-preview").addEventListener("dblclick", (e) => {
   const th = e.target.closest("th[data-key]");
   if (!th) return;
   const cols = state.config.output.columns;
-  if (cols.length <= 1) return;
   const i = cols.findIndex((c) => colKey(c) === th.dataset.key);
-  if (i < 0) return;
+  if (i < 0 || isPidSpec(cols[i])) return; // la 🔑 ne s'écarte pas
   cols.splice(i, 1);
   renderOutPreview();
 });
