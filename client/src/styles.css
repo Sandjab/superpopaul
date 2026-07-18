@@ -110,7 +110,7 @@ fieldset { border: 1px solid var(--border); border-radius: 8px; margin: 12px 0; 
 /* Colonne des adressages choisie : surbrillance à la couleur d'accent (même
    langage que th.peppol / td.temp de l'étape 2). */
 #preview-table th.pid-col { color: var(--pid); border-color: var(--pid); }
-#preview-table td.pid-col { background: rgba(217, 168, 63, .10); }
+#preview-table td.pid-col { background: color-mix(in srgb, var(--pid) 10%, transparent); }
 table { border-collapse: collapse; margin: 12px 0; width: 100%; }
 th, td { border: 1px solid var(--border); padding: 4px 10px; text-align: left; }
 th { background: var(--card); }
@@ -144,7 +144,7 @@ body > .drag-fallback {
 #out-preview th.pid, #out-preview td.pid { color: var(--pid); border-color: var(--pid); }
 .key-btn { background: none; border: none; padding: 0 2px; cursor: pointer; opacity: 0; }
 .key-btn:hover:not(:disabled) { border: none; }
-#out-preview th.input:hover .key-btn { opacity: .45; }
+#out-preview th.input:not(.pid):hover .key-btn { opacity: .45; }
 #out-preview th.pid .key-btn { opacity: 1; cursor: default; }
 
 #run-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
