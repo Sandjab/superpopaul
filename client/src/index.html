@@ -36,9 +36,11 @@
     <section id="step-columns" class="panel hidden">
       <div id="format-head">
         <h2>Format du fichier principal</h2>
+        <span id="profile-name" class="muted"></span>
         <span>
-          <button id="btn-load-cfg" title="Charger un profil YAML — appliqué si ses colonnes correspondent au fichier ouvert.">Charger profil…</button>
-          <button id="btn-save-cfg" title="Sauvegarder le format courant (colonne des adressages, colonnes, encodage, séparateur) en YAML.">Sauvegarder…</button>
+          <button id="btn-load-cfg" title="Ouvrir un profil YAML — appliqué si ses colonnes correspondent au fichier ouvert.">📂 Ouvrir…</button>
+          <button id="btn-save-cfg" disabled title="Enregistrer — écrase le profil courant.">💾 Enregistrer</button>
+          <button id="btn-saveas-cfg" title="Nouveau fichier YAML.">Enregistrer sous…</button>
         </span>
       </div>
       <p><label for="pid-column">Colonne des adressages :</label>

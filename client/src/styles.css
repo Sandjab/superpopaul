@@ -140,7 +140,10 @@ body > .drag-fallback {
 .chip.peppol { color: var(--gold); border-color: var(--gold); }
 #out-preview td.temp { background: rgba(217, 168, 63, .10); }
 
-#format-head { display: flex; align-items: center; justify-content: space-between; }
+#format-head { display: flex; align-items: center; gap: 10px; }
+#format-head h2 { margin-right: auto; }
+#profile-name { font-size: .85em; }
+.profile-dirty { color: var(--gold); }
 #out-preview th.pid, #out-preview td.pid { color: var(--pid); border-color: var(--pid); }
 .key-btn { background: none; border: none; padding: 0 2px; cursor: pointer; opacity: 0; }
 .key-btn:hover:not(:disabled) { border: none; }
