@@ -23,6 +23,39 @@ pub fn parse_0225_value(participant_id: &str) -> Option<String> {
     }
 }
 
+/// Lit un CSV mono-colonne (`Participant ID`) en flux et renvoie les valeurs
+/// 0225 dans l'ordre. `on_progress(lignes_lues)` est appelé tous les 100 000
+/// enregistrements puis une fois en fin de lecture. BLOQUANT (5,2 M lignes
+/// possibles) : appeler depuis `spawn_blocking`.
+pub fn stream_0225_values<R: Read>(
+    reader: R,
+    mut on_progress: impl FnMut(u64),
+) -> Result<Vec<String>, String> {
+    let mut rdr = csv::ReaderBuilder::new().has_headers(true).from_reader(reader);
+    let mut record = csv::StringRecord::new();
+    let mut out = Vec::new();
+    let mut lines: u64 = 0;
+    loop {
+        match rdr.read_record(&mut record) {
+            Ok(true) => {
+                lines += 1;
+                if let Some(field) = record.get(0) {
+                    if let Some(v) = parse_0225_value(field) {
+                        out.push(v);
+                    }
+                }
+                if lines % 100_000 == 0 {
+                    on_progress(lines);
+                }
+            }
+            Ok(false) => break,
+            Err(e) => return Err(format!("lecture CSV de l'annuaire : {e}")),
+        }
+    }
+    on_progress(lines);
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -75,5 +108,26 @@ mod tests {
             parse_0225_value("  iso6523-actorid-upis::0225:000122308  "),
             Some("000122308".to_string())
         );
+    }
+
+    #[test]
+    fn stream_ne_garde_que_le_0225_dans_l_ordre() {
+        // En-tête + mélange de schemes ; seules les valeurs 0225 ressortent,
+        // dans l'ordre de lecture, en-tête ignoré.
+        let csv = "\"Participant ID\"\n\
+                   \"iso6523-actorid-upis::0002:000126010\"\n\
+                   \"iso6523-actorid-upis::0225:000122308\"\n\
+                   \"iso6523-actorid-upis::0009:552100554\"\n\
+                   \"iso6523-actorid-upis::0225:000009777_0054_replyto\"\n";
+        let mut progress_calls = 0u32;
+        let vals = stream_0225_values(std::io::Cursor::new(csv), |_| progress_calls += 1).unwrap();
+        assert_eq!(vals, vec!["000122308".to_string(), "000009777_0054_replyto".to_string()]);
+        assert!(progress_calls >= 1, "on_progress doit être appelé au moins une fois");
+    }
+
+    #[test]
+    fn stream_csv_vide_ou_entete_seule() {
+        let vals = stream_0225_values(std::io::Cursor::new("\"Participant ID\"\n"), |_| {}).unwrap();
+        assert!(vals.is_empty());
     }
 }
