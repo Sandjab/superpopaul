@@ -26,6 +26,9 @@ pub struct ReportData<'a> {
     /// Couverture déclarative des annuaires (Peppol + PPF). Section masquée si
     /// aucun annuaire n'est chargé (`peppol` et `ppf` tous deux `None`).
     pub coverage: &'a crate::coverage::Coverage,
+    /// Sécurisation de la montée en charge (jointure résolutions × annuaires).
+    /// `None` = les 2 annuaires ne sont pas chargés → section non rendue.
+    pub securisation: Option<&'a crate::securisation::Securisation>,
 }
 
 /// CSS du rapport — la maquette validée le 16/07/2026, identité « Bleu nuit
@@ -39,6 +42,7 @@ const CSS: &str = r#"
     --track: #223050;
     --green-later: #2f8050; /* prêt plus tard : vert éteint, pris sur le vert */
     --ppf-l1: #6f6aa8; --ppf-l2: #8a80d4; --ppf-l3: #a892ff; --ppf-l4: #c3b6ff;
+    --sec-1: #3f7d54; --sec-2: #46a862; --sec-3: #5bd07d; --sec-4: #8be0a3;
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--fg);
@@ -97,11 +101,11 @@ const CSS: &str = r#"
   /* Fond clair à l'écran quand le lecteur a un thème clair (OS/navigateur) —
      même palette que l'impression, toujours sans JS. */
   @media (prefers-color-scheme: light) {
-    :root { --bg: #ffffff; --card: #f6f5f1; --border: #d8d5cc; --fg: #1c2333; --muted: #5c6478; --track: #e4e1d8; --ppf-l1: #8b86c4; --ppf-l2: #7a6fd0; --ppf-l3: #6a58c8; --ppf-l4: #5741b0; }
+    :root { --bg: #ffffff; --card: #f6f5f1; --border: #d8d5cc; --fg: #1c2333; --muted: #5c6478; --track: #e4e1d8; --ppf-l1: #8b86c4; --ppf-l2: #7a6fd0; --ppf-l3: #6a58c8; --ppf-l4: #5741b0; --sec-1: #6fb589; --sec-2: #4fa06d; --sec-3: #2f8b50; --sec-4: #1a7340; }
     .ring-sub { fill: #5c6478; }
   }
   @media print {
-    :root { --bg: #ffffff; --card: #f6f5f1; --border: #d8d5cc; --fg: #1c2333; --muted: #5c6478; --track: #e4e1d8; --ppf-l1: #8b86c4; --ppf-l2: #7a6fd0; --ppf-l3: #6a58c8; --ppf-l4: #5741b0; }
+    :root { --bg: #ffffff; --card: #f6f5f1; --border: #d8d5cc; --fg: #1c2333; --muted: #5c6478; --track: #e4e1d8; --ppf-l1: #8b86c4; --ppf-l2: #7a6fd0; --ppf-l3: #6a58c8; --ppf-l4: #5741b0; --sec-1: #6fb589; --sec-2: #4fa06d; --sec-3: #2f8b50; --sec-4: #1a7340; }
     .page { padding: 0; }
     .ring-sub { fill: #5c6478; }
   }
@@ -120,6 +124,20 @@ const CSS: &str = r#"
   .cov-sub.last .cov-n b { color: var(--ppf-l4); }
   .cov-gh { color: var(--muted); font-size: 12px; text-transform: uppercase;
     letter-spacing: .06em; margin: 16px 0 4px; }
+  .unit { color: var(--muted); font-weight: 400; font-size: 12.5px; }
+  .h2sub { color: var(--muted); font-size: 12.5px; margin: 8px 0 14px; }
+  .sec-subh { font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--muted); margin: 18px 0 8px; }
+  .sec-row { display: grid; grid-template-columns: 260px 1fr 110px; gap: 14px; align-items: center;
+    padding: 6px 0; font-size: 14px; }
+  .sec-row .tag { color: var(--muted); font-size: 11.5px; }
+  .kpi.sec .v { color: var(--sec-3); }
+  .kpi.sec.strong .v { color: var(--sec-4); }
+  .kpi .abs { color: var(--muted); font-size: 12.5px; margin-top: 1px; }
+  .kpi .abs b { color: var(--fg); }
+  .compo { color: var(--muted); font-size: 12.5px; margin: 12px 0 0; padding-top: 10px;
+    border-top: 1px solid var(--border); }
+  .compo b { color: var(--fg); }
 "#;
 
 pub fn render(d: &ReportData) -> String {
@@ -247,7 +265,7 @@ pub fn render(d: &ReportData) -> String {
     // Plateformes constatées — top 5, le reste agrégé.
     let (shown, autres) = pa_rows(s);
     if !shown.is_empty() || autres.is_some() {
-        html.push_str("<h2>Plateformes de dématérialisation constatées</h2>\n<div class=\"pa\">\n");
+        html.push_str("<h2>Plateformes de dématérialisation constatées <span class=\"unit\">· en adressages uniques</span></h2>\n<div class=\"pa\">\n");
         let max = shown
             .iter()
             .map(|(_, c)| *c)
@@ -272,6 +290,12 @@ pub fn render(d: &ReportData) -> String {
     // Présence déclarative en annuaire (Peppol + PPF) — après le réseau, dont
     // elle est explicitement distincte.
     coverage_section(&mut html, d.coverage, d.record_plural);
+
+    // Sécurisation de la montée en charge — jointure résolutions × annuaires,
+    // absente si les 2 annuaires ne sont pas chargés.
+    if let Some(secu) = d.securisation {
+        securisation_section(&mut html, secu, d.record_plural);
+    }
 
     // Pied de page.
     html.push_str(&format!(
@@ -314,7 +338,9 @@ fn coverage_section(html: &mut String, c: &crate::coverage::Coverage, record_plu
         ));
     };
 
-    html.push_str("<h2>Présence déclarative en annuaire</h2>\n<div class=\"pa\">\n");
+    html.push_str(&format!(
+        "<h2>Présence déclarative en annuaire <span class=\"unit\">· en {record_plural}</span></h2>\n<div class=\"pa\">\n"
+    ));
     html.push_str(&format!(
         "<p class=\"cov-elig\"><b>{}</b> éligibles 0225 / <b>{}</b> {} · <b>{}</b> non applicables — \
          présence déclarée dans les annuaires chargés, distincte du « Provisionnés Réseau Peppol » ci-dessus.</p>\n",
@@ -334,6 +360,71 @@ fn coverage_section(html: &mut String, c: &crate::coverage::Coverage, record_plu
         row(html, true, true, "ppf-l4", "PPF utilisable", "actif + PDP réelle", p.usable, false);
     }
     html.push_str("</div>\n");
+}
+
+// Section « Sécurisation de la montée en charge » : entonnoir d'attrition
+// (niveaux emboîtés) + synthèse (2 chiffres + composantes). En lignes du
+// fichier, libellées `record_plural` — jamais « ligne » en dur.
+fn securisation_section(html: &mut String, s: &crate::securisation::Securisation, record_plural: &str) {
+    let denom = s.total_lines;
+    let pct = |n: usize| -> String {
+        match (n * 100 + denom / 2).checked_div(denom) {
+            Some(v) => format!("{v}\u{202F}%"),
+            None => "—".to_string(),
+        }
+    };
+    let width = |n: usize| -> f64 {
+        if denom == 0 { 0.0 } else { n as f64 * 100.0 / denom as f64 }
+    };
+    let row = |html: &mut String, color: &str, name: &str, tag: &str, n: usize, bold: bool| {
+        let nm = if bold { format!("<b>{name}</b>") } else { name.to_string() };
+        let tg = if tag.is_empty() { String::new() } else { format!(" <span class=\"tag\">{tag}</span>") };
+        html.push_str(&format!(
+            "<div class=\"sec-row\"><span class=\"cov-name\">\
+             <span class=\"cov-sw\" style=\"background:var(--{color})\"></span>{nm}{tg}</span>\
+             <span class=\"bar\"><i style=\"width:{:.0}%;background:var(--{color})\"></i></span>\
+             <span class=\"cov-n\"><b>{}</b> · {}</span></div>\n",
+            width(n), fmt_int(n as u64), pct(n)
+        ));
+    };
+
+    html.push_str(&format!(
+        "<h2>Sécurisation de la montée en charge <span class=\"unit\">· en {record_plural}</span></h2>\n"
+    ));
+    html.push_str(&format!(
+        "<p class=\"h2sub\">Sur <b>{}</b> {record_plural} — la part prête sur tous les axes de la \
+         facturation électronique française.</p>\n<div class=\"pa\">\n",
+        fmt_int(denom as u64)
+    ));
+
+    html.push_str("<div class=\"sec-subh\">Entonnoir d'attrition</div>\n");
+    row(html, "sec-1", "Provisionnés réseau Peppol", "", s.provisionnes, false);
+    row(html, "sec-2", "+ extension FR prête", "", s.avec_extension, false);
+    row(html, "sec-3", "+ PPF utilisable", "= cœur sécurisé", s.coeur, true);
+    row(html, "sec-4", "+ annuaire Peppol", "= pleinement sécurisés", s.pleinement, true);
+
+    html.push_str("<div class=\"sec-subh\">Synthèse</div>\n<div class=\"kpis\">\n");
+    html.push_str(&format!(
+        "<div class=\"kpi sec\"><div class=\"v\">{}</div><div class=\"l\">Cœur sécurisé</div>\
+         <div class=\"abs\"><b>{}</b> {record_plural}</div>\
+         <div class=\"d\">PPF utilisable + provisionné Peppol + extension FR prête</div></div>\n",
+        pct(s.coeur), fmt_int(s.coeur as u64)
+    ));
+    html.push_str(&format!(
+        "<div class=\"kpi sec strong\"><div class=\"v\">{}</div><div class=\"l\">Pleinement sécurisés</div>\
+         <div class=\"abs\"><b>{}</b> {record_plural}</div>\
+         <div class=\"d\">… et aussi présents dans l'annuaire Peppol</div></div>\n",
+        pct(s.pleinement), fmt_int(s.pleinement as u64)
+    ));
+    html.push_str("</div>\n");
+
+    html.push_str(&format!(
+        "<p class=\"compo\">Composantes, chacune prise seule : <b>{}</b> PPF utilisable · \
+         <b>{}</b> provisionnés Peppol · <b>{}</b> extension FR prête.</p>\n</div>\n",
+        fmt_int(s.ppf_usable_seul as u64),
+        fmt_int(s.provisionnes as u64),
+        fmt_int(s.ctc_ready_seul as u64)
+    ));
 }
 
 // Chaque paramètre est une donnée distincte de la tuile (cible, couleur, deux
@@ -537,6 +628,70 @@ mod tests {
         ReportData { coverage: cov, ..data(s) }
     }
 
+    fn secu_full() -> crate::securisation::Securisation {
+        crate::securisation::Securisation {
+            total_lines: 126_316,
+            provisionnes: 98_000,
+            avec_extension: 61_000,
+            coeur: 12_340,
+            pleinement: 9_210,
+            ppf_usable_seul: 18_609,
+            ctc_ready_seul: 61_000,
+        }
+    }
+
+    #[test]
+    fn securisation_section_rendue() {
+        let s = snap();
+        let secu = secu_full();
+        let d = ReportData { securisation: Some(&secu), ..data(&s) };
+        let html = render(&d);
+        assert!(html.contains("Sécurisation de la montée en charge"), "titre");
+        assert!(html.contains("Entonnoir d'attrition"), "sous-titre entonnoir");
+        assert!(html.contains("Synthèse"), "sous-titre synthèse");
+        assert!(html.contains("Cœur sécurisé"), "libellé cœur");
+        assert!(html.contains("Pleinement sécurisés"), "libellé pleinement");
+        assert!(html.contains(&fmt_int(12_340)), "compte cœur");
+        assert!(html.contains(&fmt_int(9_210)), "compte pleinement");
+        assert!(html.contains(&fmt_int(18_609)), "composante PPF utilisable");
+    }
+
+    #[test]
+    fn securisation_absente_si_none() {
+        let html = render(&data(&snap())); // securisation = None via data()
+        assert!(!html.contains("Sécurisation de la montée en charge"));
+    }
+
+    #[test]
+    fn titre_pa_annote_en_adressages() {
+        let html = render(&data(&snap())); // snap() a des PA
+        assert!(html.contains("Plateformes de dématérialisation constatées"));
+        assert!(html.contains("en adressages uniques"), "unité PA absente du titre");
+    }
+
+    #[test]
+    fn titre_couverture_annote_avec_record_label() {
+        let s = snap();
+        let cov = cov_full(); // couverture présente → section rendue
+        let d = ReportData { coverage: &cov, ..data(&s) };
+        let html = render(&d);
+        assert!(html.contains("Présence déclarative en annuaire"));
+        // record_plural de data() = "lignes" (label par défaut ⇒ « en lignes » est correct ici)
+        assert!(html.contains("en lignes"), "unité couverture absente du titre");
+    }
+
+    #[test]
+    fn securisation_respecte_record_label() {
+        let s = snap();
+        let secu = secu_full();
+        let cov = cov_full();
+        let mut d = ReportData { securisation: Some(&secu), coverage: &cov, ..data(&s) };
+        d.record_plural = "abonnés";
+        let html = render(&d);
+        assert!(!html.contains("lignes"), "aucun « lignes » codé en dur avec un autre label");
+        assert!(html.contains("abonnés"), "le libellé record doit apparaître");
+    }
+
     fn named(pairs: &[(&str, u64)]) -> Vec<NamedCount> {
         pairs
             .iter()
@@ -594,6 +749,7 @@ mod tests {
             snapshot: s,
             record_plural: "lignes",
             coverage: &EMPTY_COV,
+            securisation: None,
         }
     }
 

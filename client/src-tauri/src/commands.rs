@@ -130,6 +130,49 @@ fn coverage_from_scan(
     ))
 }
 
+/// Sécurisation de la montée en charge à partir d'un scan déjà fait. Gate : les
+/// DEUX annuaires doivent être chargés (sinon cœur/pleinement seraient des zéros
+/// trompeurs) → `Ok(None)`. Population : lignes du fichier courant, dernier état
+/// de résolution connu en base (`load_map`). `ctc_ready` réutilise
+/// `output::ctc_status` (parité colonne CSV).
+fn securisation_from_scan(
+    store: &Store,
+    pids: &[String],
+    line_counts: &HashMap<String, u64>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<Option<crate::securisation::Securisation>, String> {
+    if store.peppol_directory_status()?.is_none() || store.ppf_summary()?.distinct_addr == 0 {
+        return Ok(None);
+    }
+    let resolutions = store.load_map(pids)?;
+    let values: Vec<String> = pids
+        .iter()
+        .filter_map(|p| crate::directory::parse_0225_value(p))
+        .collect();
+    let present = store.directory_present(&values)?;
+    let ppf = store.ppf_flags(&values)?;
+
+    let mut lines: Vec<crate::securisation::LineFlags> = Vec::with_capacity(pids.len());
+    for p in pids {
+        let weight = *line_counts.get(p).unwrap_or(&0) as usize;
+        let r = resolutions.get(p);
+        let in_peppol = r.map(|r| r.exists_in_peppol == Some(true)).unwrap_or(false);
+        let ctc_ready = r.map(|r| crate::output::ctc_status(r, now) == "ready").unwrap_or(false);
+        let (ppf_usable, in_directory) = match crate::directory::parse_0225_value(p) {
+            Some(v) => (ppf.get(&v).map(|f| f.usable).unwrap_or(false), present.contains(&v)),
+            None => (false, false),
+        };
+        lines.push(crate::securisation::LineFlags {
+            weight,
+            in_peppol,
+            ctc_ready,
+            ppf_usable,
+            in_directory,
+        });
+    }
+    Ok(Some(crate::securisation::compute(&lines)))
+}
+
 #[derive(Serialize)]
 pub struct PreviewPayload {
     #[serde(flatten)]
@@ -527,18 +570,20 @@ pub async fn export_report(state: State<'_, AppState>) -> Result<String, String>
     let store = state.store.clone();
     // Scan CSV + requêtes store : bloquants, hors executor tokio.
     tokio::task::spawn_blocking(move || {
-        // Couverture calculée sur l'entrée COURANTE. Tolérante : si le fichier
-        // a été déplacé/supprimé depuis le run (ou une requête store échoue), le
-        // rapport reste exportable — il se génère alors sans la section
-        // couverture (repli EMPTY), restaurant le comportement d'avant où le
-        // rapport dérivait du seul Snapshot.
-        let coverage = match scan_unique_pids(&input, &cfg.input.pid_column) {
+        // Agrégats annuaire/sécurisation sur l'entrée COURANTE, un seul scan.
+        // Tolérant : entrée illisible → rapport sans ces sections.
+        let (coverage, securisation) = match scan_unique_pids(&input, &cfg.input.pid_column) {
             Ok((_, pids, line_counts)) => {
+                let now_utc = chrono::Utc::now();
                 let store_g = store.lock().unwrap();
-                coverage_from_scan(&store_g, &pids, &line_counts)
-                    .unwrap_or(crate::coverage::Coverage::EMPTY)
+                let cov = coverage_from_scan(&store_g, &pids, &line_counts)
+                    .unwrap_or(crate::coverage::Coverage::EMPTY);
+                let secu = securisation_from_scan(&store_g, &pids, &line_counts, now_utc)
+                    .ok()
+                    .flatten();
+                (cov, secu)
             }
-            Err(_) => crate::coverage::Coverage::EMPTY,
+            Err(_) => (crate::coverage::Coverage::EMPTY, None),
         };
         let now = chrono::Local::now();
         let html = report::render(&report::ReportData {
@@ -550,6 +595,7 @@ pub async fn export_report(state: State<'_, AppState>) -> Result<String, String>
             snapshot: &snapshot,
             record_plural: cfg.input.record_label.plural(),
             coverage: &coverage,
+            securisation: securisation.as_ref(),
         });
         let out = resolved_out_dir(&input, &cfg.output.dir).join(format!(
             "{}_rapport.html",
