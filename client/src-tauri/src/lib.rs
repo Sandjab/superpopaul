@@ -12,6 +12,7 @@ pub mod pid;
 pub mod ppf;
 pub mod resolver;
 pub mod report;
+pub mod securisation;
 pub mod store;
 pub mod telemetry;
 
