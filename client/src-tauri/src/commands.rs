@@ -1,5 +1,5 @@
 use crate::api::{ApiClient, CallStats, ProxyCreds};
-use crate::config::{self, ApiMode, Config};
+use crate::config::{self, ApiMode, ColumnSpec, Config, PeppolField};
 use crate::csv_io;
 use crate::modes::{compute_todo, RunMode};
 use crate::output;
@@ -524,6 +524,27 @@ pub async fn generate_output(state: State<'_, AppState>) -> Result<String, Strin
         // seule Connection SQLite). Alternative future si ça pique : une 2e
         // connexion lecture seule (le WAL permet lectures // écritures).
         let resolutions = store.lock().unwrap().load_map(&pids)?;
+        // Présence annuaire : uniquement si la colonne est demandée ET
+        // l'annuaire chargé (sinon None → colonne vide côté output).
+        let wants_dir = cfg
+            .output
+            .columns
+            .iter()
+            .any(|c| matches!(c, ColumnSpec::Peppol { field: PeppolField::InDirectory }));
+        let directory = if wants_dir {
+            let s = store.lock().unwrap();
+            if s.peppol_directory_status()?.is_some() {
+                let vals: Vec<String> = pids
+                    .iter()
+                    .filter_map(|p| crate::directory::parse_0225_value(p))
+                    .collect();
+                Some(s.directory_present(&vals)?)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         let out = resolved_out_dir(&input, &cfg.output.dir)
             .join(output::out_file_name(&input, &cfg.output.suffix));
         let stamp = cfg
@@ -536,7 +557,7 @@ pub async fn generate_output(state: State<'_, AppState>) -> Result<String, Strin
             &cfg.input.pid_column,
             &cfg.output,
             &resolutions,
-            None,
+            directory.as_ref(),
             &out,
             stamp.as_deref(),
         )?;
