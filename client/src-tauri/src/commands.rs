@@ -546,6 +546,32 @@ pub async fn generate_output(state: State<'_, AppState>) -> Result<String, Strin
         } else {
             None
         };
+        // Drapeaux PPF : uniquement si une colonne PPF est demandée ET
+        // l'annuaire PPF est non vide (sinon None → colonnes vides). Miroir du
+        // gate `directory` ci-dessus.
+        let wants_ppf = cfg.output.columns.iter().any(|c| {
+            matches!(
+                c,
+                ColumnSpec::Peppol { field: PeppolField::AnnuairePpf }
+                    | ColumnSpec::Peppol { field: PeppolField::PpfActive }
+                    | ColumnSpec::Peppol { field: PeppolField::PdpDefinie }
+                    | ColumnSpec::Peppol { field: PeppolField::PpfUsable }
+            )
+        });
+        let ppf = if wants_ppf {
+            let s = store.lock().unwrap();
+            if s.ppf_summary()?.distinct_addr > 0 {
+                let ids: Vec<String> = pids
+                    .iter()
+                    .filter_map(|p| crate::directory::parse_0225_value(p))
+                    .collect();
+                Some(s.ppf_flags(&ids)?)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         let out = resolved_out_dir(&input, &cfg.output.dir)
             .join(output::out_file_name(&input, &cfg.output.suffix));
         let stamp = cfg
@@ -559,7 +585,7 @@ pub async fn generate_output(state: State<'_, AppState>) -> Result<String, Strin
             &cfg.output,
             &resolutions,
             directory.as_ref(),
-            None,
+            ppf.as_ref(),
             &out,
             stamp.as_deref(),
         )?;
