@@ -159,7 +159,7 @@ function renderCoverage(cov) {
   const bar = (n, color) => h("span", { class: "cov-bar" },
     h("i", { style: `width:${pctVal(n)}%;background:var(--${color})` }));
   const num = (n) => h("span", { class: "cov-num" },
-    h("b", {}, fmt(n)), ` / ${fmt(denom)} `, h("span", { class: "cov-pct" }, pctLabel(n)));
+    h("b", {}, fmt(n)), " · ", h("span", { class: "cov-pct" }, pctLabel(n)));
 
   // « lignes » suit le libellé record_label configuré (comme les tuiles voisines
   // via .rec-label), plutôt qu'un mot figé.

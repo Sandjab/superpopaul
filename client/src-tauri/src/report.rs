@@ -309,8 +309,8 @@ fn coverage_section(html: &mut String, c: &crate::coverage::Coverage, record_plu
             "<div class=\"{cls}\"><span class=\"cov-name\">\
              <span class=\"cov-sw\" style=\"background:var(--{color})\"></span>{name_html}{tag_html}</span>\
              <span class=\"bar\"><i style=\"width:{:.0}%;background:var(--{color})\"></i></span>\
-             <span class=\"cov-n\"><b>{}</b> / {} · {}</span></div>\n",
-            width(n), fmt_int(n as u64), fmt_int(denom as u64), pct(n)
+             <span class=\"cov-n\"><b>{}</b> · {}</span></div>\n",
+            width(n), fmt_int(n as u64), pct(n)
         ));
     };
 
