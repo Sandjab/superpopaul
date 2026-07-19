@@ -60,7 +60,7 @@ pub fn stream_ppf<R: Read>(
                     motif: motif.to_string(),
                     pdp_fictive,
                 });
-                if lines % 100_000 == 0 {
+                if lines.is_multiple_of(100_000) {
                     on_progress(lines);
                 }
             }
