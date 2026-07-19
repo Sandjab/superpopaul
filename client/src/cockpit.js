@@ -635,6 +635,15 @@ async function writeOutput() {
         "Afficher dans le dossier"),
       h("button", { onclick: (ev) => copyReport(ev.currentTarget) }, "Copier le bilan"),
       h("button", { onclick: (ev) => exportReport(ev.currentTarget) }, "Rapport HTML"));
+
+    const hasDir = state.config.output.columns.some(
+      (c) => c.source === "peppol" && c.field === "in_directory");
+    if (hasDir) {
+      const st = await invoke("directory_status").catch(() => null);
+      if (!st)
+        banner("warn",
+          "La colonne « annuaire Peppol » est vide : l'annuaire n'a pas été chargé (onglet Fichiers).");
+    }
   } catch (err) {
     res.classList.add("failed");
     row.replaceChildren(
