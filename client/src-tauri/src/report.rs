@@ -19,6 +19,9 @@ pub struct ReportData<'a> {
     pub today: chrono::NaiveDate,
     pub version: &'a str,
     pub snapshot: &'a Snapshot,
+    /// Pluriel du libellé « ce que représente une ligne » (config
+    /// `record_label`) — remplace « lignes » dans le rapport.
+    pub record_plural: &'a str,
 }
 
 /// CSS du rapport — la maquette validée le 16/07/2026, identité « Bleu nuit
@@ -106,10 +109,11 @@ pub fn render(d: &ReportData) -> String {
         "<header>\n<div class=\"wordmark\">SUPER POPAUL</div>\n\
          <h1>Rapport de résolution Peppol</h1>\n\
          <p class=\"meta\">Fichier <b>{file}</b> · analysé le <b>{}</b> ·\n\
-         <b>{}</b> adressages uniques (<b>{}</b> lignes)</p>\n</header>\n",
+         <b>{}</b> adressages uniques (<b>{}</b> {})</p>\n</header>\n",
         esc(d.date_longue),
         fmt_int(s.done),
         fmt_int(s.done_lines),
+        d.record_plural,
     ));
 
     // Paliers de projection (3 max, horizon 2 ans) : partagés entre la tuile
@@ -120,7 +124,7 @@ pub fn render(d: &ReportData) -> String {
     // Double lecture : le grand % est en adressages, le détail donne aussi
     // l'équivalent en lignes de fichier.
     html.push_str("<div class=\"kpis\">\n");
-    kpi(&mut html, "gold", s.exists, s.exists_lines, s, "Inscrits dans Peppol", None);
+    kpi(&mut html, "gold", s.exists, s.exists_lines, s, "Inscrits dans Peppol", None, d.record_plural);
     kpi(
         &mut html,
         "green",
@@ -131,12 +135,13 @@ pub fn render(d: &ReportData) -> String {
         pal.first().map(|p| {
             format!("<b>+{}</b> au {}", fmt_pct(p.addr, s.done), fmt_date_fr(&p.date))
         }),
+        d.record_plural,
     );
     if s.no_verdict > 0 {
-        kpi(&mut html, "amber", s.no_verdict, s.no_verdict_lines, s, "Verdict inconnu (catalogue illisible)", None);
+        kpi(&mut html, "amber", s.no_verdict, s.no_verdict_lines, s, "Verdict inconnu (catalogue illisible)", None, d.record_plural);
     }
     if s.failed > 0 {
-        kpi(&mut html, "red", s.failed, s.failed_lines, s, "Non résolus", None);
+        kpi(&mut html, "red", s.failed, s.failed_lines, s, "Non résolus", None, d.record_plural);
     }
     html.push_str("</div>\n");
 
@@ -159,10 +164,11 @@ pub fn render(d: &ReportData) -> String {
          <text x=\"105\" y=\"135\" text-anchor=\"middle\" class=\"ring-sub\">prêts aujourd'hui</text>\n</svg>\n",
         fmt_pct(s.ctc, s.done)
     ));
-    html.push_str(
+    html.push_str(&format!(
         "<div class=\"legend\">\n<span></span><span></span>\
-         <span class=\"h\">adressages</span><span class=\"h\">lignes</span>\n",
-    );
+         <span class=\"h\">adressages</span><span class=\"h\">{}</span>\n",
+        d.record_plural,
+    ));
     for (color, label, addr, lignes) in legend_rows(s) {
         html.push_str(&format!(
             "<span class=\"dot\" style=\"background:var(--{color})\"></span><span>{label}</span>\
@@ -247,6 +253,10 @@ pub fn render(d: &ReportData) -> String {
     html
 }
 
+// Chaque paramètre est une donnée distincte de la tuile (cible, couleur, deux
+// comptes, snapshot, libellé, projection, libellé pluriel) — pas un défaut de
+// conception ; on tolère la liste longue comme `output::generate`.
+#[allow(clippy::too_many_arguments)]
 fn kpi(
     html: &mut String,
     color: &str,
@@ -255,6 +265,7 @@ fn kpi(
     s: &Snapshot,
     label: &str,
     proj: Option<String>,
+    record_plural: &str,
 ) {
     // `proj` : ligne de projection sous filet (tuile verte : prochain palier).
     // HTML déjà formé côté appelant — uniquement à partir de valeurs internes.
@@ -263,10 +274,11 @@ fn kpi(
         .unwrap_or_default();
     html.push_str(&format!(
         "<div class=\"kpi {color}\"><div class=\"v\">{}</div><div class=\"l\">{label}</div>\
-         <div class=\"d\">{} adressages</div><div class=\"d\">{} lignes ({})</div>{proj}</div>\n",
+         <div class=\"d\">{} adressages</div><div class=\"d\">{} {} ({})</div>{proj}</div>\n",
         fmt_pct(addr, s.done),
         fmt_int(addr),
         fmt_int(lignes),
+        record_plural,
         fmt_pct(lignes, s.done_lines)
     ));
 }
@@ -472,7 +484,26 @@ mod tests {
             today: "2026-07-16".parse().unwrap(),
             version: "0.3.4",
             snapshot: s,
+            record_plural: "lignes",
         }
+    }
+
+    #[test]
+    fn rapport_utilise_le_libelle_record_partout() {
+        // Le libellé configuré (record_label.plural()) remplace « lignes » dans
+        // les trois zones du rapport : en-tête, en-tête de légende, tuiles KPI.
+        let s = snap();
+        let mut d = data(&s);
+        d.record_plural = "abonnés";
+        let html = render(&d);
+        assert!(
+            html.matches("abonnés").count() >= 3,
+            "le libellé doit remplacer « lignes » (en-tête + légende + ≥1 KPI)"
+        );
+        assert!(
+            !html.contains("lignes"),
+            "aucun « lignes » codé en dur ne doit subsister dans le rendu"
+        );
     }
 
     /// snap() + 535 « prêts plus tard » (498 au 01/09, 37 au 22/09 — le cas

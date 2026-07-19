@@ -489,6 +489,7 @@ pub fn export_report(state: State<'_, AppState>) -> Result<String, String> {
         today: now.date_naive(),
         version: env!("CARGO_PKG_VERSION"),
         snapshot: &snapshot,
+        record_plural: cfg.input.record_label.plural(),
     });
     let out = resolved_out_dir(&input, &cfg.output.dir).join(format!(
         "{}_rapport.html",
