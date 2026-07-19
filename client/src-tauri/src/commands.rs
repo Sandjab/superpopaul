@@ -92,6 +92,44 @@ fn scan_unique_pids(
     Ok((meta, unique_canonical(vals), line_counts))
 }
 
+/// Couverture annuaire déclarative à partir d'un scan déjà effectué. Gate
+/// INDÉPENDANT par annuaire (chargé ou non) — miroir des gates de
+/// `generate_output`, mais SANS condition « colonne demandée » : le panneau de
+/// couverture est indépendant de la config des colonnes de sortie. Comptage
+/// par ligne : chaque PID unique est pondéré par son nombre de lignes.
+fn coverage_from_scan(
+    store: &Store,
+    pids: &[String],
+    line_counts: &HashMap<String, u64>,
+) -> Result<crate::coverage::Coverage, String> {
+    let mut eligible: Vec<(String, usize)> = Vec::new();
+    let mut non_applicable: usize = 0;
+    for p in pids {
+        let n = *line_counts.get(p).unwrap_or(&0) as usize;
+        match crate::directory::parse_0225_value(p) {
+            Some(v) => eligible.push((v, n)),
+            None => non_applicable += n,
+        }
+    }
+    let values: Vec<String> = eligible.iter().map(|(v, _)| v.clone()).collect();
+    let present = if store.peppol_directory_status()?.is_some() {
+        Some(store.directory_present(&values)?)
+    } else {
+        None
+    };
+    let ppf = if store.ppf_summary()?.distinct_addr > 0 {
+        Some(store.ppf_flags(&values)?)
+    } else {
+        None
+    };
+    Ok(crate::coverage::compute(
+        &eligible,
+        non_applicable,
+        present.as_ref(),
+        ppf.as_ref(),
+    ))
+}
+
 #[derive(Serialize)]
 pub struct PreviewPayload {
     #[serde(flatten)]
@@ -197,6 +235,7 @@ pub struct InputStats {
     pub failed: usize,
     pub stale: usize,
     pub missing: usize,
+    pub coverage: crate::coverage::Coverage,
 }
 
 /// Compare le fichier d'entrée à la base : alimente la popup de reprise et la
@@ -209,8 +248,11 @@ pub async fn analyze_input(state: State<'_, AppState>) -> Result<InputStats, Str
     // Scan CSV (500k lignes possibles) + load_map SQLite : bloquants, hors
     // executor tokio.
     tokio::task::spawn_blocking(move || {
-        let (_, pids, _) = scan_unique_pids(&input, &cfg.input.pid_column)?;
-        let known = store.lock().unwrap().load_map(&pids)?;
+        let (_, pids, line_counts) = scan_unique_pids(&input, &cfg.input.pid_column)?;
+        let store_g = store.lock().unwrap();
+        let known = store_g.load_map(&pids)?;
+        let coverage = coverage_from_scan(&store_g, &pids, &line_counts)?;
+        drop(store_g);
         let now = chrono::Utc::now().timestamp();
         let max_age = cfg.api.refresh_days as i64 * 86400;
         let (mut ok, mut failed, mut stale) = (0, 0, 0);
@@ -228,6 +270,7 @@ pub async fn analyze_input(state: State<'_, AppState>) -> Result<InputStats, Str
             failed,
             stale,
             missing: pids.len() - ok - failed - stale,
+            coverage,
         })
     })
     .await
