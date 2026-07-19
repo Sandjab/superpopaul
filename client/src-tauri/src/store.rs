@@ -30,6 +30,24 @@ pub struct DirStatus {
     pub source: String,
 }
 
+/// Une entrée de l'historique des ingestions PPF (et retour d'une ingestion).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PpfFile {
+    pub file_name: String,
+    pub lines: i64,
+    pub unique_addr: i64,
+    pub added_addr: i64,
+    pub is_duplicate: bool,
+    pub loaded_at: i64,
+}
+
+/// Résumé de l'annuaire PPF : adressages distincts en table et nombre de fichiers.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PpfSummary {
+    pub distinct_addr: i64,
+    pub file_count: i64,
+}
+
 pub struct Store {
     conn: Connection,
 }
@@ -53,6 +71,22 @@ CREATE TABLE IF NOT EXISTS peppol_directory_meta (
   loaded_at  INTEGER NOT NULL,
   count      INTEGER NOT NULL,
   source     TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS ppf_directory (
+  identifiant  TEXT NOT NULL,
+  motif        TEXT NOT NULL,
+  pdp_fictive  INTEGER NOT NULL,
+  PRIMARY KEY (identifiant, motif)
+);
+CREATE TABLE IF NOT EXISTS ppf_files (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  file_name     TEXT NOT NULL,
+  content_hash  TEXT NOT NULL,
+  lines         INTEGER NOT NULL,
+  unique_addr   INTEGER NOT NULL,
+  added_addr    INTEGER NOT NULL,
+  is_duplicate  INTEGER NOT NULL,
+  loaded_at     INTEGER NOT NULL
 );
 ";
 
@@ -276,6 +310,109 @@ impl Store {
                 },
             )
             .optional()
+            .map_err(|e| e.to_string())
+    }
+
+    /// Ingestion cumulative d'un fichier PPF déjà parsé, en UNE transaction.
+    /// `added_addr` = identifiants distincts nouveaux (COUNT(DISTINCT) après −
+    /// avant) ; `is_duplicate` = ce `content_hash` a déjà été ingéré.
+    pub fn ingest_ppf(
+        &self,
+        file_name: &str,
+        content_hash: &str,
+        rows: &[crate::ppf::PpfRow],
+        lines: i64,
+        loaded_at: i64,
+    ) -> Result<PpfFile, String> {
+        let unique_addr = rows
+            .iter()
+            .map(|r| r.identifiant.as_str())
+            .collect::<HashSet<_>>()
+            .len() as i64;
+        let tx = self.conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        let before: i64 = tx
+            .query_row("SELECT COUNT(DISTINCT identifiant) FROM ppf_directory", [], |r| r.get(0))
+            .map_err(|e| e.to_string())?;
+        {
+            let mut stmt = tx
+                .prepare_cached(
+                    "INSERT INTO ppf_directory (identifiant, motif, pdp_fictive)
+                     VALUES (?1, ?2, ?3)
+                     ON CONFLICT(identifiant, motif) DO UPDATE SET pdp_fictive = excluded.pdp_fictive",
+                )
+                .map_err(|e| e.to_string())?;
+            for r in rows {
+                stmt.execute(params![r.identifiant, r.motif, r.pdp_fictive])
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+        let after: i64 = tx
+            .query_row("SELECT COUNT(DISTINCT identifiant) FROM ppf_directory", [], |r| r.get(0))
+            .map_err(|e| e.to_string())?;
+        let is_duplicate: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM ppf_files WHERE content_hash = ?1)",
+                params![content_hash],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        let added_addr = after - before;
+        tx.execute(
+            "INSERT INTO ppf_files
+               (file_name, content_hash, lines, unique_addr, added_addr, is_duplicate, loaded_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![file_name, content_hash, lines, unique_addr, added_addr, is_duplicate, loaded_at],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(PpfFile { file_name: file_name.to_string(), lines, unique_addr, added_addr, is_duplicate, loaded_at })
+    }
+
+    /// Historique des fichiers ingérés, le plus récent en tête.
+    pub fn ppf_files(&self) -> Result<Vec<PpfFile>, String> {
+        let mut stmt = self
+            .conn
+            .prepare_cached(
+                "SELECT file_name, lines, unique_addr, added_addr, is_duplicate, loaded_at
+                 FROM ppf_files ORDER BY id DESC",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(PpfFile {
+                    file_name: r.get(0)?,
+                    lines: r.get(1)?,
+                    unique_addr: r.get(2)?,
+                    added_addr: r.get(3)?,
+                    is_duplicate: r.get::<_, i64>(4)? != 0,
+                    loaded_at: r.get(5)?,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(|e| e.to_string())?);
+        }
+        Ok(out)
+    }
+
+    /// Adressages distincts en table et nombre de fichiers ingérés.
+    pub fn ppf_summary(&self) -> Result<PpfSummary, String> {
+        let distinct_addr: i64 = self
+            .conn
+            .query_row("SELECT COUNT(DISTINCT identifiant) FROM ppf_directory", [], |r| r.get(0))
+            .map_err(|e| e.to_string())?;
+        let file_count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM ppf_files", [], |r| r.get(0))
+            .map_err(|e| e.to_string())?;
+        Ok(PpfSummary { distinct_addr, file_count })
+    }
+
+    /// Reset : vide la table et l'historique (les fichiers sur disque intacts).
+    pub fn reset_ppf(&self) -> Result<(), String> {
+        self.conn
+            .execute_batch("DELETE FROM ppf_directory; DELETE FROM ppf_files;")
             .map_err(|e| e.to_string())
     }
 }
@@ -556,5 +693,107 @@ mod tests {
         let s = Store::open_in_memory().unwrap();
         s.replace_peppol_directory(&[], "file", 1).unwrap(); // table existe, vide
         assert!(s.directory_present(&["a".into()]).unwrap().is_empty());
+    }
+
+    fn ppf_row(id: &str, motif: &str, pdp: i64) -> crate::ppf::PpfRow {
+        crate::ppf::PpfRow { identifiant: id.into(), motif: motif.into(), pdp_fictive: pdp }
+    }
+
+    #[test]
+    fn ppf_upsert_cumulatif_conserve_les_motifs() {
+        let s = Store::open_in_memory().unwrap();
+        let rows = vec![ppf_row("id1", "C", 1), ppf_row("id1", "V", 0), ppf_row("id2", "C", 1)];
+        let f = s.ingest_ppf("a.csv", "hashA", &rows, 3, 1000).unwrap();
+        assert_eq!(f.unique_addr, 2, "id1 et id2 : deux adressages distincts");
+        assert_eq!(f.added_addr, 2);
+        assert_eq!(f.lines, 3);
+        assert!(!f.is_duplicate);
+        let sum = s.ppf_summary().unwrap();
+        assert_eq!(sum.distinct_addr, 2);
+        assert_eq!(sum.file_count, 1);
+    }
+
+    #[test]
+    fn ppf_added_compte_les_nouveaux_identifiants() {
+        let s = Store::open_in_memory().unwrap();
+        let f1 = s.ingest_ppf("a.csv", "hA", &[ppf_row("id1", "C", 1), ppf_row("id2", "C", 1)], 2, 1).unwrap();
+        assert_eq!(f1.added_addr, 2);
+        // Fichier 2 : id2 déjà là, seul id3 est nouveau.
+        let f2 = s.ingest_ppf("b.csv", "hB", &[ppf_row("id2", "C", 1), ppf_row("id3", "C", 0)], 2, 2).unwrap();
+        assert_eq!(f2.unique_addr, 2);
+        assert_eq!(f2.added_addr, 1);
+        assert_eq!(s.ppf_summary().unwrap().distinct_addr, 3);
+    }
+
+    #[test]
+    fn ppf_upsert_ecrase_pdp_du_meme_couple() {
+        let s = Store::open_in_memory().unwrap();
+        s.ingest_ppf("a.csv", "hA", &[ppf_row("id1", "C", 0)], 1, 1).unwrap();
+        let f2 = s.ingest_ppf("b.csv", "hB", &[ppf_row("id1", "C", 1)], 1, 2).unwrap();
+        assert_eq!(f2.added_addr, 0, "(id1,C) déjà présent : aucun nouvel adressage");
+        let pdp: i64 = s
+            .conn
+            .query_row(
+                "SELECT pdp_fictive FROM ppf_directory WHERE identifiant='id1' AND motif='C'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(pdp, 1, "l'upsert écrase pdp_fictive");
+    }
+
+    #[test]
+    fn ppf_is_duplicate_sur_hash_identique_pas_le_nom() {
+        let s = Store::open_in_memory().unwrap();
+        let f1 = s.ingest_ppf("a.csv", "HASH", &[ppf_row("id1", "C", 1)], 1, 1).unwrap();
+        assert!(!f1.is_duplicate);
+        // Nom DIFFÉRENT, même hash de contenu : c'est le hash qui décide.
+        let f2 = s.ingest_ppf("autre-nom.csv", "HASH", &[ppf_row("id1", "C", 1)], 1, 2).unwrap();
+        assert!(f2.is_duplicate);
+        assert_eq!(f2.added_addr, 0);
+    }
+
+    #[test]
+    fn ppf_reset_vide_table_et_historique() {
+        let s = Store::open_in_memory().unwrap();
+        s.ingest_ppf("a.csv", "hA", &[ppf_row("id1", "C", 1)], 1, 1).unwrap();
+        s.reset_ppf().unwrap();
+        let sum = s.ppf_summary().unwrap();
+        assert_eq!(sum.distinct_addr, 0);
+        assert_eq!(sum.file_count, 0);
+        assert!(s.ppf_files().unwrap().is_empty());
+    }
+
+    #[test]
+    fn ppf_files_ordonne_recent_en_tete() {
+        let s = Store::open_in_memory().unwrap();
+        s.ingest_ppf("a.csv", "hA", &[ppf_row("id1", "C", 1)], 1, 10).unwrap();
+        s.ingest_ppf("b.csv", "hB", &[ppf_row("id2", "C", 1)], 1, 20).unwrap();
+        let files = s.ppf_files().unwrap();
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0].file_name, "b.csv", "le plus récent en tête (id DESC)");
+        assert_eq!(files[1].file_name, "a.csv");
+    }
+
+    #[test]
+    fn ouverture_cree_les_tables_ppf() {
+        // Base préexistante sans les tables PPF → créées à l'ouverture.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sans_ppf.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE resolutions (
+                   participant TEXT PRIMARY KEY, exists_in_peppol INTEGER,
+                   pa_code TEXT, pa_name TEXT, pa_country TEXT,
+                   extended_ctc_fr INTEGER, api_status TEXT NOT NULL,
+                   resolved_at INTEGER NOT NULL );",
+            )
+            .unwrap();
+        }
+        let s = Store::open(&path).unwrap();
+        assert_eq!(s.ppf_summary().unwrap().file_count, 0);
+        s.ingest_ppf("a.csv", "hA", &[ppf_row("id1", "C", 1)], 1, 1).unwrap();
+        assert_eq!(s.ppf_summary().unwrap().distinct_addr, 1);
     }
 }
