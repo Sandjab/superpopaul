@@ -409,11 +409,14 @@ impl Store {
         Ok(PpfSummary { distinct_addr, file_count })
     }
 
-    /// Reset : vide la table et l'historique (les fichiers sur disque intacts).
+    /// Reset : vide la table et l'historique (les fichiers sur disque intacts),
+    /// dans UNE transaction — vider l'une sans l'autre laisserait un état
+    /// incohérent (des adressages sans historique, ou l'inverse).
     pub fn reset_ppf(&self) -> Result<(), String> {
-        self.conn
-            .execute_batch("DELETE FROM ppf_directory; DELETE FROM ppf_files;")
-            .map_err(|e| e.to_string())
+        let tx = self.conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        tx.execute_batch("DELETE FROM ppf_directory; DELETE FROM ppf_files;")
+            .map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())
     }
 }
 

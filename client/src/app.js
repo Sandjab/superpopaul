@@ -1105,7 +1105,7 @@ $("ppf-reset").addEventListener("click", () => {
         }, "Réinitialiser")
       )
     );
-  });
+  }).catch((err) => banner("error", `Annuaire PPF : ${err}`));
 });
 
 const pdz = $("ppf-dropzone");
