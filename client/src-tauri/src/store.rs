@@ -1,5 +1,5 @@
 use rusqlite::{params, Connection, OptionalExtension};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -240,6 +240,25 @@ impl Store {
         .map_err(|e| e.to_string())?;
         tx.commit().map_err(|e| e.to_string())?;
         Ok(count as usize)
+    }
+
+    /// Sous-ensemble de `values` réellement présents dans `peppol_directory`.
+    /// Par lots de 500 (limite de variables SQLite), motif `load_map`. La table
+    /// doit exister : appeler après `peppol_directory_status()` == Some.
+    pub fn directory_present(&self, values: &[String]) -> Result<HashSet<String>, String> {
+        let mut out = HashSet::new();
+        for chunk in values.chunks(500) {
+            let placeholders = vec!["?"; chunk.len()].join(",");
+            let sql = format!("SELECT value FROM peppol_directory WHERE value IN ({placeholders})");
+            let mut stmt = self.conn.prepare_cached(&sql).map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map(rusqlite::params_from_iter(chunk), |r| r.get::<_, String>(0))
+                .map_err(|e| e.to_string())?;
+            for v in rows {
+                out.insert(v.map_err(|e| e.to_string())?);
+            }
+        }
+        Ok(out)
     }
 
     /// État du dernier chargement de l'annuaire ; `None` si jamais chargé.
@@ -513,5 +532,29 @@ mod tests {
         assert!(s.peppol_directory_status().unwrap().is_none());
         s.replace_peppol_directory(&["z".into()], "file", 7).unwrap();
         assert_eq!(s.peppol_directory_status().unwrap().unwrap().count, 1);
+    }
+
+    #[test]
+    fn directory_present_renvoie_le_sous_ensemble_present() {
+        let s = Store::open_in_memory().unwrap();
+        s.replace_peppol_directory(&["a".into(), "b".into(), "c".into()], "file", 1).unwrap();
+        let got = s.directory_present(&["a".into(), "x".into(), "c".into()]).unwrap();
+        assert_eq!(got.len(), 2);
+        assert!(got.contains("a") && got.contains("c") && !got.contains("x"));
+    }
+
+    #[test]
+    fn directory_present_traverse_plusieurs_lots() {
+        let s = Store::open_in_memory().unwrap();
+        let vals: Vec<String> = (0..600).map(|i| format!("v{i}")).collect();
+        s.replace_peppol_directory(&vals, "file", 1).unwrap();
+        assert_eq!(s.directory_present(&vals).unwrap().len(), 600);
+    }
+
+    #[test]
+    fn directory_present_annuaire_vide() {
+        let s = Store::open_in_memory().unwrap();
+        s.replace_peppol_directory(&[], "file", 1).unwrap(); // table existe, vide
+        assert!(s.directory_present(&["a".into()]).unwrap().is_empty());
     }
 }
