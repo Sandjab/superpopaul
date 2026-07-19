@@ -51,6 +51,25 @@
           <div id="dir-bar" class="dir-bar"><span></span></div>
         </div>
       </div>
+
+      <div id="ppf-card">
+        <div class="dir-head">
+          <h3>Annuaire PPF <span class="chip-ref">référence</span></h3>
+          <span class="muted">Annuaire B2B du PPF (identifiants destinataires). Cumulatif : chaque fichier déposé enrichit la table ; « Reset » la vide entièrement.</span>
+        </div>
+        <div id="ppf-dropzone">
+          <span>Dépose un export PPF (<code>export_b2b_…csv</code>) ici</span>
+          <span class="dir-spacer"></span>
+          <button id="ppf-browse">Parcourir…</button>
+          <button id="ppf-reset" class="btn-danger">Reset…</button>
+        </div>
+        <div id="ppf-prog" class="hidden">
+          <div class="dir-prog-lbl"><span id="ppf-prog-text"></span><span id="ppf-prog-num"></span></div>
+          <div id="ppf-bar" class="dir-bar"><span></span></div>
+        </div>
+        <p id="ppf-summary" class="muted">Aucun fichier chargé.</p>
+        <table id="ppf-files" class="ppf-files hidden"></table>
+      </div>
     </section>
 
     <!-- Étape 2 : format d'entrée/sortie du fichier principal -->

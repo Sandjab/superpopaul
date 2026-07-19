@@ -254,18 +254,25 @@ dz.addEventListener("dragleave", () => dz.classList.remove("over"));
 listen("tauri://drag-drop", (e) => {
   dz.classList.remove("over");
   ddz.classList.remove("over");
+  $("ppf-dropzone").classList.remove("over");
   const paths = e.payload.paths || [];
   if (!paths.length || STEPS[current] !== "file") return;
   const pos = e.payload.position || { x: 0, y: 0 };
   const dpr = window.devicePixelRatio || 1;
   const x = pos.x / dpr, y = pos.y / dpr;
-  const r = ddz.getBoundingClientRect();
-  if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) {
-    if (!/\.(csv|txt)$/i.test(paths[0])) {
-      banner("warn", `Ce fichier n'est pas un CSV (.csv ou .txt attendu) : ${paths[0]}`);
-      return;
-    }
-    loadDirectory("file", paths[0]);
+  const inside = (el) => {
+    const r = el.getBoundingClientRect();
+    return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+  };
+  const csvOk = () => {
+    if (/\.(csv|txt)$/i.test(paths[0])) return true;
+    banner("warn", `Ce fichier n'est pas un CSV (.csv ou .txt attendu) : ${paths[0]}`);
+    return false;
+  };
+  if (inside(ddz)) {
+    if (csvOk()) loadDirectory("file", paths[0]);
+  } else if (inside($("ppf-dropzone"))) {
+    if (csvOk()) loadPpf(paths[0]);
   } else {
     pickInput(paths[0]);
   }
@@ -965,3 +972,145 @@ $("btn-load-cfg").addEventListener("click", async () => {
   syncStepperGating();
   renderProfileBar();
 });
+
+// --- Annuaire PPF (cumulatif, historique des fichiers, onglet Fichiers) -----
+
+/** Recharge le résumé + la table d'historique (via h(), jamais innerHTML). */
+function renderPpf() {
+  Promise.all([invoke("ppf_summary"), invoke("ppf_files")])
+    .then(([sum, files]) => {
+      const summary = $("ppf-summary");
+      const table = $("ppf-files");
+      if (!files.length) {
+        summary.className = "muted";
+        summary.replaceChildren(document.createTextNode("Aucun fichier chargé."));
+        table.classList.add("hidden");
+        table.replaceChildren();
+        return;
+      }
+      const plur = sum.file_count > 1 ? "s" : "";
+      summary.className = "";
+      summary.replaceChildren(
+        h("span", { class: "dot" }, "●"),
+        " ",
+        h("b", {}, sum.distinct_addr.toLocaleString("fr-FR")),
+        " adressages en table · ",
+        h("b", {}, String(sum.file_count)),
+        ` fichier${plur} ingéré${plur}`
+      );
+      const thead = h("thead", {}, h("tr", {},
+        h("th", {}, "Fichier"),
+        h("th", { class: "num" }, "Lignes"),
+        h("th", { class: "num" }, "Adressages uniques"),
+        h("th", { class: "num" }, "Ajoutés"),
+        h("th", {}, "Chargé le")
+      ));
+      const tbody = h("tbody", {});
+      for (const f of files) {
+        const name = h("td", { class: "name", title: f.file_name }, f.file_name);
+        if (f.is_duplicate) name.append(" ", h("span", { class: "ppf-dup" }, "(doublon)"));
+        const added = h("td", { class: `num added ${f.added_addr > 0 ? "pos" : "zero"}` });
+        if (f.added_addr > 0) added.append(h("b", {}, f.added_addr.toLocaleString("fr-FR")));
+        else added.append("0");
+        const when = new Date(f.loaded_at * 1000).toLocaleString("fr-FR", {
+          day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit",
+        });
+        tbody.append(h("tr", {},
+          name,
+          h("td", { class: "num" }, f.lines.toLocaleString("fr-FR")),
+          h("td", { class: "num" }, f.unique_addr.toLocaleString("fr-FR")),
+          added,
+          h("td", { class: "when" }, when)
+        ));
+      }
+      table.replaceChildren(thead, tbody);
+      table.classList.remove("hidden");
+    })
+    .catch((err) => banner("error", `Annuaire PPF : ${err}`));
+}
+
+function setPpfBusy(busy) {
+  $("ppf-browse").disabled = busy;
+  $("ppf-reset").disabled = busy;
+  $("ppf-prog").classList.toggle("hidden", !busy);
+  if (!busy) {
+    $("ppf-bar").classList.remove("indet");
+    $("ppf-bar").firstElementChild.style.width = "0";
+  }
+}
+
+let ppfBusy = false;
+
+async function loadPpf(path) {
+  if (ppfBusy) return;
+  ppfBusy = true;
+  setPpfBusy(true);
+  try {
+    await invoke("load_ppf_file", { path });
+    renderPpf();
+  } catch (err) {
+    banner("error", `Annuaire PPF : ${err}`);
+  } finally {
+    ppfBusy = false;
+    setPpfBusy(false);
+  }
+}
+
+// Progression : phase parse uniquement (barre indéterminée, lignes lues).
+listen("ppf://progress", (e) => {
+  const bar = $("ppf-bar");
+  bar.classList.add("indet");
+  bar.firstElementChild.style.width = "";
+  $("ppf-prog-text").textContent = "Analyse et chargement en base…";
+  $("ppf-prog-num").textContent = `${e.payload.done.toLocaleString("fr-FR")} lignes lues`;
+});
+
+$("ppf-browse").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  btn.disabled = true; // garde de ré-entrance pendant le dialog
+  try {
+    const f = await open({ multiple: false, filters: [{ name: "CSV", extensions: ["csv", "txt"] }] });
+    if (f) await loadPpf(f);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// Reset : modale de confirmation maison (nœuds DOM, jamais innerHTML).
+$("ppf-reset").addEventListener("click", () => {
+  invoke("ppf_summary").then((sum) => {
+    modal(
+      h("h3", {}, "Vider l'annuaire PPF ?"),
+      h("p", { class: "muted" },
+        "Cette action supprime les ",
+        h("b", {}, sum.distinct_addr.toLocaleString("fr-FR")),
+        " adressages de la table et l'historique des ",
+        h("b", {}, String(sum.file_count)),
+        " fichiers ingérés. Les fichiers sur votre disque ne sont pas touchés. Action irréversible."
+      ),
+      h("div", { class: "modal-btns" },
+        h("button", { onclick: closeModal }, "Annuler"),
+        h("button", {
+          class: "btn-danger",
+          onclick: async () => {
+            try {
+              await invoke("reset_ppf");
+              closeModal();
+              renderPpf();
+            } catch (err) {
+              closeModal();
+              banner("error", `Annuaire PPF : ${err}`);
+            }
+          },
+        }, "Réinitialiser")
+      )
+    );
+  });
+});
+
+const pdz = $("ppf-dropzone");
+pdz.addEventListener("dragover", (e) => { e.preventDefault(); pdz.classList.add("over"); });
+pdz.addEventListener("dragleave", () => pdz.classList.remove("over"));
+
+// État initial au démarrage.
+renderPpf();

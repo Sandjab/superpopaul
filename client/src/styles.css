@@ -396,3 +396,24 @@ footer .logo a:hover { color: var(--gold); text-decoration: underline; }
 .dir-bar > span { display: block; height: 100%; width: 0; background: var(--gold); }
 .dir-bar.indet > span { width: 40%; animation: dir-slide 1.2s ease-in-out infinite; }
 @keyframes dir-slide { 0% { margin-left: -40%; } 100% { margin-left: 100%; } }
+
+/* --- Carte Annuaire PPF (onglet Fichiers) : cumulative, historique des fichiers.
+   Même langage visuel que #dir-card ; bouton Reset (danger) au lieu de Télécharger. --- */
+#ppf-card { margin-top: 16px; border: 1px solid var(--border); background: transparent;
+            border-radius: 12px; padding: 14px 16px; }
+#ppf-dropzone { border: 2px dashed var(--border); border-radius: 10px; padding: 16px 14px;
+                display: flex; align-items: center; flex-wrap: wrap; gap: 10px; color: var(--muted); }
+#ppf-dropzone.over { border-color: var(--gold); color: var(--fg); }
+#ppf-prog { margin: 12px 0 0; }
+#ppf-summary { margin: 14px 0 6px; font-size: 13px; }
+#ppf-summary b { color: var(--fg); }
+#ppf-summary .dot { color: var(--green); }
+table.ppf-files { border-collapse: collapse; width: 100%; margin: 6px 0 0; font-size: 12.5px; }
+.ppf-files th, .ppf-files td { border: 1px solid var(--border); padding: 4px 10px; text-align: left; }
+.ppf-files th { background: var(--card); color: var(--muted); font-weight: 600; }
+.ppf-files th.num, .ppf-files td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ppf-files td.name { max-width: 34ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ppf-dup { color: var(--muted); font-style: italic; }
+.ppf-files td.added.pos b { color: var(--green); }
+.ppf-files td.added.zero { color: var(--muted); }
+.ppf-files td.when { color: var(--muted); white-space: nowrap; }
