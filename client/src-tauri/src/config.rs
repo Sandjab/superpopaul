@@ -145,7 +145,7 @@ pub enum RecordLabel {
 
 impl RecordLabel {
     /// Forme plurielle affichée là où figurait « lignes » (tuiles, rapport).
-    /// Doit rester alignée avec la table `RECORD_LABELS` de `columns.js`.
+    /// Doit rester alignée avec la table `RECORD_LABELS` de `app.js`.
     pub fn plural(&self) -> &'static str {
         match self {
             RecordLabel::Cf => "CF",
