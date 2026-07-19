@@ -132,16 +132,61 @@ async function enterRunStep() {
   $("cockpit").classList.add("hidden");
   $("run-result").classList.add("hidden");
   $("run-stats").classList.add("hidden");
+  $("coverage").classList.add("hidden");
   lastStats = null;
   try {
     await invoke("set_config", { cfg: state.config });
     const s = await invoke("analyze_input");
     lastStats = s;
     renderRunStats(s);
+    renderCoverage(s.coverage);
     suggestMode(s); // appelle updateRunModeHint() en sortie
   } catch (e) {
     banner("error", `${e}`);
   }
+}
+
+/** Panneau « Présence en annuaire » (couverture déclarative). Reçoit
+ *  InputStats.coverage. Masque le panneau si aucun annuaire n'est chargé
+ *  (peppol ET ppf null). Numéros uniquement dynamiques → sûr sans innerHTML. */
+function renderCoverage(cov) {
+  const panel = $("coverage");
+  if (!cov || (!cov.peppol && !cov.ppf)) { panel.classList.add("hidden"); return; }
+  const denom = cov.eligible_0225;
+  const pctVal = (n) => (denom > 0 ? Math.round((n * 100) / denom) : 0);
+  const pctLabel = (n) => (denom > 0 ? `${pctVal(n)} %` : "—");
+  const swatch = (color) => h("span", { class: "cov-swatch", style: `background:var(--${color})` });
+  const bar = (n, color) => h("span", { class: "cov-bar" },
+    h("i", { style: `width:${pctVal(n)}%;background:var(--${color})` }));
+  const num = (n) => h("span", { class: "cov-num" },
+    h("b", {}, fmt(n)), ` / ${fmt(denom)} `, h("span", { class: "cov-pct" }, pctLabel(n)));
+
+  $("cov-elig").replaceChildren(
+    h("b", {}, fmt(denom)), ` éligibles 0225 / ${fmt(cov.total_lines)} lignes · `,
+    h("b", {}, fmt(cov.non_applicable)), " non applicables");
+
+  const rows = [];
+  if (cov.peppol) {
+    rows.push(h("div", { class: "cov-row" },
+      h("span", { class: "cov-name" }, swatch("green"), " Annuaire Peppol"),
+      bar(cov.peppol.present, "green"), num(cov.peppol.present)));
+  }
+  if (cov.ppf) {
+    const p = cov.ppf;
+    rows.push(h("div", { class: "cov-gh" }, "Annuaire PPF — présent → utilisable"));
+    rows.push(h("div", { class: "cov-row" },
+      h("span", { class: "cov-name" }, swatch("ppf-l1"), " ", h("b", {}, "Annuaire PPF")),
+      bar(p.present, "ppf-l1"), num(p.present)));
+    const sub = (label, tag, n, color, last) =>
+      h("div", { class: "cov-row cov-sub" + (last ? " last" : "") },
+        h("span", { class: "cov-name" }, swatch(color), ` ${label} `, h("span", { class: "cov-tag" }, tag)),
+        bar(n, color), num(n));
+    rows.push(sub("PPF actif", "motif C/P", p.active, "ppf-l2", false));
+    rows.push(sub("PDP définie", "réelle", p.pdp_definie, "ppf-l3", false));
+    rows.push(sub("PPF utilisable", "actif + PDP réelle", p.usable, "ppf-l4", true));
+  }
+  $("cov-body").replaceChildren(...rows);
+  panel.classList.remove("hidden");
 }
 
 /** Aides intelligentes : détection de run incomplet, présélection du mode. */
