@@ -996,4 +996,20 @@ mod tests {
         assert_eq!(serde_yaml::to_string(&PeppolField::InDirectory).unwrap().trim(), "in_directory");
         assert_eq!(serde_yaml::from_str::<PeppolField>("in_directory").unwrap(), PeppolField::InDirectory);
     }
+
+    #[test]
+    fn peppol_field_ppf_round_trip_snake_case() {
+        // Les noms sérialisés sont AUSSI les en-têtes CSV ET les noms de champ
+        // dans les profils persistés : un renommage de variante casserait
+        // silencieusement les profils sauvegardés. Ce test garde le contrat.
+        for (variant, name) in [
+            (PeppolField::AnnuairePpf, "annuaire_ppf"),
+            (PeppolField::PpfActive, "ppf_active"),
+            (PeppolField::PdpDefinie, "pdp_definie"),
+            (PeppolField::PpfUsable, "ppf_usable"),
+        ] {
+            assert_eq!(serde_yaml::to_string(&variant).unwrap().trim(), name);
+            assert_eq!(serde_yaml::from_str::<PeppolField>(name).unwrap(), variant);
+        }
+    }
 }
