@@ -238,6 +238,30 @@ body > .drag-fallback {
 @media (prefers-reduced-motion: reduce) { #ring-state.running { animation: none; } }
 #avg-rate { margin: -12px 0 0; font-size: 12px; }
 .provisional, .provisional b { font-style: italic; }
+/* Présence en annuaire (étape 3, avant le run) : couverture déclarative, en
+   barres (pas anneaux) pour la distinguer des tuiles-run. Réutilise les tokens
+   violets PPF (--ppf-l1..l4, entonnoir large → strict) et le vert « présence ». */
+#coverage { padding: 6px 4px 16px; border-bottom: 1px solid var(--border); margin-bottom: 12px; }
+.cov-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin: 0 0 4px; }
+.cov-head h3 { margin: 0; font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 7px; }
+.cov-head h3 svg { color: var(--gold); flex: none; }
+.cov-elig { color: var(--muted); font-size: 12.5px; }
+.cov-elig b { color: var(--fg); }
+.cov-caption { color: var(--muted); font-size: 12px; font-style: italic; margin: 0 0 14px; }
+.cov-gh { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; margin: 16px 0 4px; }
+.cov-row { display: grid; grid-template-columns: 210px 1fr 132px; align-items: center; gap: 12px; margin: 8px 0; }
+.cov-row.cov-sub .cov-name { padding-left: 20px; position: relative; color: var(--muted); }
+.cov-row.cov-sub .cov-name::before { content: "├"; position: absolute; left: 4px; color: var(--border); }
+.cov-row.cov-sub.last .cov-name::before { content: "└"; }
+.cov-name { font-size: 13px; display: flex; align-items: center; gap: 8px; min-width: 0; }
+.cov-tag { color: var(--muted); font-size: 11px; }
+.cov-swatch { width: 9px; height: 9px; border-radius: 3px; flex: none; }
+.cov-bar { height: 12px; border-radius: 6px; background: var(--track); overflow: hidden; }
+.cov-bar i { display: block; height: 100%; border-radius: 6px; }
+.cov-num { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); white-space: nowrap; font-size: 13px; }
+.cov-num b { color: var(--fg); font-size: 15px; }
+.cov-pct { display: inline-block; min-width: 4ch; }
+.cov-row.cov-sub.last .cov-num b { color: var(--ppf-l4); }
 /* Télémétrie repliable : summary discret, grille plate (pas de cartes),
    typographie réduite. L'état ouvert/fermé vit dans le DOM, donc persiste
    entre les runs d'une même session. */
