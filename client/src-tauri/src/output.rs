@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 /// État CTC calculé au moment de l'export — jamais figé en base : les dates
 /// stockées suffisent, un « later » bascule seul en « ready » le jour venu.
 /// Vide sans extension déclarée (pas d'état à calculer).
-fn ctc_status(r: &crate::store::Resolution, now: chrono::DateTime<chrono::Utc>) -> &'static str {
+pub(crate) fn ctc_status(r: &crate::store::Resolution, now: chrono::DateTime<chrono::Utc>) -> &'static str {
     if r.extended_ctc_fr != Some(true) {
         return "";
     }
