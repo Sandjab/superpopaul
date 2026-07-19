@@ -121,6 +121,40 @@ pub struct InputConfig {
     #[serde(default, skip_serializing)]
     pub encoding: String,
     pub pid_column: String,
+    /// Ce que représente une ligne du fichier d'entrée (libellé d'affichage,
+    /// bilan/rapport). Rétro-compat : absent des vieux YAML → `Record`.
+    #[serde(default)]
+    pub record_label: RecordLabel,
+}
+
+/// Ce que représente une ligne du fichier d'entrée — libellé d'affichage
+/// (bilan, rapport) choisi par l'utilisateur et sauvegardé en profil. N'affecte
+/// ni les compteurs ni le CSV de sortie. Défaut : `Record` (générique). Comme
+/// `OutputEncoding`/`OutputSeparator`, la valeur sérialisée est aussi le libellé
+/// stocké ; le pluriel affiché vit dans `plural()`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum RecordLabel {
+    Cf,
+    Client,
+    Utilisateur,
+    Ligne,
+    #[default]
+    Record,
+}
+
+impl RecordLabel {
+    /// Forme plurielle affichée là où figurait « lignes » (tuiles, rapport).
+    /// Doit rester alignée avec la table `RECORD_LABELS` de `columns.js`.
+    pub fn plural(&self) -> &'static str {
+        match self {
+            RecordLabel::Cf => "CF",
+            RecordLabel::Client => "clients",
+            RecordLabel::Utilisateur => "utilisateurs",
+            RecordLabel::Ligne => "lignes",
+            RecordLabel::Record => "records",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -321,6 +355,10 @@ pub struct ProfileInput {
     /// Signature des en-têtes du fichier d'entrée (csv_io::columns_hash) —
     /// un profil ne s'applique qu'à un fichier de même signature.
     pub columns_hash: String,
+    /// Ce que représente une ligne du fichier (affichage). Rétro-compat :
+    /// absent des profils d'avant la fonctionnalité → `Record`.
+    #[serde(default)]
+    pub record_label: RecordLabel,
 }
 
 /// La forme de la sortie portée par le profil (encodage, séparateur) — le
@@ -455,6 +493,7 @@ mod tests {
                 delimiter: ";".into(),
                 encoding: "utf-8".into(),
                 pid_column: "siren".into(),
+                record_label: RecordLabel::Record,
             },
             output: OutputConfig {
                 dir: "./sorties".into(),
@@ -686,6 +725,7 @@ mod tests {
             input: ProfileInput {
                 pid_column: "siren".into(),
                 columns_hash: "ec46ac4b9e99375d".into(),
+                record_label: RecordLabel::Record,
             },
             output: ProfileOutput {
                 encoding: OutputEncoding::Utf8Bom,
@@ -693,6 +733,47 @@ mod tests {
             },
             columns: config_exemple().output.columns,
         }
+    }
+
+    #[test]
+    fn record_label_serde_lowercase() {
+        for (variant, s) in [
+            (RecordLabel::Cf, "cf"),
+            (RecordLabel::Client, "client"),
+            (RecordLabel::Utilisateur, "utilisateur"),
+            (RecordLabel::Ligne, "ligne"),
+            (RecordLabel::Record, "record"),
+        ] {
+            assert_eq!(serde_yaml::to_string(&variant).unwrap().trim(), s);
+            assert_eq!(serde_yaml::from_str::<RecordLabel>(s).unwrap(), variant);
+        }
+    }
+
+    #[test]
+    fn record_label_default_et_plural() {
+        assert_eq!(RecordLabel::default(), RecordLabel::Record);
+        assert_eq!(RecordLabel::Cf.plural(), "CF");
+        assert_eq!(RecordLabel::Client.plural(), "clients");
+        assert_eq!(RecordLabel::Utilisateur.plural(), "utilisateurs");
+        assert_eq!(RecordLabel::Ligne.plural(), "lignes");
+        assert_eq!(RecordLabel::Record.plural(), "records");
+    }
+
+    #[test]
+    fn input_config_sans_record_label_defaut_record() {
+        // Rétro-compat : une config d'avant la fonctionnalité (sans le champ)
+        // se lit avec record_label = Record.
+        let ic: InputConfig =
+            serde_yaml::from_str("path: ./a.csv\npid_column: siren\n").unwrap();
+        assert_eq!(ic.record_label, RecordLabel::Record);
+    }
+
+    #[test]
+    fn profile_input_sans_record_label_defaut_record() {
+        // Rétro-compat : un profil d'avant la fonctionnalité se recharge en Record.
+        let pi: ProfileInput =
+            serde_yaml::from_str("pid_column: siren\ncolumns_hash: abc123\n").unwrap();
+        assert_eq!(pi.record_label, RecordLabel::Record);
     }
 
     #[test]
