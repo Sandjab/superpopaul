@@ -701,13 +701,14 @@ mod tests {
     #[test]
     fn ppf_champs_true_false_vide() {
         // "111" présent+usable ; "222" présent annuaire seul ; "0009:333"
-        // (non-0225) → vide. resolutions VIDE : le calcul ne dépend pas de la
+        // (non-0225) → vide ; "444" (0225 mais ABSENT de la map) → false partout
+        // (distinct de vide). resolutions VIDE : le calcul ne dépend pas de la
         // résolution.
         let dir = tempfile::tempdir().unwrap();
         let input = dir.path().join("in.csv");
         std::fs::File::create(&input)
             .unwrap()
-            .write_all(b"siren\n111\n222\n0009:333\n")
+            .write_all(b"siren\n111\n222\n0009:333\n444\n")
             .unwrap();
         let out = dir.path().join("out.csv");
         let meta = CsvMeta { delimiter: b';', encoding: "utf-8" };
@@ -734,6 +735,7 @@ mod tests {
         assert_eq!(lines[1], "true;true", "111 usable");
         assert_eq!(lines[2], "true;false", "222 annuaire seul");
         assert_eq!(lines[3], ";", "non-0225 → deux vides");
+        assert_eq!(lines[4], "false;false", "0225 absent de l'annuaire → false, pas vide");
     }
 
     #[test]
