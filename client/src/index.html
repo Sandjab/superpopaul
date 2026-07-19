@@ -134,6 +134,20 @@
       </div>
       <div id="run-stats" class="hidden"></div>
       <p id="run-mode-hint" class="field-hint"></p>
+      <!-- Présence en annuaire (déclaratif, indépendant du run) : visible dès
+           l'entrée de l'étape 3, AVANT le run. Hors #cockpit (qui est masqué
+           tant qu'aucun run n'a démarré). Rempli par renderCoverage(). -->
+      <div id="coverage" class="hidden">
+        <div class="cov-head">
+          <h3>
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M8 3.4 C6.4 2.4 3.9 2.4 2.3 3 V12.4 C3.9 11.8 6.4 11.8 8 12.8 M8 3.4 C9.6 2.4 12.1 2.4 13.7 3 V12.4 C12.1 11.8 9.6 11.8 8 12.8 M8 3.4 V12.8"/></svg>
+            Présence en annuaire
+          </h3>
+          <span class="cov-elig" id="cov-elig"></span>
+        </div>
+        <p class="cov-caption">Présence déclarative dans les annuaires chargés — distincte du « Provisionnés Réseau Peppol » constaté pendant le run.</p>
+        <div id="cov-body"></div>
+      </div>
       <div id="cockpit" class="hidden">
         <!-- Bandeau métier : progression + les deux réponses qu'on est venu
              chercher, en grand. La plomberie vit dans <details> en dessous. -->
