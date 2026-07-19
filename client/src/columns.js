@@ -9,11 +9,12 @@ const PEPPOL_FIELDS = [
   ["pa_country", "pays PA"], ["ubl_extended", "CTC-FR"],
   ["ctc_activation", "activation CTC"], ["ctc_expiration", "expiration CTC"],
   ["ctc_status", "état CTC"],
+  ["in_directory", "annuaire Peppol"],
 ];
 const PEPPOL_SAMPLE = { in_peppol: "true", pa_code: "PA0042", pa_name: "ACME PA",
                         pa_country: "FR", ubl_extended: "true",
                         ctc_activation: "2026-09-01", ctc_expiration: "",
-                        ctc_status: "later" };
+                        ctc_status: "later", in_directory: "true" };
 
 // SortableJS (vendor/Sortable.min.js) en mode forceFallback : le
 // drag-and-drop HTML5 est avalé par le handler drag-drop natif de la webview
@@ -36,8 +37,16 @@ function specFromKey(key) {
 }
 
 function colLabel(c) {
-  return c.source === "input" ? c.name
-       : "⚡ " + PEPPOL_FIELDS.find(([f]) => f === c.field)[1];
+  if (c.source === "input") return c.name;
+  const icon = c.field === "in_directory" ? "📇" : "⚡";
+  return icon + " " + PEPPOL_FIELDS.find(([f]) => f === c.field)[1];
+}
+
+// Classe CSS visuelle d'une colonne (accent). La source « peppol » reste la
+// vérité métier ; seul l'accent visuel diffère pour l'annuaire (vert).
+function colClass(c) {
+  if (c.source === "input") return isPidSpec(c) ? "input pid" : "input";
+  return c.field === "in_directory" ? "dir" : "peppol";
 }
 
 const isPidSpec = (c) =>
@@ -45,7 +54,7 @@ const isPidSpec = (c) =>
 
 function makeHeader(c) {
   const pid = isPidSpec(c);
-  const attrs = { class: pid ? "input pid" : c.source, "data-key": colKey(c) };
+  const attrs = { class: colClass(c), "data-key": colKey(c) };
   if (c.source === "peppol")
     attrs.title = "Champ calculé par l'API Peppol — les valeurs affichées sont un exemple.";
   if (pid)
@@ -121,7 +130,7 @@ function renderColZone() {
       .map((name) => ({ source: "input", name })),
   ];
   $("col-zone").replaceChildren(...excluded.map((c) =>
-    h("div", { class: `chip ${c.source}`, "data-key": colKey(c) }, `⠿ ${colLabel(c)}`)));
+    h("div", { class: `chip ${colClass(c)}`, "data-key": colKey(c) }, `⠿ ${colLabel(c)}`)));
 }
 
 function renderOutPreview() {
