@@ -10,11 +10,28 @@ const PEPPOL_FIELDS = [
   ["ctc_activation", "activation CTC"], ["ctc_expiration", "expiration CTC"],
   ["ctc_status", "état CTC"],
   ["in_directory", "annuaire Peppol"],
+  ["annuaire_ppf", "annuaire PPF"], ["ppf_active", "PPF actif"],
+  ["pdp_definie", "PDP définie"], ["ppf_usable", "PPF utilisable"],
 ];
 const PEPPOL_SAMPLE = { in_peppol: "true", pa_code: "PA0042", pa_name: "ACME PA",
                         pa_country: "FR", ubl_extended: "true",
                         ctc_activation: "2026-09-01", ctc_expiration: "",
-                        ctc_status: "later", in_directory: "true" };
+                        ctc_status: "later", in_directory: "true",
+                        annuaire_ppf: "true", ppf_active: "true",
+                        pdp_definie: "false", ppf_usable: "false" };
+
+// Famille PPF : icône commune 🏛️, accent violet en dégradé (une classe par
+// champ, l'entonnoir présence → utilisable ; cf. spec 2026-07-19-champs-ppf).
+const PPF_CLASS = {
+  annuaire_ppf: "ppf-annuaire", ppf_active: "ppf-active",
+  pdp_definie: "ppf-pdp", ppf_usable: "ppf-usable",
+};
+const PPF_TIP = {
+  annuaire_ppf: "Adressage présent dans l'annuaire PPF chargé (au moins une ligne).",
+  ppf_active: "Annuaire PPF : au moins une ligne au motif C ou P.",
+  pdp_definie: "Annuaire PPF : au moins une ligne avec une PDP réelle (pdp_fictive = 0).",
+  ppf_usable: "Annuaire PPF : au moins une même ligne au motif C ou P ET PDP réelle (pdp_fictive = 0).",
+};
 
 // SortableJS (vendor/Sortable.min.js) en mode forceFallback : le
 // drag-and-drop HTML5 est avalé par le handler drag-drop natif de la webview
@@ -38,7 +55,8 @@ function specFromKey(key) {
 
 function colLabel(c) {
   if (c.source === "input") return c.name;
-  const icon = c.field === "in_directory" ? "📇" : "⚡";
+  const icon = c.field === "in_directory" ? "📇"
+             : PPF_CLASS[c.field] ? "🏛️" : "⚡";
   return icon + " " + PEPPOL_FIELDS.find(([f]) => f === c.field)[1];
 }
 
@@ -46,7 +64,8 @@ function colLabel(c) {
 // vérité métier ; seul l'accent visuel diffère pour l'annuaire (vert).
 function colClass(c) {
   if (c.source === "input") return isPidSpec(c) ? "input pid" : "input";
-  return c.field === "in_directory" ? "dir" : "peppol";
+  if (c.field === "in_directory") return "dir";
+  return PPF_CLASS[c.field] ?? "peppol";
 }
 
 const isPidSpec = (c) =>
@@ -58,7 +77,8 @@ function makeHeader(c) {
   if (c.source === "peppol")
     attrs.title = c.field === "in_directory"
       ? "Présence déclarative dans l'annuaire Peppol chargé — indépendant du provisionning Peppol"
-      : "Champ calculé par l'API Peppol — les valeurs affichées sont un exemple.";
+      : PPF_TIP[c.field]
+      ?? "Champ calculé par l'API Peppol — les valeurs affichées sont un exemple.";
   if (pid)
     attrs.title = "Colonne des adressages — obligatoire en sortie, non écartable.";
   const th = h("th", attrs, "⠿ ");
