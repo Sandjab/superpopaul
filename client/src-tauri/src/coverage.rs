@@ -36,6 +36,19 @@ pub struct Coverage {
     pub ppf: Option<PpfCoverage>,
 }
 
+impl Coverage {
+    /// Couverture « vide » (aucun annuaire) : section masquée. Sert de repli
+    /// lorsque l'entrée n'est plus relisible à l'export du rapport, pour que
+    /// le rapport reste exportable (comportement d'avant : dérivé du Snapshot).
+    pub const EMPTY: Coverage = Coverage {
+        total_lines: 0,
+        eligible_0225: 0,
+        non_applicable: 0,
+        peppol: None,
+        ppf: None,
+    };
+}
+
 /// Agrège la couverture.
 ///
 /// - `eligible` : `(valeur 0225, nombre de lignes)` pour chaque identifiant

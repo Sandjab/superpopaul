@@ -527,10 +527,18 @@ pub async fn export_report(state: State<'_, AppState>) -> Result<String, String>
     let store = state.store.clone();
     // Scan CSV + requêtes store : bloquants, hors executor tokio.
     tokio::task::spawn_blocking(move || {
-        let (_, pids, line_counts) = scan_unique_pids(&input, &cfg.input.pid_column)?;
-        let coverage = {
-            let store_g = store.lock().unwrap();
-            coverage_from_scan(&store_g, &pids, &line_counts)?
+        // Couverture calculée sur l'entrée COURANTE. Tolérante : si le fichier
+        // a été déplacé/supprimé depuis le run (ou une requête store échoue), le
+        // rapport reste exportable — il se génère alors sans la section
+        // couverture (repli EMPTY), restaurant le comportement d'avant où le
+        // rapport dérivait du seul Snapshot.
+        let coverage = match scan_unique_pids(&input, &cfg.input.pid_column) {
+            Ok((_, pids, line_counts)) => {
+                let store_g = store.lock().unwrap();
+                coverage_from_scan(&store_g, &pids, &line_counts)
+                    .unwrap_or(crate::coverage::Coverage::EMPTY)
+            }
+            Err(_) => crate::coverage::Coverage::EMPTY,
         };
         let now = chrono::Local::now();
         let html = report::render(&report::ReportData {
