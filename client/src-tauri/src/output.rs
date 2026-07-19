@@ -1,9 +1,10 @@
 use crate::config::{ColumnSpec, OutputConfig, OutputEncoding, OutputSeparator, PeppolField};
 use crate::csv_io::CsvMeta;
+use crate::directory::parse_0225_value;
 use crate::pid::canonical;
 use crate::store::Resolution;
 use encoding_rs_io::DecodeReaderBytesBuilder;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
@@ -40,6 +41,7 @@ pub fn field_name(f: PeppolField) -> &'static str {
         PeppolField::CtcActivation => "ctc_activation",
         PeppolField::CtcExpiration => "ctc_expiration",
         PeppolField::CtcStatus => "ctc_status",
+        PeppolField::InDirectory => "in_directory",
     }
 }
 
@@ -78,12 +80,17 @@ pub fn with_stamp(path: &Path, stamp: Option<&str>) -> PathBuf {
 /// dans le même répertoire, renommé vers la cible seulement après le flush —
 /// un disque plein ou une permission refusée en cours de route ne laisse
 /// jamais un CSV d'apparence valide mais tronqué.
+// 8 paramètres : chacun porte une donnée distincte de l'export (entrée,
+// méta, colonne PID, config de sortie, base, annuaire, chemin de sortie,
+// horodatage) — pas un signe de mauvais découpage.
+#[allow(clippy::too_many_arguments)]
 pub fn generate(
     input_path: &Path,
     meta: &CsvMeta,
     pid_column: &str,
     output: &OutputConfig,
     resolutions: &HashMap<String, Resolution>,
+    directory: Option<&HashSet<String>>,
     out_path: &Path,
     stamp: Option<&str>,
 ) -> Result<PathBuf, String> {
@@ -109,7 +116,7 @@ pub fn generate(
     tmp_os.push(".tmp");
     let tmp_path = PathBuf::from(tmp_os);
 
-    if let Err(e) = write_output(input_path, meta, pid_column, output, resolutions, &tmp_path) {
+    if let Err(e) = write_output(input_path, meta, pid_column, output, resolutions, directory, &tmp_path) {
         let _ = std::fs::remove_file(&tmp_path); // nettoyage best-effort
         return Err(e);
     }
@@ -172,6 +179,7 @@ fn write_output(
     pid_column: &str,
     output: &OutputConfig,
     resolutions: &HashMap<String, Resolution>,
+    directory: Option<&HashSet<String>>,
     tmp_path: &Path,
 ) -> Result<(), String> {
     let columns = &output.columns;
@@ -254,13 +262,25 @@ fn write_output(
     for (line, rec) in (2u64..).zip(rdr.records()) {
         let rec = rec.map_err(|e| format!("lecture {input_path:?} ligne {line} : {e}"))?;
         let raw_pid = rec.get(pid_idx).unwrap_or("");
-        let res = resolutions.get(&canonical(raw_pid));
+        let cpid = canonical(raw_pid);
+        let res = resolutions.get(&cpid);
+        // Présence annuaire : hors du gate `res` (un déclaré non provisionné
+        // n'a pas de Resolution mais doit ressortir "true").
+        let in_dir: &str = match directory {
+            None => "",
+            Some(set) => match parse_0225_value(&cpid) {
+                Some(v) if set.contains(&v) => "true",
+                Some(_) => "false",
+                None => "",
+            },
+        };
         // Zéro allocation par cellule : la ligne est un Vec<&str>.
         let row: Vec<&str> = columns
             .iter()
             .zip(&col_idx)
             .map(|(c, idx)| match c {
                 ColumnSpec::Input { .. } => rec.get(idx.unwrap()).unwrap_or(""),
+                ColumnSpec::Peppol { field: PeppolField::InDirectory } => in_dir,
                 ColumnSpec::Peppol { field } => match res {
                     None => "",
                     Some(r) => match field {
@@ -272,6 +292,7 @@ fn write_output(
                         PeppolField::CtcActivation => r.ctc_activation.as_deref().unwrap_or(""),
                         PeppolField::CtcExpiration => r.ctc_expiration.as_deref().unwrap_or(""),
                         PeppolField::CtcStatus => ctc_status(r, now),
+                        PeppolField::InDirectory => unreachable!("traité par le bras dédié ci-dessus"),
                     },
                 },
             })
@@ -381,7 +402,7 @@ mod tests {
         ];
         let meta = CsvMeta { delimiter: b';', encoding: "utf-8" };
         let written =
-            generate(&input, &meta, "siren", &out_cfg(cols), &m, &out, None).unwrap();
+            generate(&input, &meta, "siren", &out_cfg(cols), &m, None, &out, None).unwrap();
         let content = std::fs::read_to_string(&written).unwrap();
         let lines: Vec<&str> = content.trim_start_matches('\u{feff}').lines().collect();
         assert_eq!(lines[0], "ctc_activation;ctc_expiration;ctc_status");
@@ -401,7 +422,7 @@ mod tests {
             .unwrap();
         let out = dir.path().join("out.csv");
         let meta = CsvMeta { delimiter: b';', encoding: "utf-8" };
-        let err = generate(&input, &meta, "siren", &out_cfg(vec![]), &resolutions(), &out, None)
+        let err = generate(&input, &meta, "siren", &out_cfg(vec![]), &resolutions(), None, &out, None)
             .unwrap_err();
         assert!(err.contains("colonne"), "{err}");
         assert!(!out.exists());
@@ -419,7 +440,7 @@ mod tests {
             .unwrap();
         let meta = CsvMeta { delimiter: b';', encoding: "utf-8" };
         let cols = vec![ColumnSpec::Input { name: "siren".into() }];
-        let err = generate(&input, &meta, "siren", &out_cfg(cols), &resolutions(), &input, None)
+        let err = generate(&input, &meta, "siren", &out_cfg(cols), &resolutions(), None, &input, None)
             .unwrap_err();
         assert!(err.contains("écraserait"), "{err}");
         // Le fichier d'entrée est intact.
@@ -454,6 +475,7 @@ mod tests {
             "siren",
             &out_cfg(cols),
             &resolutions(),
+            None,
             &out,
             None,
         )
@@ -497,6 +519,7 @@ mod tests {
             "siren",
             &out_cfg(cols),
             &resolutions(),
+            None,
             &out,
             None,
         )
@@ -527,6 +550,7 @@ mod tests {
             "zz",
             &out_cfg(cols),
             &resolutions(),
+            None,
             &out,
             None,
         )
@@ -548,7 +572,7 @@ mod tests {
             delimiter: b';',
             encoding: "utf-8",
         };
-        let written = generate(&input, &meta, "siren", &cfg, &resolutions(), &out, None).unwrap();
+        let written = generate(&input, &meta, "siren", &cfg, &resolutions(), None, &out, None).unwrap();
         let raw = std::fs::read(&written).unwrap();
         assert!(!raw.starts_with(b"\xEF\xBB\xBF"), "pas de BOM attendu");
         assert!(String::from_utf8(raw).unwrap().contains("Société"));
@@ -567,7 +591,7 @@ mod tests {
             delimiter: b';',
             encoding: "utf-8",
         };
-        let written = generate(&input, &meta, "siren", &cfg, &resolutions(), &out, None).unwrap();
+        let written = generate(&input, &meta, "siren", &cfg, &resolutions(), None, &out, None).unwrap();
         let raw = std::fs::read(&written).unwrap();
         assert!(!raw.starts_with(b"\xEF\xBB\xBF"), "pas de BOM en 1252");
         let pos = raw.windows(5).position(|w| w == b"Soci\xE9");
@@ -595,7 +619,7 @@ mod tests {
             delimiter: b';',
             encoding: "utf-8",
         };
-        let written = generate(&input, &meta, "siren", &cfg, &resolutions(), &out, None).unwrap();
+        let written = generate(&input, &meta, "siren", &cfg, &resolutions(), None, &out, None).unwrap();
         let content = std::fs::read_to_string(&written).unwrap();
         let content = content.trim_start_matches('\u{feff}');
         let lines: Vec<&str> = content.lines().collect();
@@ -609,5 +633,52 @@ mod tests {
         assert_eq!(p, std::path::PathBuf::from("/tmp/out_20260712-1430.csv"));
         let p2 = with_stamp(std::path::Path::new("/tmp/out.csv"), None);
         assert_eq!(p2, std::path::PathBuf::from("/tmp/out.csv"));
+    }
+
+    #[test]
+    fn in_directory_true_false_vide_selon_annuaire() {
+        // Ligne "111" (0225 présent) → true ; "222" (0225 absent) → false ;
+        // "0009:333" (non-0225) → vide. resolutions VIDE : prouve que le calcul
+        // ne dépend pas de la résolution.
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("in.csv");
+        std::fs::File::create(&input).unwrap()
+            .write_all(b"siren\n111\n222\n0009:333\n").unwrap();
+        let out = dir.path().join("out.csv");
+        let meta = CsvMeta { delimiter: b';', encoding: "utf-8" };
+        let mut set = std::collections::HashSet::new();
+        set.insert("111".to_string());
+        let cols = vec![ColumnSpec::Peppol { field: PeppolField::InDirectory }];
+        let written = generate(&input, &meta, "siren", &out_cfg(cols),
+                               &HashMap::new(), Some(&set), &out, None).unwrap();
+        let content = std::fs::read_to_string(&written).unwrap();
+        let lines: Vec<&str> = content.trim_start_matches('\u{feff}').lines().collect();
+        assert_eq!(lines[0], "in_directory");
+        assert_eq!(lines[1], "true", "0225 présent dans l'annuaire");
+        assert_eq!(lines[2], "false", "0225 absent");
+        // Le crate csv quote un champ vide qui est le SEUL champ de la ligne
+        // (désambiguïsation avec une ligne blanche, cf. csv-core::WriterBuilder
+        // ::quote_style) — n'arrive jamais en pratique (la colonne PID
+        // accompagne toujours in_directory), mais ici la colonne est isolée.
+        assert_eq!(lines[3], "\"\"", "non-0225 → vide");
+    }
+
+    #[test]
+    fn in_directory_vide_si_annuaire_non_charge() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("in.csv");
+        std::fs::File::create(&input).unwrap().write_all(b"siren\n111\n").unwrap();
+        let out = dir.path().join("out.csv");
+        let meta = CsvMeta { delimiter: b';', encoding: "utf-8" };
+        let cols = vec![ColumnSpec::Peppol { field: PeppolField::InDirectory }];
+        // directory = None → colonne vide même pour un 0225.
+        let written = generate(&input, &meta, "siren", &out_cfg(cols),
+                               &HashMap::new(), None, &out, None).unwrap();
+        let content = std::fs::read_to_string(&written).unwrap();
+        let lines: Vec<&str> = content.trim_start_matches('\u{feff}').lines().collect();
+        assert_eq!(lines[0], "in_directory");
+        // Champ vide seul sur la ligne → quoté par le crate csv (même remarque
+        // que ci-dessus).
+        assert_eq!(lines[1], "\"\"", "annuaire non chargé → vide");
     }
 }

@@ -205,6 +205,9 @@ pub enum PeppolField {
     CtcActivation,
     CtcExpiration,
     CtcStatus,
+    /// Présence dans l'annuaire Peppol (table peppol_directory, déclaratif) —
+    /// calculée par jointure, indépendamment de la résolution.
+    InDirectory,
 }
 
 /// Bornes des paramètres API — partagées entre la config runtime (set_config)
@@ -895,5 +898,11 @@ mod tests {
     fn portable_dir_sans_repertoire_exe() {
         // current_exe() peut échouer : on retombe sur le mode installé.
         assert_eq!(portable_dir(None), None);
+    }
+
+    #[test]
+    fn peppol_field_in_directory_serialise_snake_case() {
+        assert_eq!(serde_yaml::to_string(&PeppolField::InDirectory).unwrap().trim(), "in_directory");
+        assert_eq!(serde_yaml::from_str::<PeppolField>("in_directory").unwrap(), PeppolField::InDirectory);
     }
 }
