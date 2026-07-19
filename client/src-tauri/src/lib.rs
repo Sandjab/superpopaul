@@ -8,6 +8,7 @@ pub mod directory;
 pub mod modes;
 pub mod output;
 pub mod pid;
+pub mod ppf;
 pub mod resolver;
 pub mod report;
 pub mod store;
