@@ -161,8 +161,12 @@ function renderCoverage(cov) {
   const num = (n) => h("span", { class: "cov-num" },
     h("b", {}, fmt(n)), ` / ${fmt(denom)} `, h("span", { class: "cov-pct" }, pctLabel(n)));
 
+  // « lignes » suit le libellé record_label configuré (comme les tuiles voisines
+  // via .rec-label), plutôt qu'un mot figé.
+  const recLabel = RECORD_LABELS[state.config.input.record_label] ?? "records";
   $("cov-elig").replaceChildren(
-    h("b", {}, fmt(denom)), ` éligibles 0225 / ${fmt(cov.total_lines)} lignes · `,
+    h("b", {}, fmt(denom)), " éligibles 0225 / ",
+    h("b", {}, fmt(cov.total_lines)), " ", h("span", { class: "rec-label" }, recLabel), " · ",
     h("b", {}, fmt(cov.non_applicable)), " non applicables");
 
   const rows = [];
