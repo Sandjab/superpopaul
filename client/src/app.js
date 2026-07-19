@@ -33,7 +33,7 @@ const state = {
     api: { url: "https://peppol.gavini.cloud", key: "", mode: "api", resolver: "8.8.8.8",
            resolver_fallback: "1.1.1.1", dns_concurrency: 32,
            batch_size: 50, concurrency: 8, proxy: null, refresh_days: 30 },
-    input: { path: "", delimiter: ";", encoding: "utf-8", pid_column: "" },
+    input: { path: "", delimiter: ";", encoding: "utf-8", pid_column: "", record_label: "record" },
     output: { dir: "", suffix: "_enrichi", timestamp_suffix: true,
               encoding: "utf-8-bom", separator: "auto", columns: [] },
   },
@@ -125,11 +125,15 @@ async function pickInput(path) {
     const p = await invoke("preview_csv", { path });
     const prevHeaders = state.preview ? state.preview.headers : null;
     const prevPid = state.config.input.pid_column;
+    // Le libellé « type d'enregistrement » est une préférence indépendante du
+    // fichier : on la conserve quand on (re)choisit un fichier.
+    const prevLabel = state.config.input.record_label;
     state.inputPath = path;
     state.preview = p;
     state.config.input = {
       path, delimiter: p.delimiter, encoding: p.encoding,
       pid_column: p.suggested_pid_column != null ? p.headers[p.suggested_pid_column] : "",
+      record_label: prevLabel,
     };
     // Mapping par défaut : toutes les colonnes d'entrée + existe/CTC-FR ; les
     // autres champs Peppol démarrent dans la drop zone de l'étape 2.
@@ -471,12 +475,32 @@ $("btn-out-browse").addEventListener("click", async () => {
 });
 
 // --- Étape Format : forme de sortie (encodage, séparateur) --------------------
+// Libellé « ce que représente une ligne » (record_label) : pluriel affiché là
+// où figurait « lignes » — tuiles de bilan (.rec-label) et infobulle
+// (data-rec-title, gabarit avec {rec}). Doit rester aligné avec
+// RecordLabel::plural() de config.rs.
+const RECORD_LABELS = { cf: "CF", client: "clients", utilisateur: "utilisateurs",
+                        ligne: "lignes", record: "records" };
+function applyRecordLabel() {
+  const pl = RECORD_LABELS[state.config.input.record_label] ?? "records";
+  document.querySelectorAll(".rec-label").forEach((el) => { el.textContent = pl; });
+  document.querySelectorAll("[data-rec-title]").forEach(
+    (el) => { el.title = el.dataset.recTitle.replace("{rec}", pl); });
+  $("record-label").value = state.config.input.record_label;
+}
+
 function fillOutFormat() {
   $("out-encoding").value = state.config.output.encoding;
   $("out-sep").value = state.config.output.separator;
+  applyRecordLabel();
 }
 $("out-encoding").addEventListener("change", (e) => { state.config.output.encoding = e.target.value; renderProfileBar(); });
 $("out-sep").addEventListener("change", (e) => { state.config.output.separator = e.target.value; renderProfileBar(); });
+$("record-label").addEventListener("change", (e) => {
+  state.config.input.record_label = e.target.value;
+  applyRecordLabel();
+  renderProfileBar();
+});
 
 // --- Réglages : persistance (superpopaul.yaml, dossier données de l'app) -----------
 /** La tranche de l'état qui va dans le fichier de réglages : API + forme de la
@@ -543,6 +567,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     banner("warn", `Réglages illisibles — valeurs par défaut appliquées. (${e})`);
   }
   fillSettingsForm();
+  applyRecordLabel();
 });
 
 // Lien externe : toujours via le navigateur par défaut du système (opener),
@@ -838,7 +863,8 @@ async function profileDialogDefault() {
 function profileSnapshot() {
   const c = state.config;
   return JSON.stringify({ pid: c.input.pid_column, columns: c.output.columns,
-                          encoding: c.output.encoding, separator: c.output.separator });
+                          encoding: c.output.encoding, separator: c.output.separator,
+                          recordLabel: c.input.record_label });
 }
 
 /** Le payload envoyé à save_profile — partagé par Enregistrer et
@@ -847,7 +873,8 @@ function currentProfilePayload() {
   return {
     version: 1,
     input: { pid_column: state.config.input.pid_column,
-             columns_hash: state.preview.columns_hash },
+             columns_hash: state.preview.columns_hash,
+             record_label: state.config.input.record_label },
     output: { encoding: state.config.output.encoding,
               separator: state.config.output.separator },
     columns: state.config.output.columns,
@@ -925,6 +952,7 @@ $("btn-load-cfg").addEventListener("click", async () => {
     return;
   }
   state.config.input.pid_column = p.input.pid_column;
+  state.config.input.record_label = p.input.record_label;
   state.config.output.columns = p.columns;
   state.config.output.encoding = p.output.encoding;
   state.config.output.separator = p.output.separator;

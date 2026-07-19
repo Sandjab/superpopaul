@@ -67,6 +67,14 @@
       <p><label for="pid-column">Colonne des adressages :</label>
          <select id="pid-column" title="Colonne contenant les adressages Peppol à résoudre (ex. SIREN/SIRET) — 🔑 dans le tableau."></select>
          <span id="pid-hint" class="muted"></span></p>
+      <p><label for="record-label">Chaque ligne représente :</label>
+         <select id="record-label" title="Ce que représente une ligne du fichier — n'affecte que l'affichage (bilan, rapport), pas le CSV de sortie.">
+           <option value="cf">CF — comptes de facturation</option>
+           <option value="client">client — comptes client</option>
+           <option value="utilisateur">utilisateur — comptes utilisateur</option>
+           <option value="ligne">ligne — lignes téléphoniques</option>
+           <option value="record" selected>record — générique (défaut)</option>
+         </select></p>
       <p class="muted">Glisse les en-têtes : réordonne-les dans le tableau, écarte-les vers la
          zone du bas, réintègre-les où tu veux. Double-clic : écarte une colonne, ou la
          réintègre en dernière position. L'aperçu montre le résultat final.</p>
@@ -118,13 +126,13 @@
             <p id="avg-rate" class="muted hidden" title="Adressages résolus par seconde en moyenne sur la durée active."></p>
             <p id="fail-line" class="zero" title="Adressages en erreur définitive — motifs dans Télémétrie, Top erreurs.">—</p>
           </div>
-          <div class="biz-metric" title="Présents dans l'annuaire Peppol — % des résolus ; absolus en adressages et en lignes de fichier.">
+          <div class="biz-metric" title="Présents dans l'annuaire Peppol — % des résolus ; absolus en adressages et en enregistrements." data-rec-title="Présents dans l'annuaire Peppol — % des résolus ; absolus en adressages et en {rec}.">
             <div class="mini-ring" id="ring-exists"><div class="mini-ring-center"><b id="t-exists">—</b></div></div>
             <div>
               <h3><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="8" cy="8" r="6.6"/><circle cx="8" cy="8" r="3.6"/><circle cx="8" cy="8" r="1" fill="currentColor" stroke="none"/></svg> Dans Peppol</h3>
               <div class="ring-abs">
                 <div><b id="t-exists-abs">—</b> <span class="muted">adressages</span></div>
-                <div><b id="t-exists-lines">—</b> <span class="muted">lignes</span> <span class="muted" id="t-exists-lines-pct"></span></div>
+                <div><b id="t-exists-lines">—</b> <span class="muted rec-label">lignes</span> <span class="muted" id="t-exists-lines-pct"></span></div>
               </div>
             </div>
           </div>
@@ -134,11 +142,11 @@
               <h3><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.2 L14 4.6 L14 11.4 L8 14.8 L2 11.4 L2 4.6 Z"/></svg> France Invoice UBL Extension</h3>
               <div class="ring-abs">
                 <div><b id="t-ctc-abs">—</b> <span class="muted">adressages</span></div>
-                <div><b id="t-ctc-lines">—</b> <span class="muted">lignes</span> <span class="muted" id="t-ctc-lines-pct"></span></div>
+                <div><b id="t-ctc-lines">—</b> <span class="muted rec-label">lignes</span> <span class="muted" id="t-ctc-lines-pct"></span></div>
               </div>
-              <p class="ctc-later hidden" id="t-ctc-later" title="Extension déclarée avec une date d'activation future : prêts sans action de leur part, à la date indiquée — bascule automatique le jour venu."><span class="dot-later"></span>prêts plus tard : <b id="t-ctc-later-abs">—</b> adr · <b id="t-ctc-later-lines">—</b> lignes<span id="t-ctc-later-next" class="hidden"> — dont <b id="t-ctc-later-next-n">—</b> dès le <span id="t-ctc-later-next-d">—</span></span></p>
-              <p class="ctc-gap muted" title="Confirmés dans Peppol sans l'extension : le reste à convertir. Inclut les supports dont la validité a expiré.">dans Peppol sans l'extension : <b id="t-ctc-gap">—</b> adr · <b id="t-ctc-gap-lines">—</b> lignes</p>
-              <p class="ctc-nv hidden" id="t-ctc-nv" title="Présents dans Peppol mais catalogue SMP illisible (blocage réseau, panne ou limitation) : impossible de conclure sur l'extension. Cause détaillée dans la base locale (colonne note).">verdict inconnu (SMP illisible) : <b id="t-ctc-nv-abs">—</b> adr · <b id="t-ctc-nv-lines">—</b> lignes</p>
+              <p class="ctc-later hidden" id="t-ctc-later" title="Extension déclarée avec une date d'activation future : prêts sans action de leur part, à la date indiquée — bascule automatique le jour venu."><span class="dot-later"></span>prêts plus tard : <b id="t-ctc-later-abs">—</b> adr · <b id="t-ctc-later-lines">—</b> <span class="rec-label">lignes</span><span id="t-ctc-later-next" class="hidden"> — dont <b id="t-ctc-later-next-n">—</b> dès le <span id="t-ctc-later-next-d">—</span></span></p>
+              <p class="ctc-gap muted" title="Confirmés dans Peppol sans l'extension : le reste à convertir. Inclut les supports dont la validité a expiré.">dans Peppol sans l'extension : <b id="t-ctc-gap">—</b> adr · <b id="t-ctc-gap-lines">—</b> <span class="rec-label">lignes</span></p>
+              <p class="ctc-nv hidden" id="t-ctc-nv" title="Présents dans Peppol mais catalogue SMP illisible (blocage réseau, panne ou limitation) : impossible de conclure sur l'extension. Cause détaillée dans la base locale (colonne note).">verdict inconnu (SMP illisible) : <b id="t-ctc-nv-abs">—</b> adr · <b id="t-ctc-nv-lines">—</b> <span class="rec-label">lignes</span></p>
             </div>
           </div>
         </div>
