@@ -23,6 +23,9 @@ pub struct ReportData<'a> {
     /// Pluriel du libellé « ce que représente une ligne » (config
     /// `record_label`) — remplace « lignes » dans le rapport.
     pub record_plural: &'a str,
+    /// Couverture déclarative des annuaires (Peppol + PPF). Section masquée si
+    /// aucun annuaire n'est chargé (`peppol` et `ppf` tous deux `None`).
+    pub coverage: &'a crate::coverage::Coverage,
 }
 
 /// CSS du rapport — la maquette validée le 16/07/2026, identité « Bleu nuit
@@ -35,6 +38,7 @@ const CSS: &str = r#"
     --green: #4cc268; --gold: #d9a83f; --amber: #e0873a; --red: #e5534b;
     --track: #223050;
     --green-later: #2f8050; /* prêt plus tard : vert éteint, pris sur le vert */
+    --ppf-l1: #6f6aa8; --ppf-l2: #8a80d4; --ppf-l3: #a892ff; --ppf-l4: #c3b6ff;
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--fg);
@@ -93,14 +97,27 @@ const CSS: &str = r#"
   /* Fond clair à l'écran quand le lecteur a un thème clair (OS/navigateur) —
      même palette que l'impression, toujours sans JS. */
   @media (prefers-color-scheme: light) {
-    :root { --bg: #ffffff; --card: #f6f5f1; --border: #d8d5cc; --fg: #1c2333; --muted: #5c6478; --track: #e4e1d8; }
+    :root { --bg: #ffffff; --card: #f6f5f1; --border: #d8d5cc; --fg: #1c2333; --muted: #5c6478; --track: #e4e1d8; --ppf-l1: #8b86c4; --ppf-l2: #7a6fd0; --ppf-l3: #6a58c8; --ppf-l4: #5741b0; }
     .ring-sub { fill: #5c6478; }
   }
   @media print {
-    :root { --bg: #ffffff; --card: #f6f5f1; --border: #d8d5cc; --fg: #1c2333; --muted: #5c6478; --track: #e4e1d8; }
+    :root { --bg: #ffffff; --card: #f6f5f1; --border: #d8d5cc; --fg: #1c2333; --muted: #5c6478; --track: #e4e1d8; --ppf-l1: #8b86c4; --ppf-l2: #7a6fd0; --ppf-l3: #6a58c8; --ppf-l4: #5741b0; }
     .page { padding: 0; }
     .ring-sub { fill: #5c6478; }
   }
+  .cov-elig { color: var(--muted); font-size: 13px; margin: 0 0 16px; }
+  .cov-elig b { color: var(--fg); }
+  .cov-row { display: grid; grid-template-columns: 200px 1fr 128px; gap: 12px;
+    align-items: center; padding: 5px 0; font-size: 14px; }
+  .cov-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .cov-name .tag { color: var(--muted); font-size: 11.5px; }
+  .cov-sw { width: 9px; height: 9px; border-radius: 3px; flex: none; }
+  .cov-sub .cov-name { padding-left: 18px; color: var(--muted); }
+  .cov-n { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); white-space: nowrap; }
+  .cov-n b { color: var(--fg); }
+  .cov-sub.last .cov-n b { color: var(--ppf-l4); }
+  .cov-gh { color: var(--muted); font-size: 12px; text-transform: uppercase;
+    letter-spacing: .06em; margin: 16px 0 4px; }
 "#;
 
 pub fn render(d: &ReportData) -> String {
@@ -250,6 +267,10 @@ pub fn render(d: &ReportData) -> String {
         html.push_str("</div>\n");
     }
 
+    // Présence déclarative en annuaire (Peppol + PPF) — après le réseau, dont
+    // elle est explicitement distincte.
+    coverage_section(&mut html, d.coverage, d.record_plural);
+
     // Pied de page.
     html.push_str(&format!(
         "<footer>\n<span>Généré par Super Popaul v{} · {}</span>\n\
@@ -259,6 +280,58 @@ pub fn render(d: &ReportData) -> String {
     ));
     html.push_str("</div>\n</body>\n</html>\n");
     html
+}
+
+// Section « Présence déclarative en annuaire » : barres (pas anneaux) pour la
+// distinguer du réseau. Rendue seulement si au moins un annuaire est chargé.
+// Dénominateur = éligibles 0225 ; « lignes » remplacé par le libellé record.
+fn coverage_section(html: &mut String, c: &crate::coverage::Coverage, record_plural: &str) {
+    if c.peppol.is_none() && c.ppf.is_none() {
+        return;
+    }
+    let denom = c.eligible_0225;
+    let pct = |n: usize| -> String {
+        match (n * 100 + denom / 2).checked_div(denom) {
+            Some(v) => format!("{v} %"),
+            None => "—".to_string(),
+        }
+    };
+    let width = |n: usize| -> f64 {
+        if denom == 0 { 0.0 } else { n as f64 * 100.0 / denom as f64 }
+    };
+    let row = |html: &mut String, sub: bool, last: bool, color: &str, name: &str, tag: &str, n: usize, bold_name: bool| {
+        let cls = if sub { if last { "cov-row cov-sub last" } else { "cov-row cov-sub" } } else { "cov-row" };
+        let name_html = if bold_name { format!("<b>{name}</b>") } else { name.to_string() };
+        let tag_html = if tag.is_empty() { String::new() } else { format!(" <span class=\"tag\">{tag}</span>") };
+        html.push_str(&format!(
+            "<div class=\"{cls}\"><span class=\"cov-name\">\
+             <span class=\"cov-sw\" style=\"background:var(--{color})\"></span>{name_html}{tag_html}</span>\
+             <span class=\"bar\"><i style=\"width:{:.0}%;background:var(--{color})\"></i></span>\
+             <span class=\"cov-n\"><b>{}</b> / {} · {}</span></div>\n",
+            width(n), fmt_int(n as u64), fmt_int(denom as u64), pct(n)
+        ));
+    };
+
+    html.push_str("<h2>Présence déclarative en annuaire</h2>\n<div class=\"pa\">\n");
+    html.push_str(&format!(
+        "<p class=\"cov-elig\"><b>{}</b> éligibles 0225 / <b>{}</b> {} · <b>{}</b> non applicables — \
+         présence déclarée dans les annuaires chargés, distincte du « Provisionnés Réseau Peppol » ci-dessus.</p>\n",
+        fmt_int(denom as u64),
+        fmt_int(c.total_lines as u64),
+        record_plural,
+        fmt_int(c.non_applicable as u64),
+    ));
+    if let Some(p) = c.peppol {
+        row(html, false, false, "green", "Annuaire Peppol", "", p.present, false);
+    }
+    if let Some(p) = c.ppf {
+        html.push_str("<div class=\"cov-gh\">Annuaire PPF — présent → utilisable</div>\n");
+        row(html, false, false, "ppf-l1", "Annuaire PPF", "", p.present, true);
+        row(html, true, false, "ppf-l2", "PPF actif", "motif C/P", p.active, false);
+        row(html, true, false, "ppf-l3", "PDP définie", "réelle", p.pdp_definie, false);
+        row(html, true, true, "ppf-l4", "PPF utilisable", "actif + PDP réelle", p.usable, false);
+    }
+    html.push_str("</div>\n");
 }
 
 // Chaque paramètre est une donnée distincte de la tuile (cible, couleur, deux
@@ -434,8 +507,33 @@ fn ring_segments(s: &Snapshot) -> Vec<(&'static str, f64, f64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::coverage::{Coverage, PeppolCoverage, PpfCoverage};
     use crate::telemetry::NamedCount;
     use std::collections::BTreeMap;
+
+    // Couverture « vide » (aucun annuaire chargé) : référence 'static, permet de
+    // garder `data()` inchangé et laisse la section absente du rendu.
+    static EMPTY_COV: Coverage = Coverage {
+        total_lines: 0,
+        eligible_0225: 0,
+        non_applicable: 0,
+        peppol: None,
+        ppf: None,
+    };
+
+    fn cov_full() -> Coverage {
+        Coverage {
+            total_lines: 1000,
+            eligible_0225: 900,
+            non_applicable: 100,
+            peppol: Some(PeppolCoverage { present: 812 }),
+            ppf: Some(PpfCoverage { present: 640, active: 590, pdp_definie: 610, usable: 570 }),
+        }
+    }
+
+    fn data_with<'a>(s: &'a Snapshot, cov: &'a Coverage) -> ReportData<'a> {
+        ReportData { coverage: cov, ..data(s) }
+    }
 
     fn named(pairs: &[(&str, u64)]) -> Vec<NamedCount> {
         pairs
@@ -493,6 +591,7 @@ mod tests {
             version: "0.3.4",
             snapshot: s,
             record_plural: "lignes",
+            coverage: &EMPTY_COV,
         }
     }
 
@@ -726,5 +825,36 @@ mod tests {
         assert_eq!(fmt_pct(4_550, 11_942), "38,1\u{202F}%");
         assert_eq!(fmt_pct(0, 0), "0,0\u{202F}%");
         assert_eq!(fmt_pct(1, 1), "100,0\u{202F}%");
+    }
+
+    #[test]
+    fn couverture_section_rendue_et_distincte_du_reseau() {
+        let s = snap();
+        let cov = cov_full();
+        let html = render(&data_with(&s, &cov));
+        assert!(html.contains("Présence déclarative en annuaire"), "titre section");
+        assert!(html.contains("Annuaire Peppol"), "ligne Peppol");
+        assert!(html.contains("PPF utilisable"), "ligne usable");
+        assert!(html.contains("812"), "présent Peppol");
+        assert!(html.contains("570"), "usable PPF");
+        // Coexiste avec le réseau, sans le remplacer.
+        assert!(html.contains("Provisionnés Réseau Peppol"), "KPI réseau conservé");
+    }
+
+    #[test]
+    fn couverture_absente_si_aucun_annuaire() {
+        // data() utilise EMPTY_COV (les deux annuaires None) → pas de section.
+        let html = render(&data(&snap()));
+        assert!(!html.contains("Présence déclarative en annuaire"));
+    }
+
+    #[test]
+    fn couverture_variables_ppf_dans_les_trois_themes() {
+        // --ppf-l4 défini pour dark (racine), clair (@media) et impression.
+        let html = render(&data(&snap()));
+        assert!(
+            html.matches("--ppf-l4").count() >= 3,
+            "variable PPF absente d'un contexte de thème"
+        );
     }
 }

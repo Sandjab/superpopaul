@@ -514,7 +514,7 @@ pub fn clear_run(state: State<'_, AppState>) {
 /// Écrit le rapport HTML du dernier run terminé, à côté du fichier de sortie
 /// (mêmes règles de répertoire que generate_output), et rend son chemin.
 #[tauri::command]
-pub fn export_report(state: State<'_, AppState>) -> Result<String, String> {
+pub async fn export_report(state: State<'_, AppState>) -> Result<String, String> {
     let (snapshot, file_name) = {
         let last = state.last_run.lock().unwrap();
         let last = last
@@ -524,22 +524,34 @@ pub fn export_report(state: State<'_, AppState>) -> Result<String, String> {
     };
     let cfg = state.current_config()?;
     let input = state.input_path()?;
-    let now = chrono::Local::now();
-    let html = report::render(&report::ReportData {
-        file_name: &file_name,
-        date_longue: &report::date_fr_longue(&now),
-        date_heure: &now.format("%d/%m/%Y %H:%M").to_string(),
-        today: now.date_naive(),
-        version: env!("CARGO_PKG_VERSION"),
-        snapshot: &snapshot,
-        record_plural: cfg.input.record_label.plural(),
-    });
-    let out = resolved_out_dir(&input, &cfg.output.dir).join(format!(
-        "{}_rapport.html",
-        input.file_stem().unwrap_or_default().to_string_lossy()
-    ));
-    std::fs::write(&out, html).map_err(|e| format!("écriture du rapport : {e}"))?;
-    Ok(out.display().to_string())
+    let store = state.store.clone();
+    // Scan CSV + requêtes store : bloquants, hors executor tokio.
+    tokio::task::spawn_blocking(move || {
+        let (_, pids, line_counts) = scan_unique_pids(&input, &cfg.input.pid_column)?;
+        let coverage = {
+            let store_g = store.lock().unwrap();
+            coverage_from_scan(&store_g, &pids, &line_counts)?
+        };
+        let now = chrono::Local::now();
+        let html = report::render(&report::ReportData {
+            file_name: &file_name,
+            date_longue: &report::date_fr_longue(&now),
+            date_heure: &now.format("%d/%m/%Y %H:%M").to_string(),
+            today: now.date_naive(),
+            version: env!("CARGO_PKG_VERSION"),
+            snapshot: &snapshot,
+            record_plural: cfg.input.record_label.plural(),
+            coverage: &coverage,
+        });
+        let out = resolved_out_dir(&input, &cfg.output.dir).join(format!(
+            "{}_rapport.html",
+            input.file_stem().unwrap_or_default().to_string_lossy()
+        ));
+        std::fs::write(&out, html).map_err(|e| format!("écriture du rapport : {e}"))?;
+        Ok(out.display().to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Répertoire de sortie effectif : celui des réglages (superpopaul.yaml) ;
