@@ -112,7 +112,9 @@ const CSS: &str = r#"
   .cov-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
   .cov-name .tag { color: var(--muted); font-size: 11.5px; }
   .cov-sw { width: 9px; height: 9px; border-radius: 3px; flex: none; }
-  .cov-sub .cov-name { padding-left: 18px; color: var(--muted); }
+  .cov-sub .cov-name { position: relative; padding-left: 20px; color: var(--muted); }
+  .cov-sub .cov-name::before { content: "├"; position: absolute; left: 4px; color: var(--border); }
+  .cov-sub.last .cov-name::before { content: "└"; }
   .cov-n { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); white-space: nowrap; }
   .cov-n b { color: var(--fg); }
   .cov-sub.last .cov-n b { color: var(--ppf-l4); }
@@ -292,7 +294,7 @@ fn coverage_section(html: &mut String, c: &crate::coverage::Coverage, record_plu
     let denom = c.eligible_0225;
     let pct = |n: usize| -> String {
         match (n * 100 + denom / 2).checked_div(denom) {
-            Some(v) => format!("{v} %"),
+            Some(v) => format!("{v}\u{202F}%"),
             None => "—".to_string(),
         }
     };
