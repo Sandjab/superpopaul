@@ -10,6 +10,8 @@
   --btn2: #1b2740; --track: #223050;
   /* écru lumineux — accent colonne des adressages (🔑) */
   --pid: #e8e4d8;
+  /* famille PPF (onglet Format) : violet en dégradé, entonnoir large → strict */
+  --ppf-l1: #6f6aa8; --ppf-l2: #8a80d4; --ppf-l3: #a892ff; --ppf-l4: #c3b6ff;
   /* Prêt plus tard (v0.4.0) : vert éteint, pris sur le vert — c'était compté
      prêt, on précise. Jamais l'or (accent) ni l'orange (avertissement). */
   --green-later: #2f8050;
@@ -130,6 +132,10 @@ th { background: var(--card); }
 #out-preview th { cursor: grab; user-select: none; white-space: nowrap; }
 #out-preview th.peppol { color: var(--gold); box-shadow: inset 0 0 0 1px var(--gold); }
 #out-preview th.dir { color: var(--green); box-shadow: inset 0 0 0 1px var(--green); }
+#out-preview th.ppf-annuaire { color: var(--ppf-l1); box-shadow: inset 0 0 0 1px var(--ppf-l1); }
+#out-preview th.ppf-active   { color: var(--ppf-l2); box-shadow: inset 0 0 0 1px var(--ppf-l2); }
+#out-preview th.ppf-pdp      { color: var(--ppf-l3); box-shadow: inset 0 0 0 1px var(--ppf-l3); }
+#out-preview th.ppf-usable   { color: var(--ppf-l4); box-shadow: inset 0 0 0 1px var(--ppf-l4); }
 /* Drag des colonnes (SortableJS forceFallback) : placeholder or translucide
    dans le tableau, clone flottant ombré qui suit le curseur (fallbackOnBody). */
 #out-preview th.drag-ghost { opacity: .4; background: rgba(217, 168, 63, .16); }
@@ -153,6 +159,10 @@ body > .drag-fallback {
 }
 .chip.peppol { color: var(--gold); border-color: var(--gold); }
 .chip.dir { color: var(--green); border-color: var(--green); }
+.chip.ppf-annuaire { color: var(--ppf-l1); border-color: var(--ppf-l1); }
+.chip.ppf-active   { color: var(--ppf-l2); border-color: var(--ppf-l2); }
+.chip.ppf-pdp      { color: var(--ppf-l3); border-color: var(--ppf-l3); }
+.chip.ppf-usable   { color: var(--ppf-l4); border-color: var(--ppf-l4); }
 #out-preview td.temp { background: rgba(217, 168, 63, .10); }
 
 #format-head { display: flex; align-items: center; gap: 10px; }
