@@ -1007,8 +1007,10 @@ function renderPpf() {
       ));
       const tbody = h("tbody", {});
       for (const f of files) {
-        const name = h("td", { class: "name", title: f.file_name }, f.file_name);
-        if (f.is_duplicate) name.append(" ", h("span", { class: "ppf-dup" }, "(doublon)"));
+        const inner = h("div", { class: "name-inner", title: f.file_name },
+          h("span", { class: "fname" }, f.file_name));
+        if (f.is_duplicate) inner.append(h("span", { class: "ppf-dup" }, "(doublon)"));
+        const name = h("td", { class: "name" }, inner);
         const added = h("td", { class: `num added ${f.added_addr > 0 ? "pos" : "zero"}` });
         if (f.added_addr > 0) added.append(h("b", {}, f.added_addr.toLocaleString("fr-FR")));
         else added.append("0");

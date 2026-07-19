@@ -779,6 +779,19 @@ mod tests {
     }
 
     #[test]
+    fn ppf_files_relit_le_flag_doublon() {
+        // Maillon d'affichage : c'est ppf_files() (pas le retour de ingest_ppf)
+        // qui alimente la liste. Un re-dépôt de même content_hash doit ressortir
+        // is_duplicate=true APRÈS relecture depuis la table.
+        let s = Store::open_in_memory().unwrap();
+        s.ingest_ppf("a.csv", "HASH", &[ppf_row("id1", "C", 1)], 1, 1).unwrap();
+        s.ingest_ppf("a.csv", "HASH", &[ppf_row("id1", "C", 1)], 1, 2).unwrap();
+        let files = s.ppf_files().unwrap();
+        assert!(files[0].is_duplicate, "le re-dépôt (le plus récent) est un doublon");
+        assert!(!files[1].is_duplicate, "le premier dépôt n'est pas un doublon");
+    }
+
+    #[test]
     fn ouverture_cree_les_tables_ppf() {
         // Base préexistante sans les tables PPF → créées à l'ouverture.
         let dir = tempfile::tempdir().unwrap();

@@ -412,8 +412,13 @@ table.ppf-files { border-collapse: collapse; width: 100%; margin: 6px 0 0; font-
 .ppf-files th, .ppf-files td { border: 1px solid var(--border); padding: 4px 10px; text-align: left; }
 .ppf-files th { background: var(--card); color: var(--muted); font-weight: 600; }
 .ppf-files th.num, .ppf-files td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.ppf-files td.name { max-width: 34ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ppf-dup { color: var(--muted); font-style: italic; }
+/* Nom tronquable + « (doublon) » toujours visible : le nom vit dans un flex
+   item qui rétrécit et coupe (min-width:0 + ellipsis), la mention reste à
+   droite en flex:none — sinon un nom long la pousse hors du overflow:hidden. */
+.ppf-files td.name { max-width: 34ch; }
+.ppf-files .name-inner { display: flex; align-items: baseline; gap: 6px; }
+.ppf-files .name-inner .fname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.ppf-dup { flex: none; color: var(--muted); font-style: italic; }
 .ppf-files td.added.pos b { color: var(--green); }
 .ppf-files td.added.zero { color: var(--muted); }
 .ppf-files td.when { color: var(--muted); white-space: nowrap; }
