@@ -2,7 +2,7 @@ use crate::config::{ColumnSpec, OutputConfig, OutputEncoding, OutputSeparator, P
 use crate::csv_io::CsvMeta;
 use crate::directory::parse_0225_value;
 use crate::pid::canonical;
-use crate::store::Resolution;
+use crate::store::{PpfFlags, Resolution};
 use encoding_rs_io::DecodeReaderBytesBuilder;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
@@ -42,6 +42,10 @@ pub fn field_name(f: PeppolField) -> &'static str {
         PeppolField::CtcExpiration => "ctc_expiration",
         PeppolField::CtcStatus => "ctc_status",
         PeppolField::InDirectory => "in_directory",
+        PeppolField::AnnuairePpf => "annuaire_ppf",
+        PeppolField::PpfActive => "ppf_active",
+        PeppolField::PdpDefinie => "pdp_definie",
+        PeppolField::PpfUsable => "ppf_usable",
     }
 }
 
@@ -80,9 +84,9 @@ pub fn with_stamp(path: &Path, stamp: Option<&str>) -> PathBuf {
 /// dans le même répertoire, renommé vers la cible seulement après le flush —
 /// un disque plein ou une permission refusée en cours de route ne laisse
 /// jamais un CSV d'apparence valide mais tronqué.
-// 8 paramètres : chacun porte une donnée distincte de l'export (entrée,
-// méta, colonne PID, config de sortie, base, annuaire, chemin de sortie,
-// horodatage) — pas un signe de mauvais découpage.
+// 9 paramètres : chacun porte une donnée distincte de l'export (entrée,
+// méta, colonne PID, config de sortie, base, annuaire Peppol, annuaire PPF,
+// chemin de sortie, horodatage) — pas un signe de mauvais découpage.
 #[allow(clippy::too_many_arguments)]
 pub fn generate(
     input_path: &Path,
@@ -91,6 +95,7 @@ pub fn generate(
     output: &OutputConfig,
     resolutions: &HashMap<String, Resolution>,
     directory: Option<&HashSet<String>>,
+    ppf: Option<&HashMap<String, PpfFlags>>,
     out_path: &Path,
     stamp: Option<&str>,
 ) -> Result<PathBuf, String> {
@@ -116,7 +121,7 @@ pub fn generate(
     tmp_os.push(".tmp");
     let tmp_path = PathBuf::from(tmp_os);
 
-    if let Err(e) = write_output(input_path, meta, pid_column, output, resolutions, directory, &tmp_path) {
+    if let Err(e) = write_output(input_path, meta, pid_column, output, resolutions, directory, ppf, &tmp_path) {
         let _ = std::fs::remove_file(&tmp_path); // nettoyage best-effort
         return Err(e);
     }
@@ -173,6 +178,9 @@ impl<W: Write> Write for Windows1252Writer<W> {
 }
 
 /// Lit l'entrée et écrit toutes les lignes dans `tmp_path` (flush inclus).
+// Même arité que `generate` (moins out_path/stamp, plus tmp_path) — même
+// rationale : chaque paramètre porte une donnée distincte de l'export.
+#[allow(clippy::too_many_arguments)]
 fn write_output(
     input_path: &Path,
     meta: &CsvMeta,
@@ -180,6 +188,7 @@ fn write_output(
     output: &OutputConfig,
     resolutions: &HashMap<String, Resolution>,
     directory: Option<&HashSet<String>>,
+    ppf: Option<&HashMap<String, PpfFlags>>,
     tmp_path: &Path,
 ) -> Result<(), String> {
     let columns = &output.columns;
@@ -264,16 +273,29 @@ fn write_output(
         let raw_pid = rec.get(pid_idx).unwrap_or("");
         let cpid = canonical(raw_pid);
         let res = resolutions.get(&cpid);
-        // Présence annuaire : hors du gate `res` (un déclaré non provisionné
-        // n'a pas de Resolution mais doit ressortir "true").
+        // Valeur 0225 (partagée annuaire Peppol + PPF), calculée une fois.
+        let v0225 = parse_0225_value(&cpid);
+        // Présence annuaire Peppol : hors du gate `res` (un déclaré non
+        // provisionné n'a pas de Resolution mais doit ressortir "true").
         let in_dir: &str = match directory {
             None => "",
-            Some(set) => match parse_0225_value(&cpid) {
-                Some(v) if set.contains(&v) => "true",
+            Some(set) => match &v0225 {
+                Some(v) if set.contains(v) => "true",
                 Some(_) => "false",
                 None => "",
             },
         };
+        // Drapeaux PPF (hors gate `res`, comme in_dir). None = annuaire vide OU
+        // non-0225 → cellule vide ; Some(défaut) = 0225 absent de l'annuaire →
+        // tout "false".
+        let ppf_flags: Option<PpfFlags> = match (ppf, &v0225) {
+            (Some(map), Some(v)) => Some(map.get(v).copied().unwrap_or_default()),
+            _ => None,
+        };
+        let ppf_ann = match ppf_flags { Some(f) => fmt_bool(Some(f.in_ppf)), None => "" };
+        let ppf_act = match ppf_flags { Some(f) => fmt_bool(Some(f.active)), None => "" };
+        let ppf_pdp = match ppf_flags { Some(f) => fmt_bool(Some(f.pdp_definie)), None => "" };
+        let ppf_use = match ppf_flags { Some(f) => fmt_bool(Some(f.usable)), None => "" };
         // Zéro allocation par cellule : la ligne est un Vec<&str>.
         let row: Vec<&str> = columns
             .iter()
@@ -281,6 +303,10 @@ fn write_output(
             .map(|(c, idx)| match c {
                 ColumnSpec::Input { .. } => rec.get(idx.unwrap()).unwrap_or(""),
                 ColumnSpec::Peppol { field: PeppolField::InDirectory } => in_dir,
+                ColumnSpec::Peppol { field: PeppolField::AnnuairePpf } => ppf_ann,
+                ColumnSpec::Peppol { field: PeppolField::PpfActive } => ppf_act,
+                ColumnSpec::Peppol { field: PeppolField::PdpDefinie } => ppf_pdp,
+                ColumnSpec::Peppol { field: PeppolField::PpfUsable } => ppf_use,
                 ColumnSpec::Peppol { field } => match res {
                     None => "",
                     Some(r) => match field {
@@ -293,6 +319,12 @@ fn write_output(
                         PeppolField::CtcExpiration => r.ctc_expiration.as_deref().unwrap_or(""),
                         PeppolField::CtcStatus => ctc_status(r, now),
                         PeppolField::InDirectory => unreachable!("traité par le bras dédié ci-dessus"),
+                        PeppolField::AnnuairePpf
+                        | PeppolField::PpfActive
+                        | PeppolField::PdpDefinie
+                        | PeppolField::PpfUsable => {
+                            unreachable!("champs PPF traités par les bras dédiés ci-dessus")
+                        }
                     },
                 },
             })
@@ -314,7 +346,7 @@ mod tests {
     use super::*;
     use crate::config::{ColumnSpec, OutputEncoding, OutputSeparator, PeppolField};
     use crate::csv_io::CsvMeta;
-    use crate::store::Resolution;
+    use crate::store::{PpfFlags, Resolution};
     use std::collections::HashMap;
     use std::io::Write;
 
@@ -402,7 +434,7 @@ mod tests {
         ];
         let meta = CsvMeta { delimiter: b';', encoding: "utf-8" };
         let written =
-            generate(&input, &meta, "siren", &out_cfg(cols), &m, None, &out, None).unwrap();
+            generate(&input, &meta, "siren", &out_cfg(cols), &m, None, None, &out, None).unwrap();
         let content = std::fs::read_to_string(&written).unwrap();
         let lines: Vec<&str> = content.trim_start_matches('\u{feff}').lines().collect();
         assert_eq!(lines[0], "ctc_activation;ctc_expiration;ctc_status");
@@ -422,7 +454,7 @@ mod tests {
             .unwrap();
         let out = dir.path().join("out.csv");
         let meta = CsvMeta { delimiter: b';', encoding: "utf-8" };
-        let err = generate(&input, &meta, "siren", &out_cfg(vec![]), &resolutions(), None, &out, None)
+        let err = generate(&input, &meta, "siren", &out_cfg(vec![]), &resolutions(), None, None, &out, None)
             .unwrap_err();
         assert!(err.contains("colonne"), "{err}");
         assert!(!out.exists());
@@ -440,7 +472,7 @@ mod tests {
             .unwrap();
         let meta = CsvMeta { delimiter: b';', encoding: "utf-8" };
         let cols = vec![ColumnSpec::Input { name: "siren".into() }];
-        let err = generate(&input, &meta, "siren", &out_cfg(cols), &resolutions(), None, &input, None)
+        let err = generate(&input, &meta, "siren", &out_cfg(cols), &resolutions(), None, None, &input, None)
             .unwrap_err();
         assert!(err.contains("écraserait"), "{err}");
         // Le fichier d'entrée est intact.
@@ -475,6 +507,7 @@ mod tests {
             "siren",
             &out_cfg(cols),
             &resolutions(),
+            None,
             None,
             &out,
             None,
@@ -520,6 +553,7 @@ mod tests {
             &out_cfg(cols),
             &resolutions(),
             None,
+            None,
             &out,
             None,
         )
@@ -551,6 +585,7 @@ mod tests {
             &out_cfg(cols),
             &resolutions(),
             None,
+            None,
             &out,
             None,
         )
@@ -572,7 +607,7 @@ mod tests {
             delimiter: b';',
             encoding: "utf-8",
         };
-        let written = generate(&input, &meta, "siren", &cfg, &resolutions(), None, &out, None).unwrap();
+        let written = generate(&input, &meta, "siren", &cfg, &resolutions(), None, None, &out, None).unwrap();
         let raw = std::fs::read(&written).unwrap();
         assert!(!raw.starts_with(b"\xEF\xBB\xBF"), "pas de BOM attendu");
         assert!(String::from_utf8(raw).unwrap().contains("Société"));
@@ -591,7 +626,7 @@ mod tests {
             delimiter: b';',
             encoding: "utf-8",
         };
-        let written = generate(&input, &meta, "siren", &cfg, &resolutions(), None, &out, None).unwrap();
+        let written = generate(&input, &meta, "siren", &cfg, &resolutions(), None, None, &out, None).unwrap();
         let raw = std::fs::read(&written).unwrap();
         assert!(!raw.starts_with(b"\xEF\xBB\xBF"), "pas de BOM en 1252");
         let pos = raw.windows(5).position(|w| w == b"Soci\xE9");
@@ -619,7 +654,7 @@ mod tests {
             delimiter: b';',
             encoding: "utf-8",
         };
-        let written = generate(&input, &meta, "siren", &cfg, &resolutions(), None, &out, None).unwrap();
+        let written = generate(&input, &meta, "siren", &cfg, &resolutions(), None, None, &out, None).unwrap();
         let content = std::fs::read_to_string(&written).unwrap();
         let content = content.trim_start_matches('\u{feff}');
         let lines: Vec<&str> = content.lines().collect();
@@ -650,7 +685,7 @@ mod tests {
         set.insert("111".to_string());
         let cols = vec![ColumnSpec::Peppol { field: PeppolField::InDirectory }];
         let written = generate(&input, &meta, "siren", &out_cfg(cols),
-                               &HashMap::new(), Some(&set), &out, None).unwrap();
+                               &HashMap::new(), Some(&set), None, &out, None).unwrap();
         let content = std::fs::read_to_string(&written).unwrap();
         let lines: Vec<&str> = content.trim_start_matches('\u{feff}').lines().collect();
         assert_eq!(lines[0], "in_directory");
@@ -664,6 +699,68 @@ mod tests {
     }
 
     #[test]
+    fn ppf_champs_true_false_vide() {
+        // "111" présent+usable ; "222" présent annuaire seul ; "0009:333"
+        // (non-0225) → vide. resolutions VIDE : le calcul ne dépend pas de la
+        // résolution.
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("in.csv");
+        std::fs::File::create(&input)
+            .unwrap()
+            .write_all(b"siren\n111\n222\n0009:333\n")
+            .unwrap();
+        let out = dir.path().join("out.csv");
+        let meta = CsvMeta { delimiter: b';', encoding: "utf-8" };
+        let mut map = HashMap::new();
+        map.insert(
+            "111".to_string(),
+            PpfFlags { in_ppf: true, active: true, pdp_definie: true, usable: true },
+        );
+        map.insert(
+            "222".to_string(),
+            PpfFlags { in_ppf: true, active: false, pdp_definie: false, usable: false },
+        );
+        let cols = vec![
+            ColumnSpec::Peppol { field: PeppolField::AnnuairePpf },
+            ColumnSpec::Peppol { field: PeppolField::PpfUsable },
+        ];
+        let written = generate(
+            &input, &meta, "siren", &out_cfg(cols), &HashMap::new(), None, Some(&map), &out, None,
+        )
+        .unwrap();
+        let content = std::fs::read_to_string(&written).unwrap();
+        let lines: Vec<&str> = content.trim_start_matches('\u{feff}').lines().collect();
+        assert_eq!(lines[0], "annuaire_ppf;ppf_usable");
+        assert_eq!(lines[1], "true;true", "111 usable");
+        assert_eq!(lines[2], "true;false", "222 annuaire seul");
+        assert_eq!(lines[3], ";", "non-0225 → deux vides");
+    }
+
+    #[test]
+    fn ppf_champs_vides_si_annuaire_ppf_absent() {
+        // ppf = None → les 4 colonnes vides même pour un 0225.
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("in.csv");
+        std::fs::File::create(&input).unwrap().write_all(b"siren\n111\n").unwrap();
+        let out = dir.path().join("out.csv");
+        let meta = CsvMeta { delimiter: b';', encoding: "utf-8" };
+        let cols = vec![
+            ColumnSpec::Peppol { field: PeppolField::AnnuairePpf },
+            ColumnSpec::Peppol { field: PeppolField::PpfActive },
+            ColumnSpec::Peppol { field: PeppolField::PdpDefinie },
+            ColumnSpec::Peppol { field: PeppolField::PpfUsable },
+        ];
+        let written = generate(
+            &input, &meta, "siren", &out_cfg(cols), &HashMap::new(), None, None, &out, None,
+        )
+        .unwrap();
+        let content = std::fs::read_to_string(&written).unwrap();
+        let lines: Vec<&str> = content.trim_start_matches('\u{feff}').lines().collect();
+        assert_eq!(lines[0], "annuaire_ppf;ppf_active;pdp_definie;ppf_usable");
+        assert_eq!(lines[1], ";;;", "annuaire PPF absent → 4 vides");
+    }
+
+    #[test]
     fn in_directory_vide_si_annuaire_non_charge() {
         let dir = tempfile::tempdir().unwrap();
         let input = dir.path().join("in.csv");
@@ -673,7 +770,7 @@ mod tests {
         let cols = vec![ColumnSpec::Peppol { field: PeppolField::InDirectory }];
         // directory = None → colonne vide même pour un 0225.
         let written = generate(&input, &meta, "siren", &out_cfg(cols),
-                               &HashMap::new(), None, &out, None).unwrap();
+                               &HashMap::new(), None, None, &out, None).unwrap();
         let content = std::fs::read_to_string(&written).unwrap();
         let lines: Vec<&str> = content.trim_start_matches('\u{feff}').lines().collect();
         assert_eq!(lines[0], "in_directory");

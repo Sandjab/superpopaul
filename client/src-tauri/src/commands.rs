@@ -559,6 +559,7 @@ pub async fn generate_output(state: State<'_, AppState>) -> Result<String, Strin
             &cfg.output,
             &resolutions,
             directory.as_ref(),
+            None,
             &out,
             stamp.as_deref(),
         )?;

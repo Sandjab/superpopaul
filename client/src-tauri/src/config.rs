@@ -242,6 +242,16 @@ pub enum PeppolField {
     /// Présence dans l'annuaire Peppol (table peppol_directory, déclaratif) —
     /// calculée par jointure, indépendamment de la résolution.
     InDirectory,
+    /// Jointure avec l'annuaire PPF (`ppf_directory`, client-only). Chaque champ
+    /// est indépendant de la résolution et de l'annuaire Peppol.
+    /// `annuaire_ppf` : identifiant présent (≥1 ligne).
+    AnnuairePpf,
+    /// ≥1 ligne au motif C ou P.
+    PpfActive,
+    /// ≥1 ligne avec pdp_fictive = 0.
+    PdpDefinie,
+    /// ≥1 même ligne (motif C|P) ET pdp_fictive = 0.
+    PpfUsable,
 }
 
 /// Bornes des paramètres API — partagées entre la config runtime (set_config)
