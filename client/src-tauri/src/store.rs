@@ -48,6 +48,17 @@ pub struct PpfSummary {
     pub file_count: i64,
 }
 
+/// Drapeaux PPF dérivés d'un identifiant par jointure sur `ppf_directory`
+/// (un identifiant = ≥1 ligne (motif, pdp_fictive)). `in_ppf` est toujours
+/// vrai pour un identifiant présent ; les absents ne sont pas dans la map.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct PpfFlags {
+    pub in_ppf: bool,      // annuaire_ppf — ≥1 ligne
+    pub active: bool,      // ppf_active   — ≥1 ligne motif C|P
+    pub pdp_definie: bool, // pdp_definie  — ≥1 ligne pdp_fictive=0
+    pub usable: bool,      // ppf_usable   — ≥1 même ligne (C|P) ET pdp_fictive=0
+}
+
 pub struct Store {
     conn: Connection,
 }
@@ -407,6 +418,45 @@ impl Store {
             .query_row("SELECT COUNT(*) FROM ppf_files", [], |r| r.get(0))
             .map_err(|e| e.to_string())?;
         Ok(PpfSummary { distinct_addr, file_count })
+    }
+
+    /// Drapeaux PPF pour chaque `identifiant` présent en table (les absents ne
+    /// figurent pas dans la map → tout `false` côté appelant). Par lots de 500
+    /// (limite de variables SQLite), motif `directory_present`. `ppf_usable`
+    /// exige (motif C|P) ET pdp_fictive=0 sur la MÊME ligne, d'où l'agrégat
+    /// `MAX(... AND ...)` distinct de `active AND pdp_definie`.
+    pub fn ppf_flags(&self, identifiants: &[String]) -> Result<HashMap<String, PpfFlags>, String> {
+        let mut out = HashMap::new();
+        for chunk in identifiants.chunks(500) {
+            let placeholders = vec!["?"; chunk.len()].join(",");
+            let sql = format!(
+                "SELECT identifiant, \
+                        MAX(motif IN ('C','P')), \
+                        MAX(pdp_fictive = 0), \
+                        MAX(motif IN ('C','P') AND pdp_fictive = 0) \
+                 FROM ppf_directory WHERE identifiant IN ({placeholders}) \
+                 GROUP BY identifiant"
+            );
+            let mut stmt = self.conn.prepare_cached(&sql).map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map(rusqlite::params_from_iter(chunk), |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        PpfFlags {
+                            in_ppf: true,
+                            active: r.get::<_, i64>(1)? != 0,
+                            pdp_definie: r.get::<_, i64>(2)? != 0,
+                            usable: r.get::<_, i64>(3)? != 0,
+                        },
+                    ))
+                })
+                .map_err(|e| e.to_string())?;
+            for row in rows {
+                let (id, flags) = row.map_err(|e| e.to_string())?;
+                out.insert(id, flags);
+            }
+        }
+        Ok(out)
     }
 
     /// Reset : vide la table et l'historique (les fichiers sur disque intacts),
@@ -811,5 +861,71 @@ mod tests {
         assert_eq!(s.ppf_summary().unwrap().file_count, 0);
         s.ingest_ppf("a.csv", "hA", &[ppf_row("id1", "C", 1)], 1, 1).unwrap();
         assert_eq!(s.ppf_summary().unwrap().distinct_addr, 1);
+    }
+
+    #[test]
+    fn ppf_flags_calcule_les_quatre_drapeaux() {
+        let s = Store::open_in_memory().unwrap();
+        // id_all    : présent, motif V + pdp fictive → annuaire seul.
+        // id_active : motif C, pdp fictive → active seul.
+        // id_pdp    : motif V, pdp réelle → pdp_definie seul.
+        // id_split  : (C,1) + (V,0) → active ET pdp_definie mais PAS usable.
+        // id_usable : (P,0) → les quatre vrais.
+        s.ingest_ppf(
+            "f.csv",
+            "h",
+            &[
+                ppf_row("id_all", "V", 1),
+                ppf_row("id_active", "C", 1),
+                ppf_row("id_pdp", "V", 0),
+                ppf_row("id_split", "C", 1),
+                ppf_row("id_split", "V", 0),
+                ppf_row("id_usable", "P", 0),
+            ],
+            6,
+            1,
+        )
+        .unwrap();
+
+        let ids: Vec<String> =
+            ["id_all", "id_active", "id_pdp", "id_split", "id_usable", "id_absent"]
+                .iter()
+                .map(|x| x.to_string())
+                .collect();
+        let m = s.ppf_flags(&ids).unwrap();
+
+        assert_eq!(
+            m.get("id_all").copied(),
+            Some(PpfFlags { in_ppf: true, active: false, pdp_definie: false, usable: false })
+        );
+        assert_eq!(
+            m.get("id_active").copied(),
+            Some(PpfFlags { in_ppf: true, active: true, pdp_definie: false, usable: false })
+        );
+        assert_eq!(
+            m.get("id_pdp").copied(),
+            Some(PpfFlags { in_ppf: true, active: false, pdp_definie: true, usable: false })
+        );
+        assert_eq!(
+            m.get("id_split").copied(),
+            Some(PpfFlags { in_ppf: true, active: true, pdp_definie: true, usable: false }),
+            "C et pdp=0 sur des lignes DIFFÉRENTES → usable faux"
+        );
+        assert_eq!(
+            m.get("id_usable").copied(),
+            Some(PpfFlags { in_ppf: true, active: true, pdp_definie: true, usable: true })
+        );
+        assert!(!m.contains_key("id_absent"), "absent de l'annuaire → pas dans la map");
+    }
+
+    #[test]
+    fn ppf_flags_traverse_plusieurs_lots() {
+        let s = Store::open_in_memory().unwrap();
+        let rows: Vec<_> = (0..600).map(|i| ppf_row(&format!("id{i}"), "C", 0)).collect();
+        s.ingest_ppf("f.csv", "h", &rows, 600, 1).unwrap();
+        let ids: Vec<String> = (0..600).map(|i| format!("id{i}")).collect();
+        let m = s.ppf_flags(&ids).unwrap();
+        assert_eq!(m.len(), 600);
+        assert!(m.values().all(|f| f.usable), "tous (C,0) → usable");
     }
 }
