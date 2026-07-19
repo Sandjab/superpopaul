@@ -1,7 +1,8 @@
 //! Rapport HTML autonome de fin de run — livrable client : agrégats
 //! uniquement (jamais de liste d'adressages), identité « Bleu nuit & or »,
-//! zéro JavaScript (anneau et barres en SVG/CSS statiques), variante
-//! impression fond clair. Toute valeur injectée (nom de fichier, nom de PA)
+//! zéro JavaScript (anneau et barres en SVG/CSS statiques), variante fond
+//! clair (impression + écran selon le thème du lecteur). Toute valeur
+//! injectée (nom de fichier, nom de PA)
 //! est échappée : un nom de PA vient des SMP, c'est une entrée non fiable.
 
 use crate::telemetry::Snapshot;
@@ -25,7 +26,8 @@ pub struct ReportData<'a> {
 }
 
 /// CSS du rapport — la maquette validée le 16/07/2026, identité « Bleu nuit
-/// & or » (tokens de styles.css), avec variante impression fond clair.
+/// & or » (tokens de styles.css), avec variantes fond clair (impression +
+/// écran selon le thème du lecteur).
 const CSS: &str = r#"
   :root {
     --bg: #0e1524; --card: #172136; --border: #2b3752;
@@ -88,6 +90,12 @@ const CSS: &str = r#"
   .pa-n b { color: var(--fg); }
   footer { margin-top: 36px; padding-top: 14px; border-top: 1px solid var(--border);
     color: var(--muted); font-size: 12px; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 6px; }
+  /* Fond clair à l'écran quand le lecteur a un thème clair (OS/navigateur) —
+     même palette que l'impression, toujours sans JS. */
+  @media (prefers-color-scheme: light) {
+    :root { --bg: #ffffff; --card: #f6f5f1; --border: #d8d5cc; --fg: #1c2333; --muted: #5c6478; --track: #e4e1d8; }
+    .ring-sub { fill: #5c6478; }
+  }
   @media print {
     :root { --bg: #ffffff; --card: #f6f5f1; --border: #d8d5cc; --fg: #1c2333; --muted: #5c6478; --track: #e4e1d8; }
     .page { padding: 0; }
@@ -124,7 +132,7 @@ pub fn render(d: &ReportData) -> String {
     // Double lecture : le grand % est en adressages, le détail donne aussi
     // l'équivalent en lignes de fichier.
     html.push_str("<div class=\"kpis\">\n");
-    kpi(&mut html, "gold", s.exists, s.exists_lines, s, "Inscrits dans Peppol", None, d.record_plural);
+    kpi(&mut html, "gold", s.exists, s.exists_lines, s, "Provisionnés Réseau Peppol", None, d.record_plural);
     kpi(
         &mut html,
         "green",
@@ -394,9 +402,9 @@ fn ring_parts(s: &Snapshot) -> [(&'static str, &'static str, u64, u64); 6] {
     [
         ("green", "Prêts aujourd'hui (France Invoice UBL Extension)", s.ctc, s.ctc_lines),
         ("green-later", "Prêts plus tard (activation à venir)", s.ctc_later, s.ctc_later_lines),
-        ("gold", "Inscrits, sans l'extension", sans_ext, sans_ext_l),
-        ("amber", "Inscrits, verdict inconnu", s.no_verdict, s.no_verdict_lines),
-        ("track", "Absents de Peppol", absents, absents_l),
+        ("gold", "Provisionnés, sans l'extension", sans_ext, sans_ext_l),
+        ("amber", "Provisionnés, verdict inconnu", s.no_verdict, s.no_verdict_lines),
+        ("track", "Absents Réseau Peppol", absents, absents_l),
         ("red", "Non résolus", s.failed, s.failed_lines),
     ]
 }
@@ -504,6 +512,33 @@ mod tests {
             !html.contains("lignes"),
             "aucun « lignes » codé en dur ne doit subsister dans le rendu"
         );
+    }
+
+    #[test]
+    fn libelles_provisionnes_reseau() {
+        // Le rapport parle de « Provisionnés » (constaté sur le réseau Peppol),
+        // plus de « Inscrits » : distinction avec la présence déclarative dans
+        // l'annuaire. snap() a du verdict inconnu et des absents, donc les deux
+        // lignes de légende correspondantes sont présentes.
+        let html = render(&data(&snap()));
+        assert!(html.contains("Provisionnés Réseau Peppol"), "KPI réseau");
+        assert!(html.contains("Provisionnés, sans l'extension"), "légende sans extension");
+        assert!(html.contains("Provisionnés, verdict inconnu"), "légende verdict inconnu");
+        assert!(html.contains("Absents Réseau Peppol"), "légende absents");
+        assert!(!html.contains("Inscrits"), "plus aucun « Inscrits » codé en dur");
+        assert!(!html.contains("Absents de Peppol"), "ancien libellé absents");
+    }
+
+    #[test]
+    fn rapport_s_adapte_au_theme_clair_du_lecteur() {
+        // Le rapport bascule en fond clair si l'OS/navigateur du lecteur est en
+        // thème clair (@media prefers-color-scheme) — sans le moindre JS.
+        let html = render(&data(&snap()));
+        assert!(
+            html.contains("prefers-color-scheme: light"),
+            "variante écran clair absente du CSS"
+        );
+        assert!(!html.contains("<script"), "le rapport doit rester sans JS");
     }
 
     /// snap() + 535 « prêts plus tard » (498 au 01/09, 37 au 22/09 — le cas
