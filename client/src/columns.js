@@ -56,7 +56,9 @@ function makeHeader(c) {
   const pid = isPidSpec(c);
   const attrs = { class: colClass(c), "data-key": colKey(c) };
   if (c.source === "peppol")
-    attrs.title = "Champ calculé par l'API Peppol — les valeurs affichées sont un exemple.";
+    attrs.title = c.field === "in_directory"
+      ? "Présence déclarative dans l'annuaire Peppol chargé — indépendant du provisionning Peppol"
+      : "Champ calculé par l'API Peppol — les valeurs affichées sont un exemple.";
   if (pid)
     attrs.title = "Colonne des adressages — obligatoire en sortie, non écartable.";
   const th = h("th", attrs, "⠿ ");
