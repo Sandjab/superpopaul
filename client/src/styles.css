@@ -129,6 +129,7 @@ th, td { border: 1px solid var(--border); padding: 4px 10px; text-align: left; }
 th { background: var(--card); }
 #out-preview th { cursor: grab; user-select: none; white-space: nowrap; }
 #out-preview th.peppol { color: var(--gold); box-shadow: inset 0 0 0 1px var(--gold); }
+#out-preview th.dir { color: var(--green); box-shadow: inset 0 0 0 1px var(--green); }
 /* Drag des colonnes (SortableJS forceFallback) : placeholder or translucide
    dans le tableau, clone flottant ombré qui suit le curseur (fallbackOnBody). */
 #out-preview th.drag-ghost { opacity: .4; background: rgba(217, 168, 63, .16); }
@@ -151,6 +152,7 @@ body > .drag-fallback {
   padding: 3px 12px; cursor: grab; user-select: none; white-space: nowrap;
 }
 .chip.peppol { color: var(--gold); border-color: var(--gold); }
+.chip.dir { color: var(--green); border-color: var(--green); }
 #out-preview td.temp { background: rgba(217, 168, 63, .10); }
 
 #format-head { display: flex; align-items: center; gap: 10px; }
