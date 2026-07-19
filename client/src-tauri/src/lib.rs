@@ -1,6 +1,7 @@
 pub mod api;
 pub mod commands;
 pub mod config;
+pub mod coverage;
 pub mod ctc;
 pub mod csv_io;
 pub mod direct;
