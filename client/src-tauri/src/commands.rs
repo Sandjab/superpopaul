@@ -577,6 +577,23 @@ pub struct DirProgress {
     pub total: Option<u64>,
 }
 
+/// Progression d'ingestion PPF (phase parse ; pas de download).
+#[derive(Clone, Serialize)]
+pub struct PpfProgress {
+    pub done: u64,
+}
+
+/// SHA-256 hexadécimal minuscule du contenu brut d'un fichier.
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(bytes);
+    let mut out = String::with_capacity(64);
+    for b in digest {
+        out.push_str(&format!("{b:02x}"));
+    }
+    out
+}
+
 #[derive(Serialize)]
 pub struct DirLoadResult {
     pub loaded_at: i64,
@@ -668,6 +685,57 @@ pub async fn download_directory(
     result
 }
 
+/// Charge un fichier PPF : lit le contenu en mémoire (exports de taille
+/// modérée — pas 214 Mo comme l'annuaire Peppol), hashe, parse, ingère par
+/// upsert cumulatif. Renvoie l'entrée d'historique créée. BLOQUANT →
+/// spawn_blocking.
+#[tauri::command]
+pub async fn load_ppf_file(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<crate::store::PpfFile, String> {
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || {
+        let bytes = std::fs::read(&path).map_err(|e| format!("lecture du fichier PPF : {e}"))?;
+        let content_hash = sha256_hex(&bytes);
+        let file_name = Path::new(&path)
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.clone());
+        let parse = crate::ppf::stream_ppf(std::io::Cursor::new(&bytes), |done| {
+            let _ = app.emit("ppf://progress", PpfProgress { done });
+        })?;
+        store.lock().unwrap().ingest_ppf(
+            &file_name,
+            &content_hash,
+            &parse.rows,
+            parse.lines as i64,
+            chrono::Utc::now().timestamp(),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Historique des fichiers PPF ingérés (le plus récent en tête).
+#[tauri::command]
+pub fn ppf_files(state: State<'_, AppState>) -> Result<Vec<crate::store::PpfFile>, String> {
+    state.store.lock().unwrap().ppf_files()
+}
+
+/// Résumé de l'annuaire PPF (adressages distincts, nombre de fichiers).
+#[tauri::command]
+pub fn ppf_summary(state: State<'_, AppState>) -> Result<crate::store::PpfSummary, String> {
+    state.store.lock().unwrap().ppf_summary()
+}
+
+/// Vide l'annuaire PPF et son historique.
+#[tauri::command]
+pub fn reset_ppf(state: State<'_, AppState>) -> Result<(), String> {
+    state.store.lock().unwrap().reset_ppf()
+}
+
 #[cfg(test)]
 mod tests_calibration_prerequisites {
     use super::*;
@@ -696,5 +764,22 @@ mod tests_calibration_prerequisites {
         let e = calibration_prerequisites("", " ").unwrap_err();
         assert!(e.contains("clé API"), "{e}");
         assert!(e.contains("fichier d'entrée"), "{e}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sha256_hex_valeurs_connues() {
+        assert_eq!(
+            sha256_hex(b""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        assert_eq!(
+            sha256_hex(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
     }
 }
