@@ -420,26 +420,38 @@ impl Store {
         Ok(PpfSummary { distinct_addr, file_count })
     }
 
-    /// Drapeaux PPF pour chaque `identifiant` présent en table (les absents ne
-    /// figurent pas dans la map → tout `false` côté appelant). Par lots de 500
-    /// (limite de variables SQLite), motif `directory_present`. `ppf_usable`
-    /// exige (motif C|P) ET pdp_fictive=0 sur la MÊME ligne, d'où l'agrégat
-    /// `MAX(... AND ...)` distinct de `active AND pdp_definie`.
-    pub fn ppf_flags(&self, identifiants: &[String]) -> Result<HashMap<String, PpfFlags>, String> {
+    /// Drapeaux PPF pour chaque `identifiant` présent en table. `active_motifs`
+    /// (déjà normalisés en majuscules, non vides — cf. PpfConfig/validate_ppf)
+    /// définit les motifs « actifs » qui alimentent `active` et `usable`.
+    /// `ppf_usable` exige (motif actif) ET pdp_fictive=0 sur la MÊME ligne.
+    pub fn ppf_flags(
+        &self,
+        identifiants: &[String],
+        active_motifs: &[String],
+    ) -> Result<HashMap<String, PpfFlags>, String> {
         let mut out = HashMap::new();
+        if active_motifs.is_empty() {
+            return Err("ppf_flags : aucun motif actif (précondition violée)".into());
+        }
+        let motif_ph = vec!["?"; active_motifs.len()].join(",");
         for chunk in identifiants.chunks(500) {
-            let placeholders = vec!["?"; chunk.len()].join(",");
+            let id_ph = vec!["?"; chunk.len()].join(",");
             let sql = format!(
                 "SELECT identifiant, \
-                        MAX(motif IN ('C','P')), \
+                        MAX(UPPER(motif) IN ({motif_ph})), \
                         MAX(pdp_fictive = 0), \
-                        MAX(motif IN ('C','P') AND pdp_fictive = 0) \
-                 FROM ppf_directory WHERE identifiant IN ({placeholders}) \
+                        MAX(UPPER(motif) IN ({motif_ph}) AND pdp_fictive = 0) \
+                 FROM ppf_directory WHERE identifiant IN ({id_ph}) \
                  GROUP BY identifiant"
             );
             let mut stmt = self.conn.prepare_cached(&sql).map_err(|e| e.to_string())?;
+            // Params positionnels : motifs (1re clause), motifs (2e clause), identifiants.
+            let mut params: Vec<&str> = Vec::with_capacity(active_motifs.len() * 2 + chunk.len());
+            params.extend(active_motifs.iter().map(String::as_str));
+            params.extend(active_motifs.iter().map(String::as_str));
+            params.extend(chunk.iter().map(String::as_str));
             let rows = stmt
-                .query_map(rusqlite::params_from_iter(chunk), |r| {
+                .query_map(rusqlite::params_from_iter(params), |r| {
                     Ok((
                         r.get::<_, String>(0)?,
                         PpfFlags {
@@ -892,7 +904,7 @@ mod tests {
                 .iter()
                 .map(|x| x.to_string())
                 .collect();
-        let m = s.ppf_flags(&ids).unwrap();
+        let m = s.ppf_flags(&ids, &["C".to_string(), "P".to_string()]).unwrap();
 
         assert_eq!(
             m.get("id_all").copied(),
@@ -924,8 +936,41 @@ mod tests {
         let rows: Vec<_> = (0..600).map(|i| ppf_row(&format!("id{i}"), "C", 0)).collect();
         s.ingest_ppf("f.csv", "h", &rows, 600, 1).unwrap();
         let ids: Vec<String> = (0..600).map(|i| format!("id{i}")).collect();
-        let m = s.ppf_flags(&ids).unwrap();
+        let m = s.ppf_flags(&ids, &["C".to_string(), "P".to_string()]).unwrap();
         assert_eq!(m.len(), 600);
         assert!(m.values().all(|f| f.usable), "tous (C,0) → usable");
+    }
+
+    #[test]
+    fn ppf_flags_honore_les_motifs_configures() {
+        let s = Store::open_in_memory().unwrap();
+        // id_n : une seule ligne au motif N, PDP réelle (pdp_fictive = 0).
+        s.ingest_ppf("f.csv", "h", &[ppf_row("id_n", "N", 0)], 1, 1).unwrap();
+        let ids = vec!["id_n".to_string()];
+
+        // Défaut CP : N n'est pas actif (ni usable), mais pdp_definie reste vrai.
+        let cp = s.ppf_flags(&ids, &["C".to_string(), "P".to_string()]).unwrap();
+        assert_eq!(
+            cp.get("id_n").copied(),
+            Some(PpfFlags { in_ppf: true, active: false, pdp_definie: true, usable: false })
+        );
+
+        // CPN : N devient actif ET usable (pdp réelle sur la même ligne).
+        let cpn = s
+            .ppf_flags(&ids, &["C".to_string(), "P".to_string(), "N".to_string()])
+            .unwrap();
+        assert_eq!(
+            cpn.get("id_n").copied(),
+            Some(PpfFlags { in_ppf: true, active: true, pdp_definie: true, usable: true })
+        );
+    }
+
+    #[test]
+    fn ppf_flags_insensible_a_la_casse_du_motif() {
+        let s = Store::open_in_memory().unwrap();
+        s.ingest_ppf("f.csv", "h", &[ppf_row("id_low", "c", 0)], 1, 1).unwrap();
+        // Annuaire en minuscule « c », réglage « C » → actif (UPPER des deux côtés).
+        let m = s.ppf_flags(&["id_low".to_string()], &["C".to_string()]).unwrap();
+        assert!(m.get("id_low").unwrap().active);
     }
 }

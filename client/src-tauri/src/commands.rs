@@ -101,6 +101,7 @@ fn coverage_from_scan(
     store: &Store,
     pids: &[String],
     line_counts: &HashMap<String, u64>,
+    active_motifs: &[String],
 ) -> Result<crate::coverage::Coverage, String> {
     let mut eligible: Vec<(String, usize)> = Vec::new();
     let mut non_applicable: usize = 0;
@@ -118,7 +119,7 @@ fn coverage_from_scan(
         None
     };
     let ppf = if store.ppf_summary()?.distinct_addr > 0 {
-        Some(store.ppf_flags(&values)?)
+        Some(store.ppf_flags(&values, active_motifs)?)
     } else {
         None
     };
@@ -140,6 +141,7 @@ fn securisation_from_scan(
     pids: &[String],
     line_counts: &HashMap<String, u64>,
     now: chrono::DateTime<chrono::Utc>,
+    active_motifs: &[String],
 ) -> Result<Option<crate::securisation::Securisation>, String> {
     if store.peppol_directory_status()?.is_none() || store.ppf_summary()?.distinct_addr == 0 {
         return Ok(None);
@@ -150,7 +152,7 @@ fn securisation_from_scan(
         .filter_map(|p| crate::directory::parse_0225_value(p))
         .collect();
     let present = store.directory_present(&values)?;
-    let ppf = store.ppf_flags(&values)?;
+    let ppf = store.ppf_flags(&values, active_motifs)?;
 
     let mut lines: Vec<crate::securisation::LineFlags> = Vec::with_capacity(pids.len());
     for p in pids {
@@ -294,7 +296,7 @@ pub async fn analyze_input(state: State<'_, AppState>) -> Result<InputStats, Str
         let (_, pids, line_counts) = scan_unique_pids(&input, &cfg.input.pid_column)?;
         let store_g = store.lock().unwrap();
         let known = store_g.load_map(&pids)?;
-        let coverage = coverage_from_scan(&store_g, &pids, &line_counts)?;
+        let coverage = coverage_from_scan(&store_g, &pids, &line_counts, &cfg.ppf.motifs())?;
         drop(store_g);
         let now = chrono::Utc::now().timestamp();
         let max_age = cfg.api.refresh_days as i64 * 86400;
@@ -576,11 +578,12 @@ pub async fn export_report(state: State<'_, AppState>) -> Result<String, String>
             Ok((_, pids, line_counts)) => {
                 let now_utc = chrono::Utc::now();
                 let store_g = store.lock().unwrap();
-                let cov = coverage_from_scan(&store_g, &pids, &line_counts)
+                let cov = coverage_from_scan(&store_g, &pids, &line_counts, &cfg.ppf.motifs())
                     .unwrap_or(crate::coverage::Coverage::EMPTY);
-                let secu = securisation_from_scan(&store_g, &pids, &line_counts, now_utc)
-                    .ok()
-                    .flatten();
+                let secu =
+                    securisation_from_scan(&store_g, &pids, &line_counts, now_utc, &cfg.ppf.motifs())
+                        .ok()
+                        .flatten();
                 (cov, secu)
             }
             Err(_) => (crate::coverage::Coverage::EMPTY, None),
@@ -674,7 +677,7 @@ pub async fn generate_output(state: State<'_, AppState>) -> Result<String, Strin
                     .iter()
                     .filter_map(|p| crate::directory::parse_0225_value(p))
                     .collect();
-                Some(s.ppf_flags(&ids)?)
+                Some(s.ppf_flags(&ids, &cfg.ppf.motifs())?)
             } else {
                 None
             }
