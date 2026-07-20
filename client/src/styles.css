@@ -122,6 +122,9 @@ fieldset { border: 1px solid var(--border); border-radius: 8px; margin: 12px 0; 
   text-align: center; color: var(--fg);
 }
 #dropzone.over { border-color: var(--gold); color: var(--fg); }
+/* Fichier à nombreuses colonnes : l'aperçu scrolle horizontalement DANS la
+   carte plutôt que de déborder par-dessus le cadre doré. */
+#file-info { overflow-x: auto; }
 /* Nom du fichier chargé : en évidence dans la ligne meta atténuée. */
 #file-meta b { color: var(--fg); }
 /* Colonne des adressages choisie : surbrillance à la couleur d'accent (même
