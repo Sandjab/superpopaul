@@ -146,6 +146,18 @@ async function enterRunStep() {
   }
 }
 
+// Parité de format avec Rust PpfConfig::active_label (config.rs / report.rs) :
+// « motif » + motifs configurés (majuscules, dédupliqués) joints par « / ».
+function ppfActiveTag() {
+  const seen = [];
+  for (const ch of state.config.ppf.active_motifs) {
+    if (/\s/.test(ch)) continue;
+    const m = ch.toUpperCase();
+    if (!seen.includes(m)) seen.push(m);
+  }
+  return "motif " + seen.join("/");
+}
+
 /** Panneau « Présence en annuaire » (couverture déclarative). Reçoit
  *  InputStats.coverage. Masque le panneau si aucun annuaire n'est chargé
  *  (peppol ET ppf null). Numéros uniquement dynamiques → sûr sans innerHTML. */
@@ -185,7 +197,7 @@ function renderCoverage(cov) {
       h("div", { class: "cov-row cov-sub" + (last ? " last" : "") },
         h("span", { class: "cov-name" }, swatch(color), ` ${label} `, h("span", { class: "cov-tag" }, tag)),
         bar(n, color), num(n));
-    rows.push(sub("PPF actif", "motif C/P", p.active, "ppf-l2", false));
+    rows.push(sub("PPF actif", ppfActiveTag(), p.active, "ppf-l2", false));
     rows.push(sub("PDP définie", "réelle", p.pdp_definie, "ppf-l3", false));
     rows.push(sub("PPF utilisable", "actif + PDP réelle", p.usable, "ppf-l4", true));
   }

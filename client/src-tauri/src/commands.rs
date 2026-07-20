@@ -589,6 +589,7 @@ pub async fn export_report(state: State<'_, AppState>) -> Result<String, String>
             Err(_) => (crate::coverage::Coverage::EMPTY, None),
         };
         let now = chrono::Local::now();
+        let ppf_active_label = cfg.ppf.active_label();
         let html = report::render(&report::ReportData {
             file_name: &file_name,
             date_longue: &report::date_fr_longue(&now),
@@ -597,6 +598,7 @@ pub async fn export_report(state: State<'_, AppState>) -> Result<String, String>
             version: env!("CARGO_PKG_VERSION"),
             snapshot: &snapshot,
             record_plural: cfg.input.record_label.plural(),
+            ppf_active_label: &ppf_active_label,
             coverage: &coverage,
             securisation: securisation.as_ref(),
         });

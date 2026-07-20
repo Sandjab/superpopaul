@@ -295,6 +295,13 @@ impl PpfConfig {
         out
     }
 
+    /// Sous-libellé « motif C/P » du panneau « présence en annuaire » (cockpit +
+    /// rapport), construit à partir des motifs configurés. PARITÉ de format :
+    /// client/src/cockpit.js `ppfActiveTag` — garder les deux alignés.
+    pub fn active_label(&self) -> String {
+        format!("motif {}", self.motifs().join("/"))
+    }
+
     fn is_default(&self) -> bool {
         *self == PpfConfig::default()
     }
@@ -1131,5 +1138,12 @@ mod tests {
         assert!(validate_ppf(&PpfConfig { active_motifs: "   ".into() }).is_err());
         assert!(validate_ppf(&PpfConfig { active_motifs: "C1".into() }).is_err());
         assert!(validate_ppf(&PpfConfig { active_motifs: "CPN".into() }).is_ok());
+    }
+
+    #[test]
+    fn ppf_active_label_construit_motif_slash() {
+        assert_eq!(PpfConfig { active_motifs: "CP".into() }.active_label(), "motif C/P");
+        assert_eq!(PpfConfig { active_motifs: "cpn ".into() }.active_label(), "motif C/P/N");
+        assert_eq!(PpfConfig { active_motifs: "C".into() }.active_label(), "motif C");
     }
 }

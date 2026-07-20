@@ -23,6 +23,9 @@ pub struct ReportData<'a> {
     /// Pluriel du libellé « ce que représente une ligne » (config
     /// `record_label`) — remplace « lignes » dans le rapport.
     pub record_plural: &'a str,
+    /// Sous-libellé « motif C/P » de la ligne « PPF actif » (dérivé des motifs
+    /// actifs configurés) — passé pour ne pas figer « C/P » dans le rendu.
+    pub ppf_active_label: &'a str,
     /// Couverture déclarative des annuaires (Peppol + PPF). Section masquée si
     /// aucun annuaire n'est chargé (`peppol` et `ppf` tous deux `None`).
     pub coverage: &'a crate::coverage::Coverage,
@@ -289,7 +292,7 @@ pub fn render(d: &ReportData) -> String {
 
     // Présence déclarative en annuaire (Peppol + PPF) — après le réseau, dont
     // elle est explicitement distincte.
-    coverage_section(&mut html, d.coverage, d.record_plural);
+    coverage_section(&mut html, d.coverage, d.record_plural, d.ppf_active_label);
 
     // Sécurisation de la montée en charge — jointure résolutions × annuaires,
     // absente si les 2 annuaires ne sont pas chargés.
@@ -311,7 +314,12 @@ pub fn render(d: &ReportData) -> String {
 // Section « Présence déclarative en annuaire » : barres (pas anneaux) pour la
 // distinguer du réseau. Rendue seulement si au moins un annuaire est chargé.
 // Dénominateur = éligibles 0225 ; « lignes » remplacé par le libellé record.
-fn coverage_section(html: &mut String, c: &crate::coverage::Coverage, record_plural: &str) {
+fn coverage_section(
+    html: &mut String,
+    c: &crate::coverage::Coverage,
+    record_plural: &str,
+    ppf_active_label: &str,
+) {
     if c.peppol.is_none() && c.ppf.is_none() {
         return;
     }
@@ -355,7 +363,7 @@ fn coverage_section(html: &mut String, c: &crate::coverage::Coverage, record_plu
     if let Some(p) = c.ppf {
         html.push_str("<div class=\"cov-gh\">Annuaire PPF — présent → utilisable</div>\n");
         row(html, false, false, "ppf-l1", "Annuaire PPF", "", p.present, true);
-        row(html, true, false, "ppf-l2", "PPF actif", "motif C/P", p.active, false);
+        row(html, true, false, "ppf-l2", "PPF actif", ppf_active_label, p.active, false);
         row(html, true, false, "ppf-l3", "PDP définie", "réelle", p.pdp_definie, false);
         row(html, true, true, "ppf-l4", "PPF utilisable", "actif + PDP réelle", p.usable, false);
     }
@@ -748,6 +756,7 @@ mod tests {
             version: "0.3.4",
             snapshot: s,
             record_plural: "lignes",
+            ppf_active_label: "motif C/P",
             coverage: &EMPTY_COV,
             securisation: None,
         }
@@ -997,6 +1006,17 @@ mod tests {
         assert!(html.contains("570"), "usable PPF");
         // Coexiste avec le réseau, sans le remplacer.
         assert!(html.contains("Provisionnés Réseau Peppol"), "KPI réseau conservé");
+    }
+
+    #[test]
+    fn ppf_active_label_derive_du_champ_pas_fige() {
+        // Le sous-libellé « motif … » de la ligne PPF actif doit venir du champ
+        // ppf_active_label, pas d'un « motif C/P » codé en dur dans le rendu.
+        let s = snap();
+        let cov = cov_full();
+        let d = ReportData { ppf_active_label: "motif C/P/N", ..data_with(&s, &cov) };
+        let html = render(&d);
+        assert!(html.contains("motif C/P/N"), "libellé PPF actif non dérivé du champ");
     }
 
     #[test]
