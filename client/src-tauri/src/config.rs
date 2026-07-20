@@ -8,6 +8,8 @@ pub struct Config {
     pub api: ApiConfig,
     pub input: InputConfig,
     pub output: OutputConfig,
+    #[serde(default, skip_serializing_if = "PpfConfig::is_default")]
+    pub ppf: PpfConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -345,7 +347,8 @@ impl Config {
         // fichier — Tester/Calibrer doivent marcher. La garde vit dans
         // Profile::validate et output::generate.
         validate_api(&self.api)?;
-        validate_suffix(&self.output.suffix)
+        validate_suffix(&self.output.suffix)?;
+        validate_ppf(&self.ppf)
     }
 }
 
@@ -360,6 +363,8 @@ pub struct Settings {
     pub version: u32,
     pub api: ApiConfig,
     pub output: OutputSettings,
+    #[serde(default, skip_serializing_if = "PpfConfig::is_default")]
+    pub ppf: PpfConfig,
 }
 
 /// La partie « forme » d'OutputConfig, sans les colonnes (qui appartiennent
@@ -379,7 +384,8 @@ pub struct OutputSettings {
 impl Settings {
     pub fn validate(&self) -> Result<(), String> {
         validate_api(&self.api)?;
-        validate_suffix(&self.output.suffix)
+        validate_suffix(&self.output.suffix)?;
+        validate_ppf(&self.ppf)
     }
 }
 
@@ -583,6 +589,7 @@ mod tests {
                     },
                 ],
             },
+            ppf: PpfConfig::default(),
         }
     }
 
@@ -718,7 +725,41 @@ mod tests {
                 suffix: cfg.output.suffix,
                 timestamp_suffix: cfg.output.timestamp_suffix,
             },
+            ppf: PpfConfig::default(),
         }
+    }
+
+    #[test]
+    fn settings_sans_ppf_prend_cp_et_ne_reecrit_pas_le_defaut() {
+        let yaml = "version: 1\n\
+                    api:\n  url: \"x\"\n  key: \"\"\n  batch_size: 50\n  concurrency: 8\n  refresh_days: 30\n\
+                    output:\n  timestamp_suffix: false\n";
+        let s: Settings = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(s.ppf.active_motifs, "CP", "YAML sans ppf → défaut CP");
+        let out = serde_yaml::to_string(&s).unwrap();
+        assert!(!out.contains("ppf"), "ppf par défaut ne doit pas être sérialisé");
+    }
+
+    #[test]
+    fn settings_ppf_custom_round_trip_et_valide() {
+        let yaml = "version: 1\n\
+                    api:\n  url: \"x\"\n  key: \"\"\n  batch_size: 50\n  concurrency: 8\n  refresh_days: 30\n\
+                    output:\n  timestamp_suffix: false\n\
+                    ppf:\n  active_motifs: \"CPN\"\n";
+        let s: Settings = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(s.ppf.active_motifs, "CPN");
+        s.validate().unwrap();
+        assert!(serde_yaml::to_string(&s).unwrap().contains("CPN"));
+    }
+
+    #[test]
+    fn settings_validate_refuse_ppf_vide() {
+        let yaml = "version: 1\n\
+                    api:\n  url: \"x\"\n  key: \"\"\n  batch_size: 50\n  concurrency: 8\n  refresh_days: 30\n\
+                    output:\n  timestamp_suffix: false\n\
+                    ppf:\n  active_motifs: \"\"\n";
+        let s: Settings = serde_yaml::from_str(yaml).unwrap();
+        assert!(s.validate().is_err(), "ppf vide doit être rejeté à la validation");
     }
 
     #[test]
