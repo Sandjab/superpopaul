@@ -110,9 +110,9 @@ critère le plus strict (`annuaire_ppf` ⊇ `ppf_active` / `pdp_definie` ⊇
 | Colonne | Libellé | Signification | Valeurs |
 |---|---|---|---|
 | `annuaire_ppf` | annuaire PPF | Adressage présent dans l'annuaire PPF chargé (au moins une ligne). | `true` / `false` / *(vide)* |
-| `ppf_active` | PPF actif | Au moins une ligne au **motif de présence `C` ou `P`**. | `true` / `false` / *(vide)* |
+| `ppf_active` | PPF actif | Au moins une ligne à un **motif de présence actif** (ensemble **configurable** dans les réglages, par défaut `C` / `P`). | `true` / `false` / *(vide)* |
 | `pdp_definie` | PDP définie | Au moins une ligne avec une **PDP réelle** (`pdp_fictive = 0`). | `true` / `false` / *(vide)* |
-| `ppf_usable` | PPF utilisable | Au moins une **même** ligne au motif `C` ou `P` **ET** PDP réelle (`pdp_fictive = 0`). | `true` / `false` / *(vide)* |
+| `ppf_usable` | PPF utilisable | Au moins une **même** ligne à un motif actif configuré (défaut `C` / `P`) **ET** PDP réelle (`pdp_fictive = 0`). | `true` / `false` / *(vide)* |
 
 **Règle de renseignement du groupe** :
 
@@ -123,8 +123,9 @@ critère le plus strict (`annuaire_ppf` ⊇ `ppf_active` / `pdp_definie` ⊇
 - `true` / `false` selon les critères ci-dessus — l'adressage 0225 est présent.
 
 **À propos des colonnes de l'export PPF** : chaque ligne de l'annuaire PPF
-porte un `MOTIF_PRESENCE` (les motifs `C` et `P` sont ceux considérés comme
-« actifs ») et un indicateur `UTILISE_PDP_FICTIVE` (`0` = PDP réelle,
+porte un `MOTIF_PRESENCE` (les motifs considérés comme « actifs » sont
+**configurables** dans les réglages, par défaut `C` et `P`) et un indicateur
+`UTILISE_PDP_FICTIVE` (`0` = PDP réelle,
 `1` = PDP fictive). Un même identifiant peut apparaître sur **plusieurs
 lignes** ; d'où la distinction entre « au moins une ligne » (`ppf_active`,
 `pdp_definie`, chacun sur des lignes éventuellement différentes) et « une même

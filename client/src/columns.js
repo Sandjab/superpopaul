@@ -28,9 +28,9 @@ const PPF_CLASS = {
 };
 const PPF_TIP = {
   annuaire_ppf: "Adressage présent dans l'annuaire PPF chargé (au moins une ligne).",
-  ppf_active: "Annuaire PPF : au moins une ligne au motif C ou P.",
+  ppf_active: "Annuaire PPF : au moins une ligne à un motif actif configuré (par défaut C ou P).",
   pdp_definie: "Annuaire PPF : au moins une ligne avec une PDP réelle (pdp_fictive = 0).",
-  ppf_usable: "Annuaire PPF : au moins une même ligne au motif C ou P ET PDP réelle (pdp_fictive = 0).",
+  ppf_usable: "Annuaire PPF : au moins une même ligne à un motif actif configuré (par défaut C ou P) ET PDP réelle (pdp_fictive = 0).",
 };
 
 // SortableJS (vendor/Sortable.min.js) en mode forceFallback : le
