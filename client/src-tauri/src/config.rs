@@ -254,6 +254,65 @@ pub enum PeppolField {
     PpfUsable,
 }
 
+fn ppf_active_motifs_default() -> String {
+    "CP".to_string()
+}
+
+/// Règle d'interprétation de l'annuaire PPF : quels motifs de présence
+/// comptent comme « actifs » (alimente `ppf_active` et, par héritage,
+/// `ppf_usable`). Réglage global, persisté ; défaut historique `CP`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct PpfConfig {
+    #[serde(default = "ppf_active_motifs_default")]
+    pub active_motifs: String,
+}
+
+impl Default for PpfConfig {
+    fn default() -> Self {
+        PpfConfig { active_motifs: ppf_active_motifs_default() }
+    }
+}
+
+impl PpfConfig {
+    /// Ensemble des motifs actifs normalisés : majuscules, espaces retirés,
+    /// dédupliqués. Précondition d'usage : `validate_ppf` garantit un ensemble
+    /// non vide de lettres avant tout calcul.
+    pub fn motifs(&self) -> Vec<String> {
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        for ch in self.active_motifs.chars() {
+            if ch.is_whitespace() {
+                continue;
+            }
+            let m = ch.to_ascii_uppercase().to_string();
+            if seen.insert(m.clone()) {
+                out.push(m);
+            }
+        }
+        out
+    }
+
+    fn is_default(&self) -> bool {
+        *self == PpfConfig::default()
+    }
+}
+
+fn validate_ppf(ppf: &PpfConfig) -> Result<(), String> {
+    let motifs = ppf.motifs();
+    if motifs.is_empty() {
+        return Err("motifs PPF actifs : au moins une lettre (ex. CP)".into());
+    }
+    for m in &motifs {
+        if !m.chars().all(|c| c.is_ascii_alphabetic()) {
+            return Err(format!(
+                "motifs PPF actifs : caractère invalide « {m} » (lettres A-Z uniquement)"
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Bornes des paramètres API — partagées entre la config runtime (set_config)
 /// et les réglages persistés (superpopaul.yaml), pour ne jamais diverger.
 fn validate_api(api: &ApiConfig) -> Result<(), String> {
@@ -1011,5 +1070,25 @@ mod tests {
             assert_eq!(serde_yaml::to_string(&variant).unwrap().trim(), name);
             assert_eq!(serde_yaml::from_str::<PeppolField>(name).unwrap(), variant);
         }
+    }
+
+    #[test]
+    fn ppf_motifs_normalise_majuscule_espaces_dedup() {
+        let p = PpfConfig { active_motifs: "cp P ".into() };
+        assert_eq!(p.motifs(), vec!["C".to_string(), "P".to_string()]);
+    }
+
+    #[test]
+    fn ppf_config_defaut_est_cp() {
+        assert_eq!(PpfConfig::default().active_motifs, "CP");
+        assert_eq!(PpfConfig::default().motifs(), vec!["C".to_string(), "P".to_string()]);
+    }
+
+    #[test]
+    fn validate_ppf_refuse_vide_et_non_lettre_accepte_cpn() {
+        assert!(validate_ppf(&PpfConfig { active_motifs: "".into() }).is_err());
+        assert!(validate_ppf(&PpfConfig { active_motifs: "   ".into() }).is_err());
+        assert!(validate_ppf(&PpfConfig { active_motifs: "C1".into() }).is_err());
+        assert!(validate_ppf(&PpfConfig { active_motifs: "CPN".into() }).is_ok());
     }
 }
