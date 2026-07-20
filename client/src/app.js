@@ -36,6 +36,7 @@ const state = {
     input: { path: "", delimiter: ";", encoding: "utf-8", pid_column: "", record_label: "record" },
     output: { dir: "", suffix: "_enrichi", timestamp_suffix: true,
               encoding: "utf-8-bom", separator: "auto", columns: [] },
+    ppf: { active_motifs: "CP" },
   },
 };
 
@@ -415,6 +416,7 @@ function syncSettingsForm() {
   const proxyUrl = $("proxy-url").value.trim();
   c.api.proxy = $("proxy-on").checked && proxyUrl ? { url: proxyUrl } : null;
   c.api.refresh_days = +$("api-refresh").value || 30;
+  c.ppf.active_motifs = $("ppf-motifs").value.trim();
 }
 function fillSettingsForm() {
   const c = state.config;
@@ -434,6 +436,7 @@ function fillSettingsForm() {
   $("proxy-on").checked = !!c.api.proxy;
   $("proxy-url").value = c.api.proxy ? c.api.proxy.url : "";
   $("api-refresh").value = c.api.refresh_days;
+  $("ppf-motifs").value = c.ppf.active_motifs;
   syncModeUi();
   syncProxyUi();
   syncDnsUi();
@@ -516,13 +519,15 @@ function currentSettings() {
   const c = state.config;
   const { dir, suffix, timestamp_suffix } = c.output;
   return { version: 1, api: c.api,
-           output: { dir, suffix, timestamp_suffix } };
+           output: { dir, suffix, timestamp_suffix },
+           ppf: { active_motifs: c.ppf.active_motifs } };
 }
 /** Fusion sur les défauts de l'état : les champs à leur valeur par défaut sont
  *  absents du YAML (serde skip_serializing_if), un remplacement les perdrait. */
 function applySettings(s) {
   Object.assign(state.config.api, s.api);
   Object.assign(state.config.output, s.output);
+  Object.assign(state.config.ppf, s.ppf);
 }
 
 // --- Réglages : ouverture / fermeture ------------------------------------------------

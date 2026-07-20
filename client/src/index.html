@@ -224,6 +224,11 @@
            <input id="out-suffix" size="12" value="_enrichi" title="clients.csv → clients_enrichi.csv.">
            <label title="Évite d'écraser une sortie précédente."><input type="checkbox" id="out-stamp" checked> Suffixer avec la date/heure</label></p>
       </fieldset>
+      <fieldset class="ppf-settings"><legend>🏛️ Annuaire PPF</legend>
+        <p><label for="ppf-motifs">Motifs actifs</label>
+           <input id="ppf-motifs" size="12" value="CP" title="Lettres des motifs de présence PPF comptés comme actifs (ex. CP, CPN)."></p>
+        <p class="field-hint">Lettres des motifs de présence PPF comptés comme « actifs » (ex. CP, CPN). Alimente « PPF actif » et « PPF utilisable ». Insensible à la casse, au moins une lettre. Par défaut : C et P.</p>
+      </fieldset>
       <fieldset><legend>API</legend>
         <p><label for="api-mode">Résolution</label>
            <select id="api-mode">

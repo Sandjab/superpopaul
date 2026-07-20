@@ -94,6 +94,8 @@ main::-webkit-scrollbar-thumb:hover { background: #3c4a6b; }
 main::-webkit-scrollbar-track { background: transparent; }
 .panel { max-width: 900px; margin: 0 auto; }
 fieldset { border: 1px solid var(--border); border-radius: 8px; margin: 12px 0; }
+#settings fieldset.ppf-settings { border-color: var(--ppf-l2); }
+#settings fieldset.ppf-settings > legend { color: var(--ppf-l3); }
 
 #banner {
   padding: 10px 16px; font-weight: 600; display: flex; gap: 12px;
