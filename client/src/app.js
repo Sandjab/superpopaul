@@ -329,12 +329,21 @@ async function loadDirectory(kind, arg) {
   setDirBusy(true);
   $("dir-status").classList.add("hidden");
   try {
+    // Le téléchargement passe par le réseau : si un proxy est configuré, le
+    // pousser au backend (download_directory lit state.config) et s'assurer des
+    // identifiants, comme le test API / la calibration. Le chargement d'un
+    // fichier local n'utilise pas le réseau.
+    if (kind === "download" && state.config.api.proxy) {
+      await invoke("set_config", { cfg: state.config });
+      await ensureProxyCreds();
+    }
     const r = kind === "download"
       ? await invoke("download_directory")
       : await invoke("load_directory_file", { path: arg });
     renderDirStatus({ loaded_at: r.loaded_at, count: r.count, source: kind === "download" ? "download" : "file" });
   } catch (err) {
-    banner("error", `Annuaire Peppol : ${err}`);
+    // Annulation volontaire de la saisie des identifiants proxy : pas d'erreur.
+    if (!(err && err.proxyCancelled)) banner("error", `Annuaire Peppol : ${err}`);
   } finally {
     dirBusy = false;
     setDirBusy(false);
