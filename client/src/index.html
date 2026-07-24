@@ -88,11 +88,11 @@
          <span id="pid-hint" class="muted"></span></p>
       <p><label for="record-label">Chaque ligne représente :</label>
          <select id="record-label" title="Ce que représente une ligne du fichier — n'affecte que l'affichage (bilan, rapport), pas le CSV de sortie.">
-           <option value="cf">CF — comptes de facturation</option>
+           <option value="cf" selected>CF — comptes de facturation</option>
            <option value="client">client — comptes client</option>
            <option value="utilisateur">utilisateur — comptes utilisateur</option>
            <option value="ligne">ligne — lignes téléphoniques</option>
-           <option value="record" selected>record — générique (défaut)</option>
+           <option value="record">record — générique (défaut)</option>
          </select></p>
       <p class="muted">Glisse les en-têtes : réordonne-les dans le tableau, écarte-les vers la
          zone du bas, réintègre-les où tu veux. Double-clic : écarte une colonne, ou la
@@ -109,7 +109,7 @@
         <label for="out-sep">Séparateur</label>
         <select id="out-sep" title="« Identique à l'entrée » reprend le séparateur détecté au dépôt.">
           <option value="auto">Identique à l'entrée</option>
-          <option value=";">Point-virgule ;</option>
+          <option value=";" selected>Point-virgule ;</option>
           <option value=",">Virgule ,</option>
           <option value="|">Pipe |</option>
           <option value="&#9;">Tabulation</option>

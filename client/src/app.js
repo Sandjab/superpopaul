@@ -30,12 +30,12 @@ const state = {
     version: 1,
     // Résolveur direct par défaut : 8.8.8.8 avec 1.1.1.1 en secours (failover
     // du DNS classique) — le résolveur du FAI rate-limite sous rafale.
-    api: { url: "https://peppol.gavini.cloud", key: "", mode: "api", resolver: "8.8.8.8",
+    api: { url: "https://peppol.gavini.org", key: "", mode: "api", resolver: "8.8.8.8",
            resolver_fallback: "1.1.1.1", dns_concurrency: 32,
            batch_size: 50, concurrency: 8, proxy: null, refresh_days: 30 },
-    input: { path: "", delimiter: ";", encoding: "utf-8", pid_column: "", record_label: "record" },
+    input: { path: "", delimiter: ";", encoding: "utf-8", pid_column: "", record_label: "cf" },
     output: { dir: "", suffix: "_enrichi", timestamp_suffix: true,
-              encoding: "utf-8-bom", separator: "auto", columns: [] },
+              encoding: "utf-8-bom", separator: ";", columns: [] },
     ppf: { active_motifs: "CP" },
   },
 };
