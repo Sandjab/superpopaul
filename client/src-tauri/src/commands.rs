@@ -175,6 +175,27 @@ fn securisation_from_scan(
     Ok(Some(crate::securisation::compute(&lines)))
 }
 
+/// Répartition des lignes par plateforme (PA) à partir d'un scan déjà fait.
+/// Population : lignes du fichier courant (`line_counts`), PA du dernier état
+/// de résolution connu en base (`load_map`). Regroupement par nom de PA (repli
+/// code). Miroir de `securisation_from_scan` ; logique testée dans `repartition`.
+fn repartition_from_scan(
+    store: &Store,
+    pids: &[String],
+    line_counts: &HashMap<String, u64>,
+) -> Result<crate::repartition::Repartition, String> {
+    let resolutions = store.load_map(pids)?;
+    let mut entrees: Vec<(Option<String>, u64)> = Vec::with_capacity(pids.len());
+    for p in pids {
+        let n = *line_counts.get(p).unwrap_or(&0);
+        let cle = resolutions
+            .get(p)
+            .and_then(|r| crate::repartition::pa_key(r.pa_name.as_deref(), r.pa_code.as_deref()));
+        entrees.push((cle, n));
+    }
+    Ok(crate::repartition::compute(&entrees))
+}
+
 #[derive(Serialize)]
 pub struct PreviewPayload {
     #[serde(flatten)]
@@ -574,7 +595,7 @@ pub async fn export_report(state: State<'_, AppState>) -> Result<String, String>
     tokio::task::spawn_blocking(move || {
         // Agrégats annuaire/sécurisation sur l'entrée COURANTE, un seul scan.
         // Tolérant : entrée illisible → rapport sans ces sections.
-        let (coverage, securisation) = match scan_unique_pids(&input, &cfg.input.pid_column) {
+        let (coverage, securisation, repartition) = match scan_unique_pids(&input, &cfg.input.pid_column) {
             Ok((_, pids, line_counts)) => {
                 let now_utc = chrono::Utc::now();
                 let store_g = store.lock().unwrap();
@@ -584,9 +605,10 @@ pub async fn export_report(state: State<'_, AppState>) -> Result<String, String>
                     securisation_from_scan(&store_g, &pids, &line_counts, now_utc, &cfg.ppf.motifs())
                         .ok()
                         .flatten();
-                (cov, secu)
+                let rep = repartition_from_scan(&store_g, &pids, &line_counts).ok();
+                (cov, secu, rep)
             }
-            Err(_) => (crate::coverage::Coverage::EMPTY, None),
+            Err(_) => (crate::coverage::Coverage::EMPTY, None, None),
         };
         let now = chrono::Local::now();
         let ppf_active_label = cfg.ppf.active_label();
@@ -601,6 +623,7 @@ pub async fn export_report(state: State<'_, AppState>) -> Result<String, String>
             ppf_active_label: &ppf_active_label,
             coverage: &coverage,
             securisation: securisation.as_ref(),
+            repartition_pa: repartition.as_ref(),
         });
         let out = resolved_out_dir(&input, &cfg.output.dir).join(format!(
             "{}_rapport.html",

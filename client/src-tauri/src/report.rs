@@ -32,6 +32,9 @@ pub struct ReportData<'a> {
     /// Sécurisation de la montée en charge (jointure résolutions × annuaires).
     /// `None` = les 2 annuaires ne sont pas chargés → section non rendue.
     pub securisation: Option<&'a crate::securisation::Securisation>,
+    /// Répartition des lignes par plateforme (PA). `None` = pas de résolution
+    /// exploitable → section non rendue.
+    pub repartition_pa: Option<&'a crate::repartition::Repartition>,
 }
 
 /// CSS du rapport — la maquette validée le 16/07/2026, identité « Bleu nuit
@@ -759,6 +762,7 @@ mod tests {
             ppf_active_label: "motif C/P",
             coverage: &EMPTY_COV,
             securisation: None,
+            repartition_pa: None,
         }
     }
 
