@@ -32,8 +32,10 @@ pub struct ReportData<'a> {
     /// Sécurisation de la montée en charge (jointure résolutions × annuaires).
     /// `None` = les 2 annuaires ne sont pas chargés → section non rendue.
     pub securisation: Option<&'a crate::securisation::Securisation>,
-    /// Répartition des lignes par plateforme (PA). `None` = pas de résolution
-    /// exploitable → section non rendue.
+    /// Répartition des lignes par plateforme (PA). `None` uniquement si le scan
+    /// de l'entrée ou une lecture en base échoue (comme coverage/securisation) —
+    /// une entrée sans aucun PA donne un Repartition tout « sans plateforme »,
+    /// pas None. `None` → section non rendue.
     pub repartition_pa: Option<&'a crate::repartition::Repartition>,
 }
 
@@ -49,6 +51,8 @@ const CSS: &str = r#"
     --green-later: #2f8050; /* prêt plus tard : vert éteint, pris sur le vert */
     --ppf-l1: #6f6aa8; --ppf-l2: #8a80d4; --ppf-l3: #a892ff; --ppf-l4: #c3b6ff;
     --sec-1: #3f7d54; --sec-2: #46a862; --sec-3: #5bd07d; --sec-4: #8be0a3;
+    --pa-1: #d9a83f; --pa-2: #4cc268; --pa-3: #a892ff; --pa-4: #e0873a; --pa-5: #5aa9e6;
+    --pa-6: #cf7ab0; --pa-autres: #6b7794; --pa-sans: #3a4460;
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--fg);
@@ -86,6 +90,11 @@ const CSS: &str = r#"
   .dot { width: 10px; height: 10px; border-radius: 5px; }
   .legend .n { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); white-space: nowrap; }
   .legend .n b { color: var(--fg); }
+  .pa-legend { flex: 1; min-width: 300px; font-size: 14px;
+    display: grid; grid-template-columns: auto 1fr max-content;
+    gap: 4px 14px; align-items: center; }
+  .pa-legend .n { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); white-space: nowrap; }
+  .pa-legend .n b { color: var(--fg); }
   .proj-card { background: var(--card); border: 1px solid var(--border); border-radius: 10px;
     padding: 16px 20px; font-variant-numeric: tabular-nums; }
   .proj-now { font-size: 15px; font-weight: 600; }
@@ -293,6 +302,12 @@ pub fn render(d: &ReportData) -> String {
         html.push_str("</div>\n");
     }
 
+    // Répartition en lignes/CF (jumelle « en {record_plural} » de la section
+    // ci-dessus, en adressages uniques).
+    if let Some(rep) = d.repartition_pa {
+        repartition_section(&mut html, rep, d.record_plural);
+    }
+
     // Présence déclarative en annuaire (Peppol + PPF) — après le réseau, dont
     // elle est explicitement distincte.
     coverage_section(&mut html, d.coverage, d.record_plural, d.ppf_active_label);
@@ -369,6 +384,88 @@ fn coverage_section(
         row(html, true, false, "ppf-l2", "PPF actif", ppf_active_label, p.active, false);
         row(html, true, false, "ppf-l3", "PDP définie", "réelle", p.pdp_definie, false);
         row(html, true, true, "ppf-l4", "PPF utilisable", "actif + PDP réelle", p.usable, false);
+    }
+    html.push_str("</div>\n");
+}
+
+// Répartition des lignes par plateforme (PA) : ring top 5 + « autres » + « sans
+// plateforme » (base = total du fichier), puis la liste de TOUTES les
+// plateformes triée décroissant. % à 2 décimales sur le total. Rendue seulement
+// s'il y a un total et au moins une plateforme. Noms de PA échappés (SMP =
+// entrée non fiable).
+fn repartition_section(html: &mut String, rep: &crate::repartition::Repartition, record_plural: &str) {
+    if rep.total_lignes == 0 || rep.plateformes.is_empty() {
+        return;
+    }
+    const RING_COLORS: [&str; 6] = ["pa-1", "pa-2", "pa-3", "pa-4", "pa-5", "pa-6"];
+    let agrege = rep.plateformes.len() > 6;
+    let n_shown = if agrege { 5 } else { rep.plateformes.len() };
+
+    let mut segments: Vec<(&str, String, u64)> = Vec::new();
+    for (i, p) in rep.plateformes[..n_shown].iter().enumerate() {
+        segments.push((RING_COLORS[i], p.nom.clone(), p.lignes));
+    }
+    if agrege {
+        let reste: u64 = rep.plateformes[n_shown..].iter().map(|p| p.lignes).sum();
+        let reste_nb = rep.plateformes.len() - n_shown; // ≥ 2 puisque len > 6
+        segments.push(("pa-autres", format!("Autres ({reste_nb} plateformes)"), reste));
+    }
+    if rep.sans_plateforme > 0 {
+        segments.push(("pa-sans", "Sans plateforme".to_string(), rep.sans_plateforme));
+    }
+
+    html.push_str(&format!(
+        "<h2>Répartition des {record_plural} par plateforme \
+         <span class=\"unit\">· en {record_plural}</span></h2>\n<div class=\"ring-row\">\n"
+    ));
+
+    html.push_str(
+        "<svg width=\"210\" height=\"210\" viewBox=\"0 0 210 210\" role=\"img\" \
+         aria-label=\"Répartition par plateforme\">\n<g transform=\"rotate(-90 105 105)\">\n\
+         <circle cx=\"105\" cy=\"105\" r=\"80\" fill=\"none\" stroke=\"var(--track)\" stroke-width=\"26\"/>\n",
+    );
+    let mut cum = 0.0;
+    for (color, _, lignes) in &segments {
+        let len = *lignes as f64 / rep.total_lignes as f64 * RING_C;
+        html.push_str(&format!(
+            "<circle cx=\"105\" cy=\"105\" r=\"80\" fill=\"none\" stroke=\"var(--{color})\" \
+             stroke-width=\"26\" stroke-dasharray=\"{len:.1} {RING_C:.2}\" \
+             stroke-dashoffset=\"{:.1}\"/>\n",
+            -cum
+        ));
+        cum += len;
+    }
+    html.push_str(&format!(
+        "</g>\n<text x=\"105\" y=\"110\" text-anchor=\"middle\" class=\"ring-center\">{}</text>\n\
+         <text x=\"105\" y=\"128\" text-anchor=\"middle\" class=\"ring-sub\">{record_plural} au total</text>\n</svg>\n",
+        fmt_int(rep.total_lignes)
+    ));
+
+    html.push_str("<div class=\"pa-legend\">\n");
+    for (color, label, lignes) in &segments {
+        html.push_str(&format!(
+            "<span class=\"dot\" style=\"background:var(--{color})\"></span><span>{}</span>\
+             <span class=\"n\"><b>{}</b> · {}</span>\n",
+            esc(label),
+            fmt_int(*lignes),
+            fmt_pct2(*lignes, rep.total_lignes)
+        ));
+    }
+    html.push_str("</div>\n</div>\n");
+
+    let max = rep.plateformes.iter().map(|p| p.lignes).max().unwrap_or(1).max(1);
+    html.push_str("<div class=\"pa\">\n");
+    for (i, p) in rep.plateformes.iter().enumerate() {
+        let color = if i < n_shown { RING_COLORS[i] } else { "pa-autres" };
+        html.push_str(&format!(
+            "<div class=\"pa-row\"><span class=\"pa-name\">{}</span>\
+             <span class=\"bar\"><i style=\"width:{:.0}%;background:var(--{color})\"></i></span>\
+             <span class=\"pa-n\"><b>{}</b> · {}</span></div>\n",
+            esc(&p.nom),
+            p.lignes as f64 * 100.0 / max as f64,
+            fmt_int(p.lignes),
+            fmt_pct2(p.lignes, rep.total_lignes)
+        ));
     }
     html.push_str("</div>\n");
 }
@@ -543,15 +640,26 @@ fn fmt_int(n: u64) -> String {
     out
 }
 
-/// « 38,1 % » — virgule décimale, espace fine insécable avant le %.
-/// Total nul (run vide) : 0,0 %.
-fn fmt_pct(part: u64, total: u64) -> String {
-    let p = if total == 0 {
+/// Ratio en pourcentage, 0,0 si `total` est nul (run vide) — partagé par
+/// `fmt_pct` et `fmt_pct2`.
+fn pct_ratio(part: u64, total: u64) -> f64 {
+    if total == 0 {
         0.0
     } else {
         part as f64 * 100.0 / total as f64
-    };
-    format!("{p:.1}\u{202F}%").replace('.', ",")
+    }
+}
+
+/// « 38,1 % » — virgule décimale, espace fine insécable avant le %.
+/// Total nul (run vide) : 0,0 %.
+fn fmt_pct(part: u64, total: u64) -> String {
+    format!("{:.1}\u{202F}%", pct_ratio(part, total)).replace('.', ",")
+}
+
+/// « 32,50 % » — comme `fmt_pct` mais à 2 décimales (demande explicite pour la
+/// répartition par plateforme).
+fn fmt_pct2(part: u64, total: u64) -> String {
+    format!("{:.2}\u{202F}%", pct_ratio(part, total)).replace('.', ",")
 }
 
 /// Les six familles de l'anneau, dans l'ordre : (couleur, libellé, compte
@@ -764,6 +872,75 @@ mod tests {
             securisation: None,
             repartition_pa: None,
         }
+    }
+
+    fn repartition_full() -> crate::repartition::Repartition {
+        use crate::repartition::PaCount;
+        crate::repartition::Repartition {
+            total_lignes: 12_000,
+            plateformes: vec![
+                PaCount { nom: "Cegedim e-Business".into(), lignes: 3_900 },
+                PaCount { nom: "Docaposte".into(), lignes: 2_640 },
+                PaCount { nom: "Generix".into(), lignes: 1_800 },
+                PaCount { nom: "Esker".into(), lignes: 1_200 },
+                PaCount { nom: "Tenor".into(), lignes: 720 },
+                PaCount { nom: "Edicom".into(), lignes: 300 },
+            ],
+            sans_plateforme: 1_440,
+        }
+    }
+
+    #[test]
+    fn repartition_section_rendue() {
+        let s = snap();
+        let rep = repartition_full();
+        let d = ReportData { repartition_pa: Some(&rep), ..data(&s) };
+        let html = render(&d);
+        assert!(html.contains("par plateforme"), "titre de section");
+        assert!(html.contains("Cegedim e-Business"), "nom de PA dans la liste");
+        assert!(html.contains("Sans plateforme"), "segment sans plateforme dans le ring");
+        // % à 2 décimales, virgule française : 3 900 / 12 000 = 32,50 %.
+        assert!(html.contains("32,50\u{202F}%"), "pourcentage à 2 décimales");
+        // La section « en adressages uniques » existe toujours (non remplacée).
+        assert!(html.contains("en adressages uniques"), "section existante préservée");
+        // 6 plateformes : seuil d'agrégation identique à pa_rows (> 6) → tout affiché.
+        // Scopé à NOTRE section (titre unique « par plateforme ») : la section
+        // « constatées » (snap(), 8 PA) a son propre agrégat « Autres »
+        // indépendant, qu'il ne faut pas confondre avec le nôtre.
+        let debut = html.find("par plateforme").expect("section rendue");
+        assert!(!html[debut..].contains("Autres"), "6 plateformes → toutes affichées, pas d'agrégat");
+    }
+
+    #[test]
+    fn repartition_section_absente_si_none() {
+        let s = snap();
+        let d = data(&s); // repartition_pa: None
+        assert!(!render(&d).contains("par plateforme"), "pas de section sans données");
+    }
+
+    #[test]
+    fn repartition_section_agrege_au_dela_de_6() {
+        use crate::repartition::PaCount;
+        let s = snap();
+        let rep = crate::repartition::Repartition {
+            total_lignes: 14_000,
+            plateformes: vec![
+                PaCount { nom: "Cegedim e-Business".into(), lignes: 3_900 },
+                PaCount { nom: "Docaposte".into(), lignes: 2_640 },
+                PaCount { nom: "Generix".into(), lignes: 1_800 },
+                PaCount { nom: "Esker".into(), lignes: 1_200 },
+                PaCount { nom: "Tenor".into(), lignes: 720 },
+                PaCount { nom: "Edicom".into(), lignes: 300 },
+                PaCount { nom: "Qweeby".into(), lignes: 200 },
+            ],
+            sans_plateforme: 3_240,
+        };
+        let d = ReportData { repartition_pa: Some(&rep), ..data(&s) };
+        let html = render(&d);
+        // 7 plateformes > 6 → ring/légende agrègent les 2 dernières en « Autres »
+        // (la liste détaillée, elle, reste exhaustive : cf. Tenor ci-dessous).
+        assert!(html.contains("Autres (2 plateformes)"), "agrégat au-delà de 6 plateformes");
+        assert!(html.contains("Tenor"), "liste détaillée toujours exhaustive");
     }
 
     #[test]
