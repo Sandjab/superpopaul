@@ -5,10 +5,10 @@
 // Source de vérité : state.config.output.columns (la zone est calculée).
 
 const PEPPOL_FIELDS = [
-  ["in_peppol", "existe"], ["pa_code", "code PA"], ["pa_name", "nom PA"],
+  ["in_peppol", "statut Peppol"], ["pa_code", "code PA"], ["pa_name", "nom PA"],
   ["pa_country", "pays PA"], ["ubl_extended", "CTC-FR"],
   ["ctc_activation", "activation CTC"], ["ctc_expiration", "expiration CTC"],
-  ["ctc_status", "état CTC"],
+  ["ctc_status", "statut CTC"],
   ["in_directory", "annuaire Peppol"],
   ["annuaire_ppf", "annuaire PPF"], ["ppf_active", "PPF actif"],
   ["pdp_definie", "PDP définie"], ["ppf_usable", "PPF utilisable"],

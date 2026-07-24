@@ -136,8 +136,9 @@ async function pickInput(path) {
       pid_column: p.suggested_pid_column != null ? p.headers[p.suggested_pid_column] : "",
       record_label: prevLabel,
     };
-    // Mapping par défaut : toutes les colonnes d'entrée + existe/CTC-FR ; les
-    // autres champs Peppol démarrent dans la drop zone de l'étape 2.
+    // Mapping par défaut : toutes les colonnes d'entrée + nom PA / PPF
+    // utilisable / statut CTC ; les autres champs Peppol démarrent dans la
+    // drop zone de l'étape 2.
     // Préserve un mapping personnalisé quand on re-choisit le même fichier :
     // on ne le reconstruit que si aucune colonne n'existe encore, ou si les
     // entêtes du nouveau fichier diffèrent de celles de l'ancien preview.
@@ -150,8 +151,9 @@ async function pickInput(path) {
     if (state.config.output.columns.length === 0 || headersChanged) {
       state.config.output.columns = [
         ...p.headers.map((name) => ({ source: "input", name })),
-        { source: "peppol", field: "in_peppol" },
-        { source: "peppol", field: "ubl_extended" },
+        { source: "peppol", field: "pa_name" },
+        { source: "peppol", field: "ppf_usable" },
+        { source: "peppol", field: "ctc_status" },
       ];
     }
     // Invariant « adressage obligatoire en sortie » : la pré-désignation doit
