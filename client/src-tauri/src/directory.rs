@@ -8,7 +8,7 @@ use std::io::Read;
 /// Préfixe des Participant ID d'adressage 0225. Le scheme est l'invariant de
 /// `pid::DEFAULT_SCHEME` ; le « 0225 » est l'exigence explicite du chantier
 /// (test `prefixe_coherent_avec_pid` en garde-fou contre la dérive).
-const PREFIX_0225: &str = "iso6523-actorid-upis::0225:";
+pub(crate) const PREFIX_0225: &str = "iso6523-actorid-upis::0225:";
 
 /// URL d'export de l'annuaire Peppol (Télécharger).
 pub const DIRECTORY_URL: &str = "https://directory.peppol.eu/export/participants-csv";

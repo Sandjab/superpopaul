@@ -115,6 +115,24 @@ const UPSERT_SQL: &str = "INSERT INTO resolutions
    note=excluded.note, ctc_activation=excluded.ctc_activation,
    ctc_expiration=excluded.ctc_expiration";
 
+/// Forme stockée du participant : un adressage 0225 est réduit à sa valeur
+/// nue (`iso6523-actorid-upis::0225:552100554` → `552100554`) pour joindre
+/// directement `ppf_directory`/`peppol_directory` (nus) en SQL, sans `substr`.
+/// Tout autre scheme est conservé verbatim. Idempotent ; inverse de
+/// `from_stored`. Le pipeline de résolution manipule toujours la forme longue :
+/// la conversion est confinée à la frontière SQL.
+fn to_stored(participant: &str) -> String {
+    crate::directory::parse_0225_value(participant)
+        .unwrap_or_else(|| participant.to_string())
+}
+
+/// Reconstruit la forme longue depuis la forme stockée : une valeur nue 0225
+/// est repréfixée (`canonical`), une valeur déjà en `scheme::…` reste intacte.
+/// Inverse de `to_stored`.
+fn from_stored(stored: &str) -> String {
+    crate::pid::canonical(stored)
+}
+
 impl Store {
     pub fn open(path: &Path) -> Result<Self, String> {
         if let Some(dir) = path.parent() {
@@ -148,6 +166,21 @@ impl Store {
                     .map_err(|e| e.to_string())?;
             }
         }
+        // Migration : réduire les 0225 stockés en forme longue à leur valeur
+        // nue (jointures SQL directes avec ppf_directory/peppol_directory).
+        // Idempotent : une valeur déjà nue ne porte pas le préfixe, donc ne
+        // matche pas le LIKE. Le préfixe/la coupe dérivent de PREFIX_0225 pour
+        // rester alignés (pas de nombre magique).
+        let prefix = crate::directory::PREFIX_0225;
+        let cut = prefix.len() + 1; // substr est 1-indexé : 1er caractère après le préfixe
+        conn.execute(
+            &format!(
+                "UPDATE resolutions SET participant = substr(participant, {cut}) \
+                 WHERE participant LIKE ?1 || '_%'"
+            ),
+            params![prefix],
+        )
+        .map_err(|e| e.to_string())?;
         Ok(Store { conn })
     }
 
@@ -178,7 +211,7 @@ impl Store {
 
     fn upsert_params(r: &Resolution) -> impl rusqlite::Params + '_ {
         (
-            &r.participant,
+            to_stored(&r.participant),
             &r.exists_in_peppol,
             &r.pa_code,
             &r.pa_name,
@@ -199,7 +232,7 @@ impl Store {
                         extended_ctc_fr, api_status, resolved_at, note,
                         ctc_activation, ctc_expiration
                  FROM resolutions WHERE participant = ?1",
-                params![pid],
+                params![to_stored(pid)],
                 Self::row_to_resolution,
             )
             .optional()
@@ -219,9 +252,12 @@ impl Store {
                         ctc_activation, ctc_expiration
                  FROM resolutions WHERE participant IN ({placeholders})"
             );
+            // La base indexe en forme stockée (0225 nu) : on interroge avec la
+            // forme stockée des PID demandés ; row_to_resolution rallonge.
+            let stored: Vec<String> = chunk.iter().map(|p| to_stored(p)).collect();
             let mut stmt = self.conn.prepare_cached(&sql).map_err(|e| e.to_string())?;
             let rows = stmt
-                .query_map(rusqlite::params_from_iter(chunk), Self::row_to_resolution)
+                .query_map(rusqlite::params_from_iter(&stored), Self::row_to_resolution)
                 .map_err(|e| e.to_string())?;
             for r in rows {
                 let r = r.map_err(|e| e.to_string())?;
@@ -233,7 +269,7 @@ impl Store {
 
     fn row_to_resolution(row: &rusqlite::Row<'_>) -> rusqlite::Result<Resolution> {
         Ok(Resolution {
-            participant: row.get(0)?,
+            participant: from_stored(&row.get::<_, String>(0)?),
             exists_in_peppol: row.get(1)?,
             pa_code: row.get(2)?,
             pa_name: row.get(3)?,
@@ -972,5 +1008,132 @@ mod tests {
         // Annuaire en minuscule « c », réglage « C » → actif (UPPER des deux côtés).
         let m = s.ppf_flags(&["id_low".to_string()], &["C".to_string()]).unwrap();
         assert!(m.get("id_low").unwrap().active);
+    }
+
+    // --- Forme de stockage du participant : 0225 réduit à sa valeur nue -------
+    // Les adressages 0225 (SIREN français) sont stockés SANS le préfixe
+    // `iso6523-actorid-upis::0225:` pour que `resolutions.participant` joigne
+    // directement `ppf_directory.identifiant` / `peppol_directory.value` (nus)
+    // en SQL, sans `substr`. La forme longue est reconstituée à la lecture :
+    // le pipeline de résolution (API/direct) continue de manipuler du long.
+    // Tout scheme non-0225 est conservé verbatim (réversibilité, agnosticité).
+
+    const PID_LONG: &str = "iso6523-actorid-upis::0225:552100554";
+    const PID_NU: &str = "552100554";
+
+    #[test]
+    fn upsert_0225_ecrit_la_forme_nue_en_base() {
+        let s = Store::open_in_memory().unwrap();
+        s.upsert(&res(PID_LONG, true, 1)).unwrap();
+        let stored: String = s
+            .conn
+            .query_row("SELECT participant FROM resolutions", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(stored, PID_NU, "le 0225 doit être stocké nu (sans préfixe)");
+    }
+
+    #[test]
+    fn get_retrouve_un_0225_stocke_nu_et_rend_le_long() {
+        // Un 0225 déjà stocké nu doit être joignable par sa forme longue
+        // (celle que produit `canonical` sur les PID du fichier), et ressortir
+        // en forme longue pour rester compatible avec les appelants.
+        let s = Store::open_in_memory().unwrap();
+        s.conn
+            .execute(
+                "INSERT INTO resolutions (participant, api_status, resolved_at)
+                 VALUES (?1, 'ok', 7)",
+                params![PID_NU],
+            )
+            .unwrap();
+        let r = s.get(PID_LONG).unwrap().unwrap();
+        assert_eq!(r.participant, PID_LONG, "la lecture rallonge le 0225");
+        assert_eq!(r.resolved_at, 7);
+    }
+
+    #[test]
+    fn load_map_retrouve_un_0225_stocke_nu_et_indexe_en_long() {
+        let s = Store::open_in_memory().unwrap();
+        s.conn
+            .execute(
+                "INSERT INTO resolutions (participant, api_status, resolved_at)
+                 VALUES (?1, 'ok', 7)",
+                params![PID_NU],
+            )
+            .unwrap();
+        let m = s.load_map(&[PID_LONG.to_string()]).unwrap();
+        assert!(m.contains_key(PID_LONG), "la map est indexée en forme longue");
+        assert_eq!(m[PID_LONG].participant, PID_LONG);
+    }
+
+    #[test]
+    fn le_non_0225_est_stocke_verbatim() {
+        // Garde d'invariance : seul le 0225 est raccourci. Un autre scheme
+        // (ICD 0009, scheme arbitraire) doit rester tel quel en base, sinon la
+        // lecture (canonical) le corromprait en 0225.
+        let s = Store::open_in_memory().unwrap();
+        s.upsert(&res("iso6523-actorid-upis::0009:1", true, 1)).unwrap();
+        s.upsert(&res("a::1", true, 2)).unwrap();
+        let mut stored: Vec<String> = {
+            let mut stmt = s
+                .conn
+                .prepare("SELECT participant FROM resolutions ORDER BY resolved_at")
+                .unwrap();
+            let rows = stmt.query_map([], |r| r.get::<_, String>(0)).unwrap();
+            rows.map(Result::unwrap).collect()
+        };
+        stored.sort();
+        assert_eq!(stored, vec!["a::1", "iso6523-actorid-upis::0009:1"]);
+        assert_eq!(s.get("a::1").unwrap().unwrap().participant, "a::1");
+    }
+
+    #[test]
+    fn ouverture_raccourcit_les_0225_deja_stockes_en_long() {
+        // Migration : une base antérieure stocke les 0225 en forme longue.
+        // L'ouverture les réduit à la valeur nue, sans toucher le non-0225,
+        // et ils restent joignables par leur forme longue.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("longue.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE resolutions (
+                   participant       TEXT PRIMARY KEY,
+                   exists_in_peppol  INTEGER,
+                   pa_code           TEXT,
+                   pa_name           TEXT,
+                   pa_country        TEXT,
+                   extended_ctc_fr   INTEGER,
+                   api_status        TEXT NOT NULL,
+                   resolved_at       INTEGER NOT NULL,
+                   note              TEXT,
+                   ctc_activation    TEXT,
+                   ctc_expiration    TEXT
+                 );
+                 INSERT INTO resolutions (participant, api_status, resolved_at) VALUES
+                   ('iso6523-actorid-upis::0225:552100554', 'ok', 1),
+                   ('iso6523-actorid-upis::0009:1', 'ok', 2);",
+            )
+            .unwrap();
+        }
+        let s = Store::open(&path).unwrap();
+        let migre: String = s
+            .conn
+            .query_row(
+                "SELECT participant FROM resolutions WHERE resolved_at = 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(migre, PID_NU, "le 0225 est réduit à sa valeur nue");
+        let intact: String = s
+            .conn
+            .query_row(
+                "SELECT participant FROM resolutions WHERE resolved_at = 2",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(intact, "iso6523-actorid-upis::0009:1", "le non-0225 est intact");
+        assert!(s.get(PID_LONG).unwrap().is_some(), "joignable par la forme longue");
     }
 }
