@@ -288,6 +288,32 @@ pub fn quotas_par_pa(cible: usize, pool_par_pa: &BTreeMap<String, usize>) -> BTr
     quotas
 }
 
+/// Distribution du pool sur les jours de cycle, et couverture par les runs
+/// **retenus**. Toujours 31 entrées : un jour de cycle vide est une
+/// information, pas une absence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct StockJJ {
+    pub jj: u8,
+    pub comptes: usize,
+    pub couvert: bool,
+}
+
+pub fn stock_par_jj(pool: &[CfCandidat], retenus: &[RunFacturation]) -> Vec<StockJJ> {
+    let mut comptes = [0usize; 32];
+    for c in pool {
+        if (1..=31).contains(&c.jj) {
+            comptes[c.jj as usize] += 1;
+        }
+    }
+    (1..=31u8)
+        .map(|jj| StockJJ {
+            jj,
+            comptes: comptes[jj as usize],
+            couvert: retenus.iter().any(|r| r.couvre(jj)),
+        })
+        .collect()
+}
+
 /// Volumes de premières factures par run.
 ///
 /// Le point subtil est le **socle du pilote** : quand un pilote est actif
@@ -1524,6 +1550,43 @@ mod tests {
         let a = trier_par_priorite(&pool, 1);
         let b = trier_par_priorite(&pool, 2);
         assert_ne!(a, b, "le seed doit réellement rebattre les cartes");
+    }
+
+    // ----------------------------------------------------------- stock/jj
+
+    #[test]
+    fn stock_par_jj_rend_les_trente_et_un_jours() {
+        let s = stock_par_jj(&[cand("A", 8, "PA1")], &[]);
+        assert_eq!(s.len(), 31, "les jours de cycle vides comptent aussi");
+        assert_eq!(s[0].jj, 1);
+        assert_eq!(s[30].jj, 31);
+        assert_eq!(s[7].comptes, 1, "le jour de cycle 8 porte un compte");
+    }
+
+    #[test]
+    fn stock_par_jj_signale_un_jour_sans_run() {
+        // Sans ce signal, les comptes hors d'atteinte restent invisibles :
+        // l'écran ne sait dire que « stock insuffisant », jamais où.
+        let pool = vec![cand("A", 8, "PA1"), cand("B", 19, "PA1")];
+        let retenus = [RunFacturation {
+            num: "3320".into(),
+            date: d("2026-07-09"),
+            jjs: vec![8],
+            exclu: false,
+        }];
+        let s = stock_par_jj(&pool, &retenus);
+        assert!(s[7].couvert, "le jour de cycle 8 est couvert par le run");
+        assert!(!s[18].couvert, "aucun run ne couvre le jour de cycle 19");
+        assert_eq!(s[18].comptes, 1, "et pourtant un compte y est bloqué");
+    }
+
+    #[test]
+    fn stock_par_jj_ne_compte_pas_les_runs_ecartes() {
+        // On passe ici les runs RETENUS : un run exclu ne doit pas faire
+        // croire que son jour de cycle est servi, sinon l'exclusion se ferait
+        // à l'aveugle.
+        let s = stock_par_jj(&[cand("A", 9, "PA1")], &[]);
+        assert!(!s[8].couvert);
     }
 
     // ----------------------------------------------------------- allocation
