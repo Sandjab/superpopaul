@@ -119,6 +119,16 @@ pub fn timeline(
         feries.extend(crate::calendrier::feries(annee));
     }
 
+    let mut jalons: HashMap<NaiveDate, Vec<Jalon>> = HashMap::new();
+    let mut dates_mep: Vec<NaiveDate> = meps.to_vec();
+    dates_mep.sort_unstable();
+    dates_mep.dedup();
+    for (i, m) in dates_mep.iter().enumerate() {
+        jalons.entry(*m).or_default().push(Jalon::Mep { rang: i + 1 });
+    }
+    jalons.entry(debut).or_default().push(Jalon::DebutFenetre);
+    jalons.entry(fin).or_default().push(Jalon::FinFenetre);
+
     let premiere_mep = meps.iter().min().copied();
     let mut par_date: HashMap<NaiveDate, Vec<RunJour>> = HashMap::new();
     for r in runs {
@@ -147,7 +157,7 @@ pub fn timeline(
             jour_semaine: JOURS_SEMAINE[jour.weekday().num_days_from_monday() as usize],
             weekend: matches!(jour.weekday(), Weekday::Sat | Weekday::Sun),
             ferie: feries.get(&jour).copied(),
-            jalons: Vec::new(),
+            jalons: jalons.remove(&jour).unwrap_or_default(),
             runs: par_date.remove(&jour).unwrap_or_default(),
         });
         jour += chrono::Duration::days(1);
@@ -548,5 +558,59 @@ mod tests {
 
         assert_eq!(affiches, retenus, "l'écran et le moteur doivent retenir le même ensemble de runs");
         assert_eq!(affiches, vec!["H"], "le run pile sur le début de fenêtre est retenu");
+    }
+
+    #[test]
+    fn bornes_de_fenetre_posees_sur_leurs_jours() {
+        let t = timeline(&[], d("2026-07-10"), d("2026-07-12"), &[], &[]);
+        assert_eq!(t[0].jalons, vec![Jalon::DebutFenetre]);
+        assert_eq!(t[1].jalons, vec![]);
+        assert_eq!(t[2].jalons, vec![Jalon::FinFenetre]);
+    }
+
+    #[test]
+    fn la_borne_de_debut_ne_suit_pas_le_premier_jour_affiche() {
+        // `lo` vaut min(debut, dates de runs) : dès qu'un run précède la
+        // fenêtre, le jalon de début tombe au milieu du tableau et non en
+        // tête. Un rendu qui supposerait « première ligne = début de fenêtre »
+        // serait faux sur un scénario banal — un calendrier qui commence avant
+        // la fenêtre retenue.
+        let t = timeline(
+            &[run("3300", "2026-07-05", &[5])],
+            d("2026-07-10"),
+            d("2026-07-12"),
+            &[],
+            &[],
+        );
+        assert_eq!(t[0].date, "2026-07-05", "l'étendue commence au run, pas à la fenêtre");
+        assert_eq!(t[0].jalons, vec![], "et ce premier jour ne porte aucun jalon");
+        let debut = t.iter().find(|j| j.date == "2026-07-10").unwrap();
+        assert_eq!(debut.jalons, vec![Jalon::DebutFenetre]);
+    }
+
+    #[test]
+    fn meps_numerotees_dans_l_ordre_chronologique() {
+        // Le rang affiché doit suivre les dates, pas l'ordre de saisie :
+        // « MEP 2 » avant « MEP 1 » sur le calendrier serait un contresens.
+        let t = timeline(
+            &[],
+            d("2026-07-01"),
+            d("2026-07-20"),
+            &[d("2026-07-15"), d("2026-07-05")],
+            &[],
+        );
+        let j5 = t.iter().find(|j| j.date == "2026-07-05").unwrap();
+        let j15 = t.iter().find(|j| j.date == "2026-07-15").unwrap();
+        assert_eq!(j5.jalons, vec![Jalon::Mep { rang: 1 }]);
+        assert_eq!(j15.jalons, vec![Jalon::Mep { rang: 2 }]);
+    }
+
+    #[test]
+    fn plusieurs_jalons_le_meme_jour_sont_tous_rendus() {
+        // Une MEP posée le dernier jour de la fenêtre : en perdre un des deux
+        // rendrait le calendrier faux.
+        let t = timeline(&[], d("2026-07-01"), d("2026-07-10"), &[d("2026-07-10")], &[]);
+        let dernier = t.last().unwrap();
+        assert_eq!(dernier.jalons, vec![Jalon::Mep { rang: 1 }, Jalon::FinFenetre]);
     }
 }
