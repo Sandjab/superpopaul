@@ -373,6 +373,250 @@ fn niveau_pilote(rampe: &Rampe, n_runs: usize) -> (usize, usize) {
     }
 }
 
+/// D'où vient une ligne du plan. Absorbe l'ancien booléen `coverage_fill` :
+/// un remplissage de couverture *est* une origine d'affectation, et en faire
+/// un drapeau à part obligerait à un second drapeau dès la troisième origine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Origine {
+    /// Allouée par la rampe.
+    Auto,
+    /// Placée hors quota pour qu'une plateforme soit représentée.
+    Couverture,
+    /// Ajoutée ou déplacée à la main — épinglée, survit à la régénération.
+    Manuel,
+}
+
+/// Une ligne du plan. **Auto-porteuse** : elle embarque tout ce qu'il faut
+/// pour être relue sans le fichier d'entrée, car le gel doit survivre à un
+/// changement de fichier.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LignePlan {
+    pub cf: String,
+    pub participant: String,
+    pub jj: u8,
+    pub raison_sociale: String,
+    pub pa: String,
+    pub mep_id: usize,
+    pub mep_date: chrono::NaiveDate,
+    pub run_num: String,
+    pub run_date: chrono::NaiveDate,
+    pub origine: Origine,
+    pub in_directory: bool,
+    pub resolved_at: i64,
+}
+
+/// Hash FNV-1a 64 bits d'un compte, salé par le seed. Remplace le
+/// `random.shuffle` de peppolstat : un générateur pseudo-aléatoire ne se porte
+/// pas d'un langage à l'autre, alors qu'un hash donne la même propriété
+/// (départage pseudo-aléatoire, reproductible, réglable) sans dépendance.
+/// Volontairement local : le `fnv1a` de `csv_io` sert à une signature
+/// PERSISTÉE dont le contrat est de ne jamais changer.
+fn hash_seede(seed: u64, cf: &str) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325 ^ seed;
+    for &b in cf.as_bytes() {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
+}
+
+/// Trie le pool par priorité décroissante : présence à l'annuaire, puis
+/// fraîcheur de résolution, puis départage seedé. Une seule clé composite là
+/// où peppolstat empile un shuffle et trois tris stables successifs.
+pub fn trier_par_priorite(pool: &[CfCandidat], seed: u64) -> Vec<CfCandidat> {
+    let mut out = pool.to_vec();
+    out.sort_by(|a, b| {
+        b.in_directory
+            .cmp(&a.in_directory)
+            .then_with(|| b.resolved_at.cmp(&a.resolved_at))
+            .then_with(|| hash_seede(seed, &a.cf).cmp(&hash_seede(seed, &b.cf)))
+    });
+    out
+}
+
+/// Affecte les comptes du pool aux Runs de Facturation, chronologiquement.
+///
+/// - le volume qu'un run ne peut pas absorber (stock insuffisant sur ses JJ)
+///   **glisse** au run suivant ; ce qui reste à la fin est un avertissement,
+///   pas une erreur ;
+/// - les quotas par plateforme sont des cibles **souples** : si le volume d'un
+///   run dépasse les quotas restants des plateformes présentes, le volume
+///   prime et le complément est pris toutes plateformes confondues ;
+/// - **couverture** : toute plateforme du pool non servie reçoit un compte
+///   hors quota sur le premier run couvrant le JJ d'un de ses candidats.
+pub fn allouer(
+    pool: &[CfCandidat],
+    runs: &[RunFacturation],
+    meps: &[chrono::NaiveDate],
+    seed: u64,
+    cible: usize,
+    rampe: &Rampe,
+) -> (Vec<LignePlan>, Vec<String>) {
+    let mut avertissements: Vec<String> = Vec::new();
+    let classes = trier_par_priorite(pool, seed);
+
+    // Rang de chaque compte dans l'ordre de priorité : sert à compléter un run
+    // toutes plateformes confondues quand les quotas ne suffisent pas.
+    let rang: HashMap<&str, usize> = classes
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (c.cf.as_str(), i))
+        .collect();
+    let mut par_pa: BTreeMap<String, Vec<&CfCandidat>> = BTreeMap::new();
+    for c in &classes {
+        par_pa.entry(c.pa.clone()).or_default().push(c);
+    }
+    let stock_par_pa: BTreeMap<String, usize> =
+        par_pa.iter().map(|(h, v)| (h.clone(), v.len())).collect();
+    let quotas = quotas_par_pa(cible, &stock_par_pa);
+
+    let mut affectes: HashSet<&str> = HashSet::new();
+    let mut places_par_pa: HashMap<&str, usize> = HashMap::new();
+    let mut lignes: Vec<LignePlan> = Vec::new();
+
+    let volumes = construire_rampe(cible, runs, rampe);
+    if rampe_pilote_infaisable(cible, runs.len(), rampe) {
+        let v = rampe.pilote.map(|p| p.cf_par_run).unwrap_or(0);
+        avertissements.push(format!(
+            "pilote : la cible {cible} est trop basse pour tenir {v} comptes par run sur \
+             toute la rampe — creux sous le niveau du pilote (augmenter la cible ou \
+             réduire le pilote)"
+        ));
+    }
+
+    let mut report = 0usize;
+    for run in runs {
+        let Some((mep_id, mep_date)) = crate::calendrier::mep_de(run.date, meps) else {
+            // Un run utilisable a toujours une MEP antérieure ; si ce n'est
+            // pas le cas, le dire plutôt que de produire une ligne bancale.
+            avertissements.push(format!(
+                "Run de Facturation {} ({}) : aucune MEP antérieure — run ignoré",
+                run.num, run.date
+            ));
+            continue;
+        };
+        let vise = volumes.get(&run.num).copied().unwrap_or(0) + report;
+
+        let mut dispo: BTreeMap<&str, Vec<&CfCandidat>> = BTreeMap::new();
+        for (pa, cands) in &par_pa {
+            let l: Vec<&CfCandidat> = cands
+                .iter()
+                .filter(|c| run.couvre(c.jj) && !affectes.contains(c.cf.as_str()))
+                .copied()
+                .collect();
+            if !l.is_empty() {
+                dispo.insert(pa.as_str(), l);
+            }
+        }
+        let stock: usize = dispo.values().map(Vec::len).sum();
+        let pris = vise.min(stock);
+
+        // Quotas restants des plateformes présentes sur ce run.
+        let restants: BTreeMap<String, f64> = dispo
+            .keys()
+            .filter_map(|pa| {
+                let q = quotas.get(*pa).copied().unwrap_or(0);
+                let deja = places_par_pa.get(*pa).copied().unwrap_or(0);
+                (q > deja).then(|| ((*pa).to_string(), (q - deja) as f64))
+            })
+            .collect();
+        let cibles = plus_forts_restes(pris, &restants);
+
+        let mut choisis: Vec<&CfCandidat> = Vec::new();
+        for (pa, n) in &cibles {
+            if let Some(l) = dispo.get(pa.as_str()) {
+                choisis.extend(l.iter().take(*n));
+            }
+        }
+        // Quotas souples : le volume du run prime. Le complément est pris
+        // toutes plateformes confondues, dans l'ordre de priorité.
+        if choisis.len() < pris {
+            let deja: HashSet<&str> = choisis.iter().map(|c| c.cf.as_str()).collect();
+            let mut reste: Vec<&CfCandidat> = dispo
+                .values()
+                .flatten()
+                .filter(|c| !deja.contains(c.cf.as_str()))
+                .copied()
+                .collect();
+            reste.sort_by_key(|c| rang[c.cf.as_str()]);
+            choisis.extend(reste.into_iter().take(pris - choisis.len()));
+        }
+
+        for c in choisis.into_iter().take(pris) {
+            affectes.insert(&c.cf);
+            *places_par_pa.entry(c.pa.as_str()).or_insert(0) += 1;
+            lignes.push(ligne_de(c, run, mep_id, mep_date, Origine::Auto));
+        }
+        report = vise - pris;
+    }
+
+    if runs.is_empty() && cible > 0 {
+        avertissements.push(format!(
+            "cible non atteinte : {cible} comptes manquants (aucun Run de Facturation utilisable)"
+        ));
+    } else if report > 0 {
+        avertissements.push(format!(
+            "cible non atteinte : {report} comptes manquants (stock insuffisant sur les \
+             jours de cycle des runs retenus)"
+        ));
+    }
+
+    // Couverture : chaque plateforme du pool représentée au moins une fois,
+    // sur le PREMIER run chronologique couvrant le JJ d'un de ses candidats.
+    for (pa, cands) in &par_pa {
+        if places_par_pa.get(pa.as_str()).copied().unwrap_or(0) > 0 {
+            continue;
+        }
+        let mut place = false;
+        for run in runs {
+            let Some((mep_id, mep_date)) = crate::calendrier::mep_de(run.date, meps) else {
+                continue;
+            };
+            if let Some(c) = cands
+                .iter()
+                .find(|c| run.couvre(c.jj) && !affectes.contains(c.cf.as_str()))
+            {
+                affectes.insert(&c.cf);
+                *places_par_pa.entry(c.pa.as_str()).or_insert(0) += 1;
+                lignes.push(ligne_de(c, run, mep_id, mep_date, Origine::Couverture));
+                place = true;
+                break;
+            }
+        }
+        if !place {
+            avertissements.push(format!(
+                "plateforme {pa} : aucune couverture possible — les jours de cycle de ses \
+                 comptes ne sont couverts par aucun Run de Facturation retenu"
+            ));
+        }
+    }
+    (lignes, avertissements)
+}
+
+fn ligne_de(
+    c: &CfCandidat,
+    run: &RunFacturation,
+    mep_id: usize,
+    mep_date: chrono::NaiveDate,
+    origine: Origine,
+) -> LignePlan {
+    LignePlan {
+        cf: c.cf.clone(),
+        participant: c.participant.clone(),
+        jj: c.jj,
+        raison_sociale: c.raison_sociale.clone(),
+        pa: c.pa.clone(),
+        mep_id,
+        mep_date,
+        run_num: run.num.clone(),
+        run_date: run.date,
+        origine,
+        in_directory: c.in_directory,
+        resolved_at: c.resolved_at,
+    }
+}
+
 /// Vrai si un pilote est demandé mais que la cible ne permet pas de tenir son
 /// niveau sur tous les runs suivants : le socle est alors impossible et
 /// `construire_rampe` bascule sur la forme pure, avec un creux sous V.
@@ -805,5 +1049,221 @@ mod tests {
         let rs = runs_n(3);
         assert_eq!(vols(&construire_rampe(0, &rs, &rampe(Forme::Plate)), &rs), vec![0, 0, 0]);
         assert!(construire_rampe(100, &[], &rampe(Forme::Plate)).is_empty());
+    }
+
+    // ------------------------------------------------------------------ tri
+
+    fn cand(cf: &str, jj: u8, pa: &str) -> CfCandidat {
+        CfCandidat {
+            cf: cf.into(),
+            participant: format!("0225:{cf}"),
+            jj,
+            raison_sociale: "ACME".into(),
+            pa: pa.into(),
+            in_directory: false,
+            resolved_at: 0,
+        }
+    }
+
+    #[test]
+    fn tri_annuaire_prime_sur_la_fraicheur() {
+        let mut vieux_dans_annuaire = cand("A", 1, "PA");
+        vieux_dans_annuaire.in_directory = true;
+        vieux_dans_annuaire.resolved_at = 1;
+        let mut frais_hors_annuaire = cand("B", 1, "PA");
+        frais_hors_annuaire.resolved_at = 999;
+        let t = trier_par_priorite(&[frais_hors_annuaire, vieux_dans_annuaire], 42);
+        assert_eq!(t[0].cf, "A", "l'annuaire passe avant la fraîcheur");
+    }
+
+    #[test]
+    fn tri_fraicheur_departage_a_annuaire_egal() {
+        let mut vieux = cand("A", 1, "PA");
+        vieux.resolved_at = 1;
+        let mut frais = cand("B", 1, "PA");
+        frais.resolved_at = 999;
+        let t = trier_par_priorite(&[vieux, frais], 42);
+        assert_eq!(t[0].cf, "B", "le plus frais d'abord");
+    }
+
+    #[test]
+    fn tri_est_deterministe_a_seed_egal() {
+        let pool: Vec<CfCandidat> = (0..20).map(|i| cand(&format!("CF{i:02}"), 1, "PA")).collect();
+        let a = trier_par_priorite(&pool, 42);
+        let b = trier_par_priorite(&pool, 42);
+        assert_eq!(a, b, "même seed, même ordre — c'est la reproductibilité du plan");
+    }
+
+    #[test]
+    fn tri_change_avec_le_seed() {
+        let pool: Vec<CfCandidat> = (0..20).map(|i| cand(&format!("CF{i:02}"), 1, "PA")).collect();
+        let a = trier_par_priorite(&pool, 1);
+        let b = trier_par_priorite(&pool, 2);
+        assert_ne!(a, b, "le seed doit réellement rebattre les cartes");
+    }
+
+    // ----------------------------------------------------------- allocation
+
+    /// Runs mensuels couvrant tous les mêmes JJ, à partir de février 2026.
+    fn runs_jj(n: usize, jjs: &[u8]) -> Vec<RunFacturation> {
+        (0..n)
+            .map(|i| RunFacturation {
+                num: format!("R{}", i + 1),
+                date: d(&format!("2026-{:02}-15", i + 2)),
+                jjs: jjs.to_vec(),
+                exclu: false,
+            })
+            .collect()
+    }
+
+    fn meps1() -> Vec<chrono::NaiveDate> {
+        vec![d("2026-01-01")]
+    }
+
+    #[test]
+    fn allocation_nominale_respecte_les_volumes_de_rampe() {
+        let pool: Vec<CfCandidat> = (0..100).map(|i| cand(&format!("CF{i:03}"), 5, "PA")).collect();
+        let rs = runs_jj(4, &[5]);
+        let (lignes, warns) = allouer(&pool, &rs, &meps1(), 42, 100, &rampe(Forme::Plate));
+        assert_eq!(lignes.len(), 100);
+        assert!(warns.is_empty(), "{warns:?}");
+        for r in &rs {
+            let n = lignes.iter().filter(|l| l.run_num == r.num).count();
+            assert_eq!(n, 25, "run {}", r.num);
+        }
+    }
+
+    #[test]
+    fn allocation_rattache_chaque_ligne_a_sa_mep() {
+        let pool: Vec<CfCandidat> = (0..4).map(|i| cand(&format!("CF{i}"), 5, "PA")).collect();
+        let rs = runs_jj(2, &[5]);
+        let meps = vec![d("2026-01-01"), d("2026-03-01")];
+        let (lignes, _) = allouer(&pool, &rs, &meps, 42, 4, &rampe(Forme::Plate));
+        // R1 = 15/02 → MEP 1 ; R2 = 15/03 → MEP 2.
+        let l1 = lignes.iter().find(|l| l.run_num == "R1").unwrap();
+        let l2 = lignes.iter().find(|l| l.run_num == "R2").unwrap();
+        assert_eq!(l1.mep_id, 1);
+        assert_eq!(l2.mep_id, 2);
+        assert_eq!(l2.mep_date, d("2026-03-01"));
+    }
+
+    #[test]
+    fn allocation_fait_glisser_le_reliquat_au_run_suivant() {
+        // 10 comptes au JJ 5, 10 au JJ 20. R1 ne facture que le JJ 5 : il ne
+        // peut pas absorber son volume, le reste glisse sur R2.
+        let mut pool: Vec<CfCandidat> =
+            (0..10).map(|i| cand(&format!("A{i}"), 5, "PA")).collect();
+        pool.extend((0..10).map(|i| cand(&format!("B{i}"), 20, "PA")));
+        let rs = vec![
+            RunFacturation { num: "R1".into(), date: d("2026-02-15"), jjs: vec![5], exclu: false },
+            RunFacturation { num: "R2".into(), date: d("2026-03-15"), jjs: vec![5, 20], exclu: false },
+        ];
+        let (lignes, warns) = allouer(&pool, &rs, &meps1(), 42, 20, &rampe(Forme::Plate));
+        assert_eq!(lignes.len(), 20, "tout est placé au final : {warns:?}");
+        assert_eq!(lignes.iter().filter(|l| l.run_num == "R1").count(), 10);
+        assert_eq!(lignes.iter().filter(|l| l.run_num == "R2").count(), 10);
+    }
+
+    #[test]
+    fn allocation_reliquat_final_avertit_sans_echouer() {
+        // Cible 20, mais seulement 5 comptes atteignables.
+        let pool: Vec<CfCandidat> = (0..5).map(|i| cand(&format!("CF{i}"), 5, "PA")).collect();
+        let rs = runs_jj(2, &[5]);
+        let (lignes, warns) = allouer(&pool, &rs, &meps1(), 42, 20, &rampe(Forme::Plate));
+        assert_eq!(lignes.len(), 5, "ce qui peut être placé l'est");
+        assert!(
+            warns.iter().any(|w| w.contains("15")),
+            "le manque doit être chiffré : {warns:?}"
+        );
+    }
+
+    #[test]
+    fn allocation_sans_run_utilisable_avertit() {
+        let pool = vec![cand("CF1", 5, "PA")];
+        let (lignes, warns) = allouer(&pool, &[], &meps1(), 42, 10, &rampe(Forme::Plate));
+        assert!(lignes.is_empty());
+        assert!(warns.iter().any(|w| w.contains("10")), "{warns:?}");
+    }
+
+    #[test]
+    fn allocation_n_affecte_jamais_deux_fois_le_meme_compte() {
+        let pool: Vec<CfCandidat> = (0..30).map(|i| cand(&format!("CF{i:02}"), 5, "PA")).collect();
+        let rs = runs_jj(5, &[5]);
+        let (lignes, _) = allouer(&pool, &rs, &meps1(), 42, 30, &rampe(Forme::Lineaire));
+        let uniques: HashSet<&str> = lignes.iter().map(|l| l.cf.as_str()).collect();
+        assert_eq!(uniques.len(), lignes.len(), "doublon d'affectation");
+    }
+
+    #[test]
+    fn couverture_place_une_plateforme_non_servie_sur_le_premier_run_possible() {
+        // Cible 1 : le plancher de quota ne peut couvrir qu'UNE plateforme,
+        // et c'est la mieux dotée qui l'emporte. « Petite » n'est donc servie
+        // par aucun quota — c'est là que le filet de couverture doit jouer.
+        // (Avec une cible ≥ 2, le plancher la servirait déjà, en origine Auto.)
+        let mut pool: Vec<CfCandidat> =
+            (0..50).map(|i| cand(&format!("G{i:02}"), 5, "Grosse")).collect();
+        pool.push(cand("P1", 20, "Petite"));
+        let rs = vec![
+            RunFacturation { num: "R1".into(), date: d("2026-02-15"), jjs: vec![5], exclu: false },
+            RunFacturation { num: "R2".into(), date: d("2026-03-15"), jjs: vec![5, 20], exclu: false },
+            RunFacturation { num: "R3".into(), date: d("2026-04-15"), jjs: vec![20], exclu: false },
+        ];
+        let (lignes, _) = allouer(&pool, &rs, &meps1(), 42, 1, &rampe(Forme::Plate));
+        let p = lignes.iter().find(|l| l.pa == "Petite").expect("plateforme non représentée");
+        assert_eq!(p.origine, Origine::Couverture);
+        assert_eq!(p.run_num, "R2", "le PREMIER run couvrant le JJ 20");
+    }
+
+    #[test]
+    fn plancher_de_quota_sert_une_petite_plateforme_sans_recourir_a_la_couverture() {
+        // Caractérisation : dès que la cible permet un plancher de 1 par
+        // plateforme, la petite est servie par l'allocation NORMALE. La
+        // couverture n'est qu'un filet, elle ne doit pas se déclencher ici.
+        let mut pool: Vec<CfCandidat> =
+            (0..50).map(|i| cand(&format!("G{i:02}"), 5, "Grosse")).collect();
+        pool.push(cand("P1", 20, "Petite"));
+        let rs = vec![
+            RunFacturation { num: "R1".into(), date: d("2026-02-15"), jjs: vec![5], exclu: false },
+            RunFacturation { num: "R2".into(), date: d("2026-03-15"), jjs: vec![5, 20], exclu: false },
+        ];
+        let (lignes, _) = allouer(&pool, &rs, &meps1(), 42, 2, &rampe(Forme::Plate));
+        let p = lignes.iter().find(|l| l.pa == "Petite").expect("plateforme non représentée");
+        assert_eq!(p.origine, Origine::Auto);
+    }
+
+    #[test]
+    fn couverture_impossible_avertit_en_nommant_la_plateforme() {
+        // Le JJ 20 n'est couvert par aucun run.
+        let mut pool: Vec<CfCandidat> =
+            (0..5).map(|i| cand(&format!("G{i}"), 5, "Grosse")).collect();
+        pool.push(cand("P1", 20, "Orpheline"));
+        let rs = runs_jj(2, &[5]);
+        let (lignes, warns) = allouer(&pool, &rs, &meps1(), 42, 5, &rampe(Forme::Plate));
+        assert!(!lignes.iter().any(|l| l.pa == "Orpheline"));
+        assert!(
+            warns.iter().any(|w| w.contains("Orpheline")),
+            "la plateforme doit être nommée : {warns:?}"
+        );
+    }
+
+    #[test]
+    fn allocation_est_reproductible_a_seed_egal() {
+        let pool: Vec<CfCandidat> = (0..40).map(|i| cand(&format!("CF{i:02}"), 5, "PA")).collect();
+        let rs = runs_jj(3, &[5]);
+        let a = allouer(&pool, &rs, &meps1(), 7, 20, &rampe(Forme::Lineaire)).0;
+        let b = allouer(&pool, &rs, &meps1(), 7, 20, &rampe(Forme::Lineaire)).0;
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn allocation_signale_un_pilote_infaisable() {
+        let pool: Vec<CfCandidat> = (0..30).map(|i| cand(&format!("CF{i:02}"), 5, "PA")).collect();
+        let rs = runs_jj(5, &[5]);
+        let r = Rampe {
+            forme: Forme::Plate,
+            pilote: Some(Pilote { runs: 2, cf_par_run: 10 }),
+        };
+        let (_, warns) = allouer(&pool, &rs, &meps1(), 42, 25, &r);
+        assert!(warns.iter().any(|w| w.contains("pilote")), "{warns:?}");
     }
 }
