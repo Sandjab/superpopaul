@@ -1354,12 +1354,15 @@ function marche(lbl, val, base, precedent, final) {
 const TL_MOIS = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet",
   "août", "septembre", "octobre", "novembre", "décembre"];
 
-const TL_ECARTS = {
-  exclu: "exclu à la main",
-  hors_fenetre: "hors fenêtre",
-  mep_non_passee: "la première MEP n'est pas encore passée",
-  aucune_mep: "aucune MEP n'est définie",
-};
+// Map plutôt qu'objet littéral : `TL_ECARTS[r.ecart]` traverserait la chaîne
+// de prototypes sur une valeur comme "constructor" ou "toString" et rendrait
+// un libellé qui n'existe pas — un `Map` n'a pas ce piège.
+const TL_ECARTS = new Map([
+  ["exclu", "exclu à la main"],
+  ["hors_fenetre", "hors fenêtre"],
+  ["mep_non_passee", "la première MEP n'est pas encore passée"],
+  ["aucune_mep", "aucune MEP n'est définie"],
+]);
 
 /** « Juillet 2026 » depuis une date ISO, sans passer par Date (fuseaux). */
 function libelleMois(iso) {
@@ -1367,14 +1370,22 @@ function libelleMois(iso) {
   return `${m[0].toUpperCase()}${m.slice(1)} ${iso.slice(0, 4)}`;
 }
 
+// Le jour porte le marquage week-end/férié — pas la ligne : un run ou une
+// MEP tombant ce jour-là reste pleinement lisible, tout en gardant
+// l'information visible (pas seulement dans une bulle au survol), y
+// compris sur les jours sans aucune ligne dédiée à ce chômage.
 function celluleJour(j) {
-  return h("td", { class: "tl-jour" }, `${j.jour_semaine} ${j.date.slice(8)}`);
+  const texte = `${j.jour_semaine} ${j.date.slice(8)}`;
+  const note = j.ferie ? `férié — ${j.ferie}` : j.weekend ? "week-end" : "";
+  if (!note) return h("td", { class: "tl-jour" }, texte);
+  return h("td", { class: "tl-jour tl-off" }, texte, h("span", { class: "tl-note" }, ` · ${note}`));
 }
 
 function ligneJalon(j, jl) {
   const texte = jl.sorte === "mep" ? `MEP ${jl.rang}`
     : jl.sorte === "debut_fenetre" ? "Début de la fenêtre FUT"
-    : "Fin de la fenêtre FUT";
+    : jl.sorte === "fin_fenetre" ? "Fin de la fenêtre FUT"
+    : `Jalon inconnu (${jl.sorte})`;
   const tr = h("tr", { class: jl.sorte === "mep" ? "tl-mep" : "tl-borne" },
     celluleJour(j),
     h("td", { colspan: "8" }, h("span", { class: "flag" }, texte)));
@@ -1382,21 +1393,20 @@ function ligneJalon(j, jl) {
 }
 
 function ligneVide(j) {
-  const notes = [];
-  if (j.ferie) notes.push(`férié — ${j.ferie}`);
-  else if (j.weekend) notes.push("week-end");
-  return h("tr", { class: j.weekend || j.ferie ? "tl-off" : "" },
-    celluleJour(j),
-    h("td", { colspan: "8", class: "tl-note" }, notes.join("")));
+  return h("tr", {}, celluleJour(j), h("td", { colspan: "8" }, ""));
 }
 
 function ligneRun(j, r) {
-  const cb = h("input", { type: "checkbox", onchange: () => {
+  const cb = h("input", { type: "checkbox", onchange: (e) => {
     const cible = plan.runs.find((x) => x.num === r.num);
-    if (cible) cible.exclu = !cible.exclu;
+    if (cible) cible.exclu = e.target.checked;
     planRecalc();
   } });
-  cb.checked = r.exclu;
+  // Source de vérité = l'état LOCAL (`plan.runs`), pas l'écho serveur `r.exclu` :
+  // un `plan_preview` en vol qui répond après un clic plus récent écraserait
+  // sinon la case avec un état déjà périmé. Même principe que les cases
+  // plateformes, qui lisent `plan.paExclues`.
+  cb.checked = plan.runs.find((x) => x.num === r.num)?.exclu ?? r.exclu;
   const boite = h("td", {}, h("label", { class: "tl-chk" }, cb, " exclure"));
 
   if (r.ecart) {
@@ -1404,7 +1414,7 @@ function ligneRun(j, r) {
       celluleJour(j),
       h("td", {}, r.num),
       h("td", { class: "jj" }, r.jjs.join(" · ")),
-      h("td", { colspan: "5", class: "tl-why" }, `écarté — ${TL_ECARTS[r.ecart] ?? r.ecart}`),
+      h("td", { colspan: "5", class: "tl-why" }, `écarté — ${TL_ECARTS.get(r.ecart) ?? r.ecart}`),
       boite);
   }
   const d = r.detail;
@@ -1432,145 +1442,154 @@ function renderPlanParam() {
         : "Charge le calendrier des Runs de Facturation pour commencer."));
     return;
   }
-  const f = a.funnel;
-  const b = f.lignes || 1;
-  const noeuds = [];
+  try {
+    const f = a.funnel;
+    const b = f.lignes || 1;
+    const noeuds = [];
 
-  noeuds.push(h("h2", {}, "Éligibilité"));
-  noeuds.push(h("p", { class: "field-hint" },
-    "Un compte est éligible si son statut CTC est prêt et qu'il est PPF utilisable (motif actif ET PDP réelle sur la même ligne)."));
-  noeuds.push(h("div", {},
-    marche("Lignes du fichier", f.lignes, b, null),
-    marche("Comptes distincts", f.cf_distincts, b, f.lignes),
-    marche("Jour de cycle valide", f.jj_valide, b, f.cf_distincts),
-    marche("Adressage résolu", f.resolus, b, f.jj_valide),
-    marche("Statut CTC « prêt »", f.ctc_ready, b, f.resolus),
-    marche("PPF utilisable", f.ppf_usable, b, f.ctc_ready),
-    marche("COMPTES ÉLIGIBLES", f.eligibles, b, f.ppf_usable, true)));
-
-  noeuds.push(h("h2", {}, "Runs de Facturation"));
-  const retenus = a.timeline.reduce(
-    (n, j) => n + j.runs.filter((r) => !r.ecart).length, 0);
-  const totalRuns = a.timeline.reduce((n, j) => n + j.runs.length, 0);
-  noeuds.push(h("p", { class: "field-hint" },
-    `${fmtN(retenus)} run(s) retenu(s) sur ${fmtN(totalRuns)} affiché(s) · rattachement à la dernière MEP strictement antérieure. Décocher un run le retire du plan.`));
-
-  const tbl = h("table", { class: "plan-tl" },
-    h("tr", {}, ...[["Jour", ""], ["Run", ""], ["Jours facturés", ""],
-                    ["Visé", "n"], ["Report", "n"], ["Stock", "n"],
-                    ["Placé", "n"], ["Reliquat", "n"], ["", ""]]
-      .map(([t, c]) => h("th", { class: c }, t))));
-
-  let moisCourant = "";
-  for (const j of a.timeline) {
-    const mois = j.date.slice(0, 7);
-    if (mois !== moisCourant) {
-      moisCourant = mois;
-      tbl.append(h("tr", { class: "tl-mois" },
-        h("td", { colspan: "9" }, libelleMois(j.date))));
-    }
-    // Les bornes encadrent le contenu du jour, elles ne le précèdent pas
-    // toutes les deux : un run posé pile sur `fin` est RETENU, donc afficher
-    // « fin de fenêtre » au-dessus de lui le montrerait hors fenêtre alors
-    // qu'il compte. Symétriquement, « début de fenêtre » doit rester au-dessus.
-    // Une MEP reste au-dessus aussi : les runs de ce jour-là sont écartés par
-    // elle, le motif se lit alors juste sous sa cause.
-    for (const jl of j.jalons.filter((x) => x.sorte !== "fin_fenetre"))
-      tbl.append(ligneJalon(j, jl));
-    if (!j.runs.length) tbl.append(ligneVide(j));
-    else for (const r of j.runs) tbl.append(ligneRun(j, r));
-    for (const jl of j.jalons.filter((x) => x.sorte === "fin_fenetre"))
-      tbl.append(ligneJalon(j, jl));
-  }
-  noeuds.push(h("div", { class: "tl-scroll" }, tbl));
-
-  const totalPool = a.stock_jj.reduce((n, s) => n + s.comptes, 0);
-  const atteignables = a.stock_jj.reduce((n, s) => n + (s.couvert ? s.comptes : 0), 0);
-  const maxJJ = Math.max(1, ...a.stock_jj.map((s) => s.comptes));
-  noeuds.push(h("h2", {}, "Stock par jour de cycle"));
-  // Sans aucune MEP, `runs_utilisables` ne retient rien et les 31 jours
-  // ressortent non couverts : 31 barres rouges diraient « tout est perdu »
-  // alors que le message utile est qu'aucun run n'est encore utilisable.
-  if (!a.timeline.some((j) => j.runs.some((r) => !r.ecart))) {
+    noeuds.push(h("h2", {}, "Éligibilité"));
     noeuds.push(h("p", { class: "field-hint" },
-      "Aucun Run de Facturation n'est retenu : la couverture des jours de cycle ne veut encore rien dire."));
-  }
-  noeuds.push(h("p", { class: "field-hint" },
-    "Comptes du pool éligible, par jour de cycle de facturation. En rouge, les jours qu'aucun run retenu ne couvre : ces comptes sont hors d'atteinte tant que le calendrier ou la fenêtre ne change pas."));
-  const barres = h("div", { class: "jj-bars" });
-  for (const s of a.stock_jj) {
-    const titre = s.couvert
-      ? `Jour de cycle ${s.jj} — ${fmtN(s.comptes)} comptes — couvert`
-      : `Jour de cycle ${s.jj} — ${fmtN(s.comptes)} comptes — aucun run retenu ne le couvre`;
-    barres.append(h("div", { class: s.couvert ? "jj-bar" : "jj-bar no", title: titre },
-      h("i", { style: `height:${((s.comptes / maxJJ) * 100).toFixed(1)}%` }),
-      h("span", {}, String(s.jj))));
-  }
-  noeuds.push(barres);
-  noeuds.push(h("p", { class: "jj-legend" },
-    h("b", {}, fmtN(totalPool)), " comptes éligibles · ",
-    h("b", {}, fmtN(atteignables)), " atteignables par les runs retenus · ",
-    h("b", {}, fmtN(totalPool - atteignables)), " hors d'atteinte."));
+      "Un compte est éligible si son statut CTC est prêt et qu'il est PPF utilisable (motif actif ET PDP réelle sur la même ligne)."));
+    noeuds.push(h("div", {},
+      marche("Lignes du fichier", f.lignes, b, null),
+      marche("Comptes distincts", f.cf_distincts, b, f.lignes),
+      marche("Jour de cycle valide", f.jj_valide, b, f.cf_distincts),
+      marche("Adressage résolu", f.resolus, b, f.jj_valide),
+      marche("Statut CTC « prêt »", f.ctc_ready, b, f.resolus),
+      marche("PPF utilisable", f.ppf_usable, b, f.ctc_ready),
+      marche("COMPTES ÉLIGIBLES", f.eligibles, b, f.ppf_usable, true)));
 
-  if (a.avertissements.length) {
-    const w = h("div", { class: "plan-warns" });
-    for (const t of a.avertissements) w.append(h("p", {}, h("span", { class: "ico" }, "⚠ "), t));
-    noeuds.push(w);
-  }
+    noeuds.push(h("h2", {}, "Runs de Facturation"));
+    const retenus = a.timeline.reduce(
+      (n, j) => n + j.runs.filter((r) => !r.ecart).length, 0);
+    const totalRuns = a.timeline.reduce((n, j) => n + j.runs.length, 0);
+    noeuds.push(h("p", { class: "field-hint" },
+      `${fmtN(retenus)} run(s) retenu(s) sur ${fmtN(totalRuns)} affiché(s) · rattachement à la dernière MEP strictement antérieure. Cocher « exclure » retire le run du plan.`));
 
-  noeuds.push(h("h2", {}, "Plateformes"));
-  noeuds.push(h("p", { class: "field-hint" },
-    "Décocher une plateforme retire ses comptes du pool. Le quota est une cible souple : quand le volume d'un run dépasse les quotas restants des plateformes présentes, le volume prime."));
-  noeuds.push(h("div", { class: "pa-line pa-head" },
-    h("span", {}), h("span", {}, "Plateforme"), h("span", {}),
-    h("span", { class: "n" }, "Éligibles"), h("span", { class: "n" }, "Quota")));
-  const maxPa = Math.max(1, ...a.plateformes.map((p) => p.eligibles));
-  for (const p of a.plateformes) {
-    const off = plan.paExclues.has(p.nom);
-    const cb = h("input", { type: "checkbox", onchange: () => {
-      if (plan.paExclues.has(p.nom)) plan.paExclues.delete(p.nom); else plan.paExclues.add(p.nom);
-      planRecalc();
-    } });
-    cb.checked = !off;
-    noeuds.push(h("div", { class: off ? "pa-line off" : "pa-line" },
-      cb, h("span", {}, p.nom),
-      h("span", { class: "bar" }, h("span", { style: `width:${((p.eligibles / maxPa) * 100).toFixed(1)}%` })),
-      h("span", { class: "n" }, fmtN(p.eligibles)),
-      h("span", { class: "n" }, off ? "—" : fmtN(p.quota))));
-  }
-  // Les plateformes exclues sortent du pool : elles n'apparaissent plus dans
-  // l'aperçu. On les rappelle pour pouvoir les réintégrer.
-  for (const nom of plan.paExclues) {
-    if (a.plateformes.some((p) => p.nom === nom)) continue;
-    const cb = h("input", { type: "checkbox", onchange: () => { plan.paExclues.delete(nom); planRecalc(); } });
-    noeuds.push(h("div", { class: "pa-line off" }, cb, h("span", {}, nom),
-      h("span", {}), h("span", { class: "n" }, "—"), h("span", { class: "n" }, "—")));
-  }
+    const tbl = h("table", { class: "plan-tl" },
+      h("tr", {}, ...[["Jour", ""], ["Run", ""], ["Jours facturés", ""],
+                      ["Visé", "n"], ["Report", "n"], ["Stock", "n"],
+                      ["Placé", "n"], ["Reliquat", "n"], ["", ""]]
+        .map(([t, c]) => h("th", { class: c }, t))));
 
-  if (plan.genere && plan.fichiers) {
-    const r = h("div", { class: "plan-result" },
-      h("h3", {}, `Plan enregistré — ${fmtN(a.total)} comptes sur ${a.meps.length} MEP`),
-      h("div", { class: "plan-kv" },
-        h("span", {}, h("b", {}, fmtN(a.geles)), "gelés"),
-        h("span", {}, h("b", {}, fmtN(a.epingles)), "manuels"),
-        h("span", {}, h("b", {}, fmtN(a.retires)), "retirés")));
-    const ul = h("ul", {});
-    for (const fi of plan.fichiers)
-      ul.append(h("li", {}, h("code", {}, fi.chemin), ` — ${fmtN(fi.comptes)} comptes`));
-    r.append(ul);
-    r.append(h("div", { class: "actions" },
-      h("button", { onclick: async (ev) => {
-        const b = ev.currentTarget, lbl = b.textContent;
-        b.disabled = true; b.textContent = "…";
-        try {
-          const p = await invoke("plan_rapport");
-          window.__TAURI__.opener?.revealItemInDir(p);
-        } catch (e) { planBanner("error", String(e)); }
-        b.disabled = false; b.textContent = lbl;
-      } }, "Rapport du plan…")));
-    noeuds.push(r);
+    let moisCourant = "";
+    let premierMois = true;
+    for (const j of a.timeline) {
+      const mois = j.date.slice(0, 7);
+      if (mois !== moisCourant) {
+        moisCourant = mois;
+        tbl.append(h("tr", { class: premierMois ? "tl-mois tl-mois-1er" : "tl-mois" },
+          h("td", { colspan: "9" }, libelleMois(j.date))));
+        premierMois = false;
+      }
+      // Les bornes encadrent le contenu du jour, elles ne le précèdent pas
+      // toutes les deux : un run posé pile sur `fin` est RETENU, donc afficher
+      // « fin de fenêtre » au-dessus de lui le montrerait hors fenêtre alors
+      // qu'il compte. Symétriquement, « début de fenêtre » doit rester au-dessus.
+      // Une MEP reste au-dessus aussi : les runs de ce jour-là sont écartés par
+      // elle, le motif se lit alors juste sous sa cause.
+      for (const jl of j.jalons.filter((x) => x.sorte !== "fin_fenetre"))
+        tbl.append(ligneJalon(j, jl));
+      // Une ligne vide ne sert qu'à porter la date d'un jour sans aucune autre
+      // ligne : un jalon porte déjà celluleJour(j), lui en ajouter une deuxième
+      // dupliquerait la date sans rien montrer de plus.
+      if (j.runs.length) for (const r of j.runs) tbl.append(ligneRun(j, r));
+      else if (!j.jalons.length) tbl.append(ligneVide(j));
+      for (const jl of j.jalons.filter((x) => x.sorte === "fin_fenetre"))
+        tbl.append(ligneJalon(j, jl));
+    }
+    noeuds.push(h("div", { class: "tl-scroll" }, tbl));
+
+    const totalPool = a.stock_jj.reduce((n, s) => n + s.comptes, 0);
+    const atteignables = a.stock_jj.reduce((n, s) => n + (s.couvert ? s.comptes : 0), 0);
+    const maxJJ = Math.max(1, ...a.stock_jj.map((s) => s.comptes));
+    noeuds.push(h("h2", {}, "Stock par jour de cycle"));
+    // Sans aucune MEP, `runs_utilisables` ne retient rien et les 31 jours
+    // ressortent non couverts : 31 barres rouges diraient « tout est perdu »
+    // alors que le message utile est qu'aucun run n'est encore utilisable.
+    if (!a.timeline.some((j) => j.runs.some((r) => !r.ecart))) {
+      noeuds.push(h("p", { class: "field-hint" },
+        "Aucun Run de Facturation n'est retenu : la couverture des jours de cycle ne veut encore rien dire."));
+    }
+    noeuds.push(h("p", { class: "field-hint" },
+      "Comptes du pool éligible, par jour de cycle de facturation. En rouge, les jours qu'aucun run retenu ne couvre : ces comptes sont hors d'atteinte tant que le calendrier ou la fenêtre ne change pas."));
+    const barres = h("div", { class: "jj-bars" });
+    for (const s of a.stock_jj) {
+      const titre = s.couvert
+        ? `Jour de cycle ${s.jj} — ${fmtN(s.comptes)} comptes — couvert`
+        : `Jour de cycle ${s.jj} — ${fmtN(s.comptes)} comptes — aucun run retenu ne le couvre`;
+      barres.append(h("div", { class: s.couvert ? "jj-bar" : "jj-bar no", title: titre },
+        h("i", { style: `height:${((s.comptes / maxJJ) * 100).toFixed(1)}%` }),
+        h("span", {}, String(s.jj))));
+    }
+    noeuds.push(barres);
+    noeuds.push(h("p", { class: "jj-legend" },
+      h("b", {}, fmtN(totalPool)), " comptes éligibles · ",
+      h("b", {}, fmtN(atteignables)), " atteignables par les runs retenus · ",
+      h("b", {}, fmtN(totalPool - atteignables)), " hors d'atteinte."));
+
+    if (a.avertissements.length) {
+      const w = h("div", { class: "plan-warns" });
+      for (const t of a.avertissements) w.append(h("p", {}, h("span", { class: "ico" }, "⚠ "), t));
+      noeuds.push(w);
+    }
+
+    noeuds.push(h("h2", {}, "Plateformes"));
+    noeuds.push(h("p", { class: "field-hint" },
+      "Décocher une plateforme retire ses comptes du pool. Le quota est une cible souple : quand le volume d'un run dépasse les quotas restants des plateformes présentes, le volume prime."));
+    noeuds.push(h("div", { class: "pa-line pa-head" },
+      h("span", {}), h("span", {}, "Plateforme"), h("span", {}),
+      h("span", { class: "n" }, "Éligibles"), h("span", { class: "n" }, "Quota")));
+    const maxPa = Math.max(1, ...a.plateformes.map((p) => p.eligibles));
+    for (const p of a.plateformes) {
+      const off = plan.paExclues.has(p.nom);
+      const cb = h("input", { type: "checkbox", onchange: () => {
+        if (plan.paExclues.has(p.nom)) plan.paExclues.delete(p.nom); else plan.paExclues.add(p.nom);
+        planRecalc();
+      } });
+      cb.checked = !off;
+      noeuds.push(h("div", { class: off ? "pa-line off" : "pa-line" },
+        cb, h("span", {}, p.nom),
+        h("span", { class: "bar" }, h("span", { style: `width:${((p.eligibles / maxPa) * 100).toFixed(1)}%` })),
+        h("span", { class: "n" }, fmtN(p.eligibles)),
+        h("span", { class: "n" }, off ? "—" : fmtN(p.quota))));
+    }
+    // Les plateformes exclues sortent du pool : elles n'apparaissent plus dans
+    // l'aperçu. On les rappelle pour pouvoir les réintégrer.
+    for (const nom of plan.paExclues) {
+      if (a.plateformes.some((p) => p.nom === nom)) continue;
+      const cb = h("input", { type: "checkbox", onchange: () => { plan.paExclues.delete(nom); planRecalc(); } });
+      noeuds.push(h("div", { class: "pa-line off" }, cb, h("span", {}, nom),
+        h("span", {}), h("span", { class: "n" }, "—"), h("span", { class: "n" }, "—")));
+    }
+
+    if (plan.genere && plan.fichiers) {
+      const r = h("div", { class: "plan-result" },
+        h("h3", {}, `Plan enregistré — ${fmtN(a.total)} comptes sur ${a.meps.length} MEP`),
+        h("div", { class: "plan-kv" },
+          h("span", {}, h("b", {}, fmtN(a.geles)), "gelés"),
+          h("span", {}, h("b", {}, fmtN(a.epingles)), "manuels"),
+          h("span", {}, h("b", {}, fmtN(a.retires)), "retirés")));
+      const ul = h("ul", {});
+      for (const fi of plan.fichiers)
+        ul.append(h("li", {}, h("code", {}, fi.chemin), ` — ${fmtN(fi.comptes)} comptes`));
+      r.append(ul);
+      r.append(h("div", { class: "actions" },
+        h("button", { onclick: async (ev) => {
+          const b = ev.currentTarget, lbl = b.textContent;
+          b.disabled = true; b.textContent = "…";
+          try {
+            const p = await invoke("plan_rapport");
+            window.__TAURI__.opener?.revealItemInDir(p);
+          } catch (e) { planBanner("error", String(e)); }
+          b.disabled = false; b.textContent = lbl;
+        } }, "Rapport du plan…")));
+      noeuds.push(r);
+    }
+    box.replaceChildren(...noeuds);
+  } catch (e) {
+    planBanner("error", `Affichage du plan de charge impossible : ${e}`);
   }
-  box.replaceChildren(...noeuds);
 }
 
 // --- Onglet 2 : comptes de facturation ---------------------------------------

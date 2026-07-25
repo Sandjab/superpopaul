@@ -553,13 +553,18 @@ table.plan-tl td.jj { color: var(--muted); font-size: 12px; }
 
 tr.tl-mois td { padding: 16px 8px 5px; border-top: 0; font-size: 11px;
   letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
-table.plan-tl tr.tl-mois:first-child td { padding-top: 2px; }
+/* Le premier en-tête de mois n'est pas le premier <tr> de la table : la ligne
+   d'en-têtes de colonnes l'est. D'où une classe posée par le JS plutôt qu'un
+   :first-child, qui viserait la mauvaise ligne. */
+table.plan-tl tr.tl-mois-1er td { padding-top: 2px; }
 
+/* Le marquage week-end/férié vit sur la cellule Jour (`celluleJour`), pas sur
+   la ligne : un run ou une MEP posé ce jour-là reste pleinement lisible. */
 td.tl-jour { color: var(--muted); font-size: 12.5px; }
+td.tl-jour.tl-off { opacity: .62; }
 tr.tl-run { background: rgba(43, 55, 82, .28); }
 tr.tl-run td.tl-jour { color: var(--fg); font-weight: 600; }
-tr.tl-off td { opacity: .62; }
-td.tl-note { color: var(--muted); font-size: 12px; font-style: italic; }
+.tl-note { color: var(--muted); font-size: 12px; font-style: italic; }
 tr.tl-ecarte td.tl-why { color: var(--muted); font-size: 12px; }
 
 /* Un jalon coupe le calendrier : bande pleine largeur, pas une couleur de
@@ -578,7 +583,7 @@ tr.tl-borne .flag { color: var(--muted); font-size: 11.5px; letter-spacing: .06e
 
 .tl-chk { display: inline-flex; align-items: center; gap: 5px;
   color: var(--muted); font-size: 12px; cursor: pointer; }
-.tl-chk input { accent-color: var(--gold); margin: 0; }
+.tl-chk input { margin: 0; }
 
 /* --- Stock par jour de cycle ---------------------------------------------- */
 .jj-bars { display: flex; align-items: flex-end; gap: 3px; height: 104px;
