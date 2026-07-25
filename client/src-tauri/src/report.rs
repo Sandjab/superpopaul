@@ -42,7 +42,9 @@ pub struct ReportData<'a> {
 /// CSS du rapport — la maquette validée le 16/07/2026, identité « Bleu nuit
 /// & or » (tokens de styles.css), avec variantes fond clair (impression +
 /// écran selon le thème du lecteur).
-const CSS: &str = r#"
+/// Feuille de style du rapport, partagée avec `plan_report` — les deux
+/// livrables doivent se ressembler.
+pub(crate) const CSS: &str = r#"
   :root {
     --bg: #0e1524; --card: #172136; --border: #2b3752;
     --fg: #eae9e2; --muted: #939cb4;
@@ -612,7 +614,7 @@ pub fn date_fr_longue(d: &chrono::DateTime<chrono::Local>) -> String {
 }
 
 /// Échappement HTML minimal — toute valeur dynamique passe par là.
-fn esc(s: &str) -> String {
+pub(crate) fn esc(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         match c {
@@ -628,7 +630,7 @@ fn esc(s: &str) -> String {
 }
 
 /// Milliers séparés par une espace fine insécable (typographie française).
-fn fmt_int(n: u64) -> String {
+pub(crate) fn fmt_int(n: u64) -> String {
     let digits = n.to_string();
     let mut out = String::new();
     for (i, c) in digits.chars().enumerate() {

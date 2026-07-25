@@ -1402,6 +1402,47 @@ pub async fn plan_runs_compatibles(
     .map_err(|e| e.to_string())?
 }
 
+/// Rapport HTML du plan — livrable DISTINCT du rapport de run.
+#[tauri::command]
+pub async fn plan_rapport(state: State<'_, AppState>) -> Result<String, String> {
+    let cfg = state.current_config()?;
+    let input = state.input_path()?;
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || {
+        let (lignes, meta) = charger_pour_retouche(&store)?;
+        // Pool recalculé au moment du rapport : la comparaison plan vs pool
+        // n'a de sens que sur des données fraîches.
+        let params = crate::plan::PlanParams::depuis_yaml(&meta.params_yaml)?;
+        let entrees = {
+            let s = store.lock().unwrap();
+            plan_entrees_from_scan(&s, &input, &cfg, chrono::Utc::now())?
+        };
+        let (pool, _) = crate::plan::construire_pool(&entrees, &params.pa_exclues())?;
+        let mut pool_par_pa: std::collections::BTreeMap<String, usize> = Default::default();
+        for c in &pool {
+            *pool_par_pa.entry(c.pa.clone()).or_insert(0) += 1;
+        }
+        let maintenant = chrono::Local::now();
+        let html = crate::plan_report::render(&crate::plan_report::PlanReportData {
+            fichier: &meta.fichier,
+            date_longue: &report::date_fr_longue(&maintenant),
+            version: env!("CARGO_PKG_VERSION"),
+            lignes: &lignes,
+            aujourdhui: maintenant.date_naive(),
+            pool_par_pa: &pool_par_pa,
+            avertissements: &[],
+        });
+        let out = resolved_out_dir(&input, &cfg.output.dir).join(format!(
+            "{}_plan.html",
+            input.file_stem().unwrap_or_default().to_string_lossy()
+        ));
+        std::fs::write(&out, html).map_err(|e| format!("écriture du rapport de plan : {e}"))?;
+        Ok(out.display().to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Progression émise pendant le chargement de l'annuaire.
 /// phase = "download" (done/total en octets) | "parse" (done = lignes, total = None).
 #[derive(Clone, Serialize)]

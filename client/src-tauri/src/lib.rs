@@ -11,6 +11,7 @@ pub mod modes;
 pub mod output;
 pub mod pid;
 pub mod plan;
+pub mod plan_report;
 pub mod ppf;
 pub mod repartition;
 pub mod resolver;
@@ -97,6 +98,7 @@ pub fn run() {
             commands::plan_retirer,
             commands::plan_annuler_retrait,
             commands::plan_runs_compatibles,
+            commands::plan_rapport,
             commands::directory_status,
             commands::load_directory_file,
             commands::download_directory,

@@ -1430,6 +1430,16 @@ function renderPlanParam() {
     for (const fi of plan.fichiers)
       ul.append(h("li", {}, h("code", {}, fi.chemin), ` — ${fmtN(fi.comptes)} comptes`));
     r.append(ul);
+    r.append(h("div", { class: "actions" },
+      h("button", { onclick: async (ev) => {
+        const b = ev.currentTarget, lbl = b.textContent;
+        b.disabled = true; b.textContent = "…";
+        try {
+          const p = await invoke("plan_rapport");
+          window.__TAURI__.opener?.revealItemInDir(p);
+        } catch (e) { planBanner("error", String(e)); }
+        b.disabled = false; b.textContent = lbl;
+      } }, "Rapport du plan…")));
     noeuds.push(r);
   }
   box.replaceChildren(...noeuds);
