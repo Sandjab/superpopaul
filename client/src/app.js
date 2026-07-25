@@ -887,7 +887,9 @@ function profileSnapshot() {
   const c = state.config;
   return JSON.stringify({ pid: c.input.pid_column, columns: c.output.columns,
                           encoding: c.output.encoding, separator: c.output.separator,
-                          recordLabel: c.input.record_label });
+                          recordLabel: c.input.record_label,
+                          cf: c.input.cf_column ?? "", jj: c.input.jj_column ?? "",
+                          rs: c.input.raison_sociale_column ?? "" });
 }
 
 /** Le payload envoyé à save_profile — partagé par Enregistrer et
@@ -897,7 +899,13 @@ function currentProfilePayload() {
     version: 1,
     input: { pid_column: state.config.input.pid_column,
              columns_hash: state.preview.columns_hash,
-             record_label: state.config.input.record_label },
+             record_label: state.config.input.record_label,
+             // Mapping du plan de charge : transporté même sans écran de
+             // saisie (il arrive avec l'onglet Plan) — sinon enregistrer un
+             // profil effacerait en silence un mapping déjà présent.
+             cf_column: state.config.input.cf_column ?? "",
+             jj_column: state.config.input.jj_column ?? "",
+             raison_sociale_column: state.config.input.raison_sociale_column ?? "" },
     output: { encoding: state.config.output.encoding,
               separator: state.config.output.separator },
     columns: state.config.output.columns,
@@ -976,6 +984,9 @@ $("btn-load-cfg").addEventListener("click", async () => {
   }
   state.config.input.pid_column = p.input.pid_column;
   state.config.input.record_label = p.input.record_label;
+  state.config.input.cf_column = p.input.cf_column ?? "";
+  state.config.input.jj_column = p.input.jj_column ?? "";
+  state.config.input.raison_sociale_column = p.input.raison_sociale_column ?? "";
   state.config.output.columns = p.columns;
   state.config.output.encoding = p.output.encoding;
   state.config.output.separator = p.output.separator;

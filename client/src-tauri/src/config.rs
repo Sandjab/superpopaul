@@ -452,6 +452,16 @@ pub struct ProfileInput {
     /// absent des profils d'avant la fonctionnalité → `Record`.
     #[serde(default)]
     pub record_label: RecordLabel,
+    /// Colonnes du plan de charge. Elles dépendent de la STRUCTURE du fichier,
+    /// comme `pid_column` : elles appartiennent donc au profil, sinon il
+    /// faudrait les ressaisir à chaque chargement. Optionnelles et non écrites
+    /// à vide — un profil d'avant reste applicable.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub cf_column: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub jj_column: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub raison_sociale_column: String,
 }
 
 /// La forme de la sortie portée par le profil (encodage, séparateur) — le
@@ -857,6 +867,9 @@ mod tests {
                 pid_column: "siren".into(),
                 columns_hash: "ec46ac4b9e99375d".into(),
                 record_label: RecordLabel::Record,
+                cf_column: String::new(),
+                jj_column: String::new(),
+                raison_sociale_column: String::new(),
             },
             output: ProfileOutput {
                 encoding: OutputEncoding::Utf8Bom,
@@ -936,6 +949,42 @@ mod tests {
         let ic: InputConfig =
             serde_yaml::from_str("path: ./a.csv\npid_column: siren\n").unwrap();
         assert_eq!(ic.record_label, RecordLabel::Record);
+    }
+
+    #[test]
+    fn profile_input_sans_colonnes_de_plan_defaut_vide() {
+        // Un profil d'avant le plan de charge reste applicable, mapping vide.
+        let pi: ProfileInput =
+            serde_yaml::from_str("pid_column: siren\ncolumns_hash: abc123\n").unwrap();
+        assert_eq!(pi.cf_column, "");
+        assert_eq!(pi.jj_column, "");
+        assert_eq!(pi.raison_sociale_column, "");
+    }
+
+    #[test]
+    fn profile_input_mapping_de_plan_aller_retour() {
+        // Le mapping CF/JJ dépend de la STRUCTURE du fichier, comme
+        // pid_column : il appartient au profil, sinon il faut le ressaisir à
+        // chaque chargement.
+        let pi: ProfileInput = serde_yaml::from_str(
+            "pid_column: siren\ncolumns_hash: abc123\ncf_column: CF_ID\n\
+             jj_column: ACTG_CYCLE_DOM\nraison_sociale_column: RAISON_SOCIALE\n",
+        )
+        .unwrap();
+        let back: ProfileInput =
+            serde_yaml::from_str(&serde_yaml::to_string(&pi).unwrap()).unwrap();
+        assert_eq!(back.cf_column, "CF_ID");
+        assert_eq!(back.jj_column, "ACTG_CYCLE_DOM");
+        assert_eq!(back.raison_sociale_column, "RAISON_SOCIALE");
+    }
+
+    #[test]
+    fn profile_sans_mapping_de_plan_n_ecrit_pas_les_champs() {
+        let p = profile_exemple();
+        let y = serde_yaml::to_string(&p).unwrap();
+        assert!(!y.contains("cf_column"), "YAML: {y}");
+        assert!(!y.contains("jj_column"), "YAML: {y}");
+        assert!(!y.contains("raison_sociale_column"), "YAML: {y}");
     }
 
     #[test]
