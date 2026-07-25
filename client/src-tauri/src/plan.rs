@@ -8,6 +8,8 @@
 //! seul ne suffit pas : il laisserait entrer des comptes dont la seule ligne
 //! active pointe vers une PDP fictive.
 
+use crate::calendrier::RunFacturation;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
@@ -158,9 +160,239 @@ fn parse_jj(brut: &str) -> Option<u8> {
     (1..=31).contains(&jj).then_some(jj)
 }
 
+// ---------------------------------------------------------------------------
+// Répartition, quotas, rampe
+// ---------------------------------------------------------------------------
+
+/// Profil des volumes de premières factures par Run de Facturation.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Forme {
+    Plate,
+    Lineaire,
+    Geometrique { raison: f64 },
+    /// Volumes saisis run par run : rendus verbatim, la cible est ignorée.
+    Manuelle { volumes: BTreeMap<String, usize> },
+}
+
+/// Phase pilote : `runs` premiers runs à `cf_par_run` comptes chacun.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Pilote {
+    pub runs: usize,
+    pub cf_par_run: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Rampe {
+    pub forme: Forme,
+    pub pilote: Option<Pilote>,
+}
+
+/// Répartit `total` proportionnellement aux poids, par plus forts restes.
+/// La somme rendue est **exactement** `total`. Départage déterministe : reste
+/// fractionnaire décroissant, puis clé croissante — sans quoi deux exécutions
+/// identiques pourraient produire deux plans différents.
+pub fn plus_forts_restes(total: usize, poids: &BTreeMap<String, f64>) -> BTreeMap<String, usize> {
+    let somme: f64 = poids.values().sum();
+    let mut out: BTreeMap<String, usize> = poids.keys().map(|k| (k.clone(), 0)).collect();
+    if somme <= 0.0 || total == 0 {
+        return out;
+    }
+    let exact: BTreeMap<&str, f64> = poids
+        .iter()
+        .map(|(k, w)| (k.as_str(), total as f64 * w / somme))
+        .collect();
+    for (k, v) in &mut out {
+        *v = exact[k.as_str()].floor() as usize;
+    }
+    let mut reste = total.saturating_sub(out.values().sum::<usize>());
+    let mut cles: Vec<&String> = poids.keys().collect();
+    cles.sort_by(|a, b| {
+        let fa = exact[a.as_str()].fract();
+        let fb = exact[b.as_str()].fract();
+        fb.partial_cmp(&fa)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.cmp(b))
+    });
+    for k in cles {
+        if reste == 0 {
+            break;
+        }
+        *out.get_mut(k).expect("clé issue de poids") += 1;
+        reste -= 1;
+    }
+    out
+}
+
+/// Quotas cibles par plateforme : proportionnels au pool, **plancher 1** (toute
+/// plateforme ayant au moins un compte éligible doit être représentée),
+/// **plafond au stock**, l'excédent étant redistribué.
+///
+/// Ce sont des cibles **souples** : à l'allocation, le volume d'un run prime
+/// sur les quotas restants des plateformes présentes.
+pub fn quotas_par_pa(cible: usize, pool_par_pa: &BTreeMap<String, usize>) -> BTreeMap<String, usize> {
+    let stock: BTreeMap<String, usize> = pool_par_pa
+        .iter()
+        .filter(|(_, n)| **n > 0)
+        .map(|(h, n)| (h.clone(), *n))
+        .collect();
+    if stock.is_empty() {
+        return BTreeMap::new();
+    }
+    let mut quotas: BTreeMap<String, usize> = stock.keys().map(|h| (h.clone(), 0)).collect();
+
+    // Plancher 1, aux mieux dotées d'abord quand la cible ne suffit pas à
+    // couvrir toutes les plateformes.
+    let mut par_taille: Vec<&String> = stock.keys().collect();
+    par_taille.sort_by(|a, b| stock[*b].cmp(&stock[*a]).then_with(|| a.cmp(b)));
+    for h in par_taille.into_iter().take(stock.len().min(cible)) {
+        *quotas.get_mut(h).expect("clé issue de stock") = 1;
+    }
+
+    let restant = cible.saturating_sub(quotas.values().sum::<usize>());
+    if restant > 0 {
+        let poids: BTreeMap<String, f64> =
+            stock.iter().map(|(h, n)| (h.clone(), *n as f64)).collect();
+        for (h, n) in plus_forts_restes(restant, &poids) {
+            *quotas.get_mut(&h).expect("clé issue de stock") += n;
+        }
+    }
+
+    // Plafond au stock, l'excédent repart vers celles qui ont de la place.
+    loop {
+        let excedent: usize = stock
+            .iter()
+            .map(|(h, n)| quotas[h].saturating_sub(*n))
+            .sum();
+        if excedent == 0 {
+            break;
+        }
+        for (h, n) in &stock {
+            let q = quotas.get_mut(h).expect("clé issue de stock");
+            *q = (*q).min(*n);
+        }
+        let place: BTreeMap<String, f64> = stock
+            .iter()
+            .filter(|(h, n)| **n > quotas[*h])
+            .map(|(h, n)| (h.clone(), (n - quotas[h]) as f64))
+            .collect();
+        if place.is_empty() {
+            break;
+        }
+        for (h, n) in plus_forts_restes(excedent, &place) {
+            *quotas.get_mut(&h).expect("clé issue de stock") += n;
+        }
+    }
+    quotas
+}
+
+/// Volumes de premières factures par run.
+///
+/// Le point subtil est le **socle du pilote** : quand un pilote est actif
+/// (P premiers runs à V comptes), chaque run suivant démarre à V et la forme
+/// ne répartit que le surplus — la rampe prolonge le pilote sans jamais
+/// redescendre sous son niveau. Si la cible ne suffit pas à tenir V partout,
+/// le socle est abandonné au profit de la forme pure (creux sous V), cas que
+/// `rampe_pilote_infaisable` signale.
+///
+/// Somme **exactement** égale à la cible dès que `runs` est non vide et
+/// `cible > 0` — sauf en forme manuelle, où les volumes saisis font foi.
+pub fn construire_rampe(
+    cible: usize,
+    runs: &[RunFacturation],
+    rampe: &Rampe,
+) -> BTreeMap<String, usize> {
+    let vide = || -> BTreeMap<String, usize> {
+        runs.iter().map(|r| (r.num.clone(), 0)).collect()
+    };
+    if let Forme::Manuelle { volumes } = &rampe.forme {
+        return runs
+            .iter()
+            .map(|r| (r.num.clone(), volumes.get(&r.num).copied().unwrap_or(0)))
+            .collect();
+    }
+    if runs.is_empty() || cible == 0 {
+        return vide();
+    }
+
+    let (v, p) = niveau_pilote(rampe, runs.len());
+    let mut volumes: BTreeMap<String, usize> = BTreeMap::new();
+    let mut budget = cible;
+    for r in &runs[..p] {
+        let pris = v.min(budget);
+        volumes.insert(r.num.clone(), pris);
+        budget -= pris;
+    }
+
+    let suite = &runs[p..];
+    if !suite.is_empty() && budget > 0 {
+        let poids: BTreeMap<String, f64> = suite
+            .iter()
+            .enumerate()
+            .map(|(i, r)| {
+                let w = match &rampe.forme {
+                    Forme::Plate => 1.0,
+                    Forme::Lineaire => (i + 1) as f64,
+                    Forme::Geometrique { raison } => raison.powi(i as i32),
+                    Forme::Manuelle { .. } => unreachable!("traité plus haut"),
+                };
+                (r.num.clone(), w)
+            })
+            .collect();
+        let socle = suite.len() * v;
+        if budget >= socle {
+            // Le niveau du pilote devient un plancher : la forme ne répartit
+            // que ce qui dépasse.
+            let surplus = plus_forts_restes(budget - socle, &poids);
+            for r in suite {
+                volumes.insert(r.num.clone(), v + surplus[&r.num]);
+            }
+        } else {
+            // Cible trop basse pour tenir le socle : forme pure, creux assumé
+            // (signalé par rampe_pilote_infaisable).
+            volumes.extend(plus_forts_restes(budget, &poids));
+        }
+    } else if budget > 0 {
+        // Pilote couvrant tous les runs : le reliquat va sur le dernier, pour
+        // que la somme reste exactement égale à la cible.
+        let dernier = &runs[runs.len() - 1].num;
+        *volumes.entry(dernier.clone()).or_insert(0) += budget;
+    }
+
+    runs.iter()
+        .map(|r| (r.num.clone(), volumes.get(&r.num).copied().unwrap_or(0)))
+        .collect()
+}
+
+/// Niveau et durée effectifs du pilote : `(v, p)`. Un pilote à volume nul ou
+/// à durée nulle est inerte — la forme principale s'étale alors sur tous les
+/// runs.
+fn niveau_pilote(rampe: &Rampe, n_runs: usize) -> (usize, usize) {
+    match rampe.pilote {
+        Some(p) if p.cf_par_run > 0 && p.runs > 0 => (p.cf_par_run, p.runs.min(n_runs)),
+        _ => (0, 0),
+    }
+}
+
+/// Vrai si un pilote est demandé mais que la cible ne permet pas de tenir son
+/// niveau sur tous les runs suivants : le socle est alors impossible et
+/// `construire_rampe` bascule sur la forme pure, avec un creux sous V.
+pub fn rampe_pilote_infaisable(cible: usize, n_runs: usize, rampe: &Rampe) -> bool {
+    let (v, p) = niveau_pilote(rampe, n_runs);
+    let suite = n_runs.saturating_sub(p);
+    if v == 0 || p == 0 || suite == 0 || cible == 0 {
+        return false;
+    }
+    cible.saturating_sub(p * v) < suite * v
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::NaiveDate;
+
+    fn d(iso: &str) -> NaiveDate {
+        NaiveDate::parse_from_str(iso, "%Y-%m-%d").expect("date de test valide")
+    }
 
     /// Ligne « tout va bien » : éligible de bout en bout.
     fn ligne(cf: &str, jj: &str, pa: &str) -> LigneEntree {
@@ -335,5 +567,243 @@ mod tests {
         let (pool, f) = construire_pool(&[], &sans_exclusion()).unwrap();
         assert!(pool.is_empty());
         assert_eq!(f, Funnel::default());
+    }
+
+    // ---------------------------------------------------------------- restes
+
+    fn poids(v: &[(&str, f64)]) -> BTreeMap<String, f64> {
+        v.iter().map(|(k, w)| (k.to_string(), *w)).collect()
+    }
+
+    #[test]
+    fn restes_somme_exactement_le_total() {
+        // 100 sur trois poids égaux : 34/33/33, jamais 33/33/33.
+        let out = plus_forts_restes(100, &poids(&[("a", 1.0), ("b", 1.0), ("c", 1.0)]));
+        assert_eq!(out.values().sum::<usize>(), 100);
+    }
+
+    #[test]
+    fn restes_departage_deterministe_par_cle() {
+        // À reste fractionnaire égal, la clé croissante tranche : deux
+        // exécutions identiques doivent donner le même plan.
+        let p = poids(&[("b", 1.0), ("a", 1.0), ("c", 1.0)]);
+        let out = plus_forts_restes(100, &p);
+        assert_eq!(out["a"], 34, "la clé la plus petite reçoit l'unité en trop");
+        assert_eq!(out["b"], 33);
+        assert_eq!(out["c"], 33);
+        assert_eq!(plus_forts_restes(100, &p), out, "stable d'un appel à l'autre");
+    }
+
+    #[test]
+    fn restes_proportionnels() {
+        let out = plus_forts_restes(100, &poids(&[("a", 1.0), ("b", 4.0)]));
+        assert_eq!(out["a"], 20);
+        assert_eq!(out["b"], 80);
+    }
+
+    #[test]
+    fn restes_total_nul_ou_poids_nuls() {
+        assert_eq!(plus_forts_restes(0, &poids(&[("a", 1.0)]))["a"], 0);
+        assert_eq!(plus_forts_restes(10, &poids(&[("a", 0.0), ("b", 0.0)]))["a"], 0);
+        assert!(plus_forts_restes(10, &poids(&[])).is_empty());
+    }
+
+    // ---------------------------------------------------------------- quotas
+
+    fn stock(v: &[(&str, usize)]) -> BTreeMap<String, usize> {
+        v.iter().map(|(k, n)| (k.to_string(), *n)).collect()
+    }
+
+    #[test]
+    fn quotas_plancher_un_pour_toute_plateforme_dotee() {
+        // Une plateforme minuscule doit être représentée : c'est la garantie
+        // « chaque plateforme au moins une fois ».
+        let q = quotas_par_pa(100, &stock(&[("grosse", 1000), ("minuscule", 1)]));
+        assert_eq!(q["minuscule"], 1);
+        assert_eq!(q.values().sum::<usize>(), 100);
+    }
+
+    #[test]
+    fn quotas_cible_inferieure_au_nombre_de_plateformes() {
+        // Pas assez de place pour toutes : les mieux dotées d'abord.
+        let q = quotas_par_pa(2, &stock(&[("a", 10), ("b", 5), ("c", 1)]));
+        assert_eq!(q.values().sum::<usize>(), 2);
+        assert_eq!(q["a"], 1);
+        assert_eq!(q["b"], 1);
+        assert_eq!(q["c"], 0);
+    }
+
+    #[test]
+    fn quotas_plafonnes_au_stock_avec_redistribution() {
+        // « petite » ne peut pas absorber sa part proportionnelle : le surplus
+        // repart vers celles qui ont de la place.
+        let q = quotas_par_pa(100, &stock(&[("grande", 900), ("petite", 3)]));
+        assert!(q["petite"] <= 3, "jamais plus que le stock : {q:?}");
+        assert_eq!(q.values().sum::<usize>(), 100);
+    }
+
+    #[test]
+    fn quotas_cible_superieure_au_stock_total() {
+        // On ne peut pas distribuer plus que ce qui existe.
+        let q = quotas_par_pa(1000, &stock(&[("a", 10), ("b", 5)]));
+        assert_eq!(q["a"], 10);
+        assert_eq!(q["b"], 5);
+    }
+
+    #[test]
+    fn quotas_ignore_les_plateformes_sans_stock() {
+        let q = quotas_par_pa(10, &stock(&[("a", 10), ("vide", 0)]));
+        assert_eq!(q.get("vide").copied().unwrap_or(0), 0);
+    }
+
+    #[test]
+    fn quotas_pool_vide() {
+        assert!(quotas_par_pa(10, &stock(&[])).is_empty());
+    }
+
+    // ----------------------------------------------------------------- rampe
+
+    fn runs_n(n: usize) -> Vec<RunFacturation> {
+        (0..n)
+            .map(|i| RunFacturation {
+                num: format!("R{}", i + 1),
+                date: d(&format!("2026-0{}-01", i + 1)),
+                jjs: vec![1],
+                exclu: false,
+            })
+            .collect()
+    }
+
+    fn vols(r: &BTreeMap<String, usize>, runs: &[RunFacturation]) -> Vec<usize> {
+        runs.iter().map(|x| r[&x.num]).collect()
+    }
+
+    fn rampe(forme: Forme) -> Rampe {
+        Rampe { forme, pilote: None }
+    }
+
+    #[test]
+    fn rampe_plate_equirepartit() {
+        let rs = runs_n(4);
+        let v = construire_rampe(100, &rs, &rampe(Forme::Plate));
+        assert_eq!(vols(&v, &rs), vec![25, 25, 25, 25]);
+    }
+
+    #[test]
+    fn rampe_lineaire_croit_doucement() {
+        let rs = runs_n(4);
+        let v = construire_rampe(100, &rs, &rampe(Forme::Lineaire));
+        assert_eq!(vols(&v, &rs), vec![10, 20, 30, 40]);
+    }
+
+    #[test]
+    fn rampe_geometrique_double_a_chaque_run() {
+        let rs = runs_n(4);
+        let v = construire_rampe(150, &rs, &rampe(Forme::Geometrique { raison: 2.0 }));
+        assert_eq!(vols(&v, &rs), vec![10, 20, 40, 80]);
+    }
+
+    #[test]
+    fn rampe_somme_toujours_egale_a_la_cible() {
+        let rs = runs_n(7);
+        for f in [
+            Forme::Plate,
+            Forme::Lineaire,
+            Forme::Geometrique { raison: 1.55 },
+        ] {
+            for cible in [1, 13, 100, 4000] {
+                let v = construire_rampe(cible, &rs, &rampe(f.clone()));
+                assert_eq!(
+                    v.values().sum::<usize>(),
+                    cible,
+                    "forme {f:?}, cible {cible}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn rampe_manuelle_rend_les_volumes_verbatim() {
+        let rs = runs_n(3);
+        let volumes: BTreeMap<String, usize> =
+            [("R1".to_string(), 7), ("R3".to_string(), 9)].into_iter().collect();
+        // La cible est ignorée, et un run absent vaut 0.
+        let v = construire_rampe(9999, &rs, &rampe(Forme::Manuelle { volumes }));
+        assert_eq!(vols(&v, &rs), vec![7, 0, 9]);
+    }
+
+    #[test]
+    fn rampe_pilote_pose_un_socle_jamais_franchi_vers_le_bas() {
+        // 5 runs, pilote 2×10, cible 100 : les 2 premiers à 10, et AUCUN run
+        // suivant sous 10 — la rampe prolonge le pilote.
+        let rs = runs_n(5);
+        let r = Rampe {
+            forme: Forme::Plate,
+            pilote: Some(Pilote { runs: 2, cf_par_run: 10 }),
+        };
+        let v = construire_rampe(100, &rs, &r);
+        let got = vols(&v, &rs);
+        assert_eq!(got[0], 10);
+        assert_eq!(got[1], 10);
+        assert!(got[2..].iter().all(|&x| x >= 10), "socle percé : {got:?}");
+        assert_eq!(got.iter().sum::<usize>(), 100);
+    }
+
+    #[test]
+    fn rampe_pilote_infaisable_bascule_sur_la_forme_pure() {
+        // Cible trop basse pour tenir 10 par run : le socle est abandonné.
+        let rs = runs_n(5);
+        let r = Rampe {
+            forme: Forme::Plate,
+            pilote: Some(Pilote { runs: 2, cf_par_run: 10 }),
+        };
+        assert!(rampe_pilote_infaisable(25, 5, &r));
+        let v = construire_rampe(25, &rs, &r);
+        assert_eq!(v.values().sum::<usize>(), 25);
+    }
+
+    #[test]
+    fn rampe_pilote_faisable_n_est_pas_signale() {
+        let r = Rampe {
+            forme: Forme::Plate,
+            pilote: Some(Pilote { runs: 2, cf_par_run: 10 }),
+        };
+        assert!(!rampe_pilote_infaisable(100, 5, &r));
+    }
+
+    #[test]
+    fn rampe_pilote_inerte_si_volume_ou_duree_nuls() {
+        let rs = runs_n(4);
+        for p in [
+            Pilote { runs: 0, cf_par_run: 10 },
+            Pilote { runs: 3, cf_par_run: 0 },
+        ] {
+            let r = Rampe { forme: Forme::Plate, pilote: Some(p) };
+            assert_eq!(
+                vols(&construire_rampe(100, &rs, &r), &rs),
+                vec![25, 25, 25, 25],
+                "pilote {p:?} doit être inerte"
+            );
+            assert!(!rampe_pilote_infaisable(100, 4, &r));
+        }
+    }
+
+    #[test]
+    fn rampe_pilote_couvrant_tous_les_runs_verse_le_reliquat_sur_le_dernier() {
+        let rs = runs_n(3);
+        let r = Rampe {
+            forme: Forme::Plate,
+            pilote: Some(Pilote { runs: 3, cf_par_run: 10 }),
+        };
+        let v = construire_rampe(100, &rs, &r);
+        assert_eq!(vols(&v, &rs), vec![10, 10, 80]);
+        assert_eq!(v.values().sum::<usize>(), 100);
+    }
+
+    #[test]
+    fn rampe_sans_run_ou_sans_cible() {
+        let rs = runs_n(3);
+        assert_eq!(vols(&construire_rampe(0, &rs, &rampe(Forme::Plate)), &rs), vec![0, 0, 0]);
+        assert!(construire_rampe(100, &[], &rampe(Forme::Plate)).is_empty());
     }
 }
