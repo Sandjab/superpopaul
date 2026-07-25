@@ -2,7 +2,9 @@
 //!
 //! Module PUR : aucune DB, aucune UI, aucun accès disque. Il ne décide rien —
 //! il met bout à bout ce que `calendrier` et `plan` ont déjà établi, pour que
-//! l'UI n'ait qu'à rendre des lignes.
+//! l'UI n'ait qu'à rendre des lignes. Une seule exception : le motif d'écart
+//! (`ecart_de`), qui rejoue le filtre de `calendrier::runs_utilisables` faute
+//! de pouvoir l'appeler — celui-ci ne rend pas de motif.
 
 use crate::calendrier::RunFacturation;
 use crate::plan::DetailRun;
@@ -21,9 +23,12 @@ pub enum Jalon {
 
 /// Pourquoi un run ne compte pas. Miroir des trois filtres de
 /// `calendrier::runs_utilisables`, qui les enchaîne par `&&` : un run peut
-/// en échouer plusieurs. Priorité retenue — `Exclu`, puis `HorsFenetre`,
-/// puis `MepNonPassee` : l'exclusion est le seul motif que l'utilisateur
-/// pilote, elle doit rester lisible même sur un run par ailleurs écarté.
+/// en échouer plusieurs. `runs_utilisables` renvoie aussi une liste vide
+/// quand `meps` est vide (aucune MEP, rien à facturer) — ce repli est rangé
+/// ici dans `MepNonPassee`, qui couvre donc quatre cas, pas trois. Priorité
+/// retenue — `Exclu`, puis `HorsFenetre`, puis `MepNonPassee` : l'exclusion
+/// est le seul motif que l'utilisateur pilote, elle doit rester lisible
+/// même sur un run par ailleurs écarté.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Ecart {
@@ -41,7 +46,9 @@ pub struct RunJour {
     /// lit un booléen. Invariant : `exclu` ⟺ `ecart == Some(Ecart::Exclu)`.
     pub exclu: bool,
     pub ecart: Option<Ecart>,
-    /// Présent si et seulement si `ecart` est `None`.
+    /// Présent si et seulement si `ecart` est `None`. Redouble `run_num`,
+    /// `run_date` et `jjs` du `RunJour` porteur : le rendu lit toujours ceux
+    /// du `RunJour`, jamais leurs équivalents dans `DetailRun`.
     pub detail: Option<DetailRun>,
 }
 
@@ -61,7 +68,30 @@ pub struct JourTimeline {
     pub runs: Vec<RunJour>,
 }
 
-const JOURS: [&str; 7] = ["lun", "mar", "mer", "jeu", "ven", "sam", "dim"];
+const JOURS_SEMAINE: [&str; 7] = ["lun", "mar", "mer", "jeu", "ven", "sam", "dim"];
+
+/// Pourquoi `r` ne compte pas, s'il ne compte pas. C'est l'unique endroit du
+/// module qui décide plutôt que d'assembler — nommé pour que l'exception à
+/// l'en-tête du module reste visible, et pour miroiter à l'œil nu la
+/// signature de `calendrier::runs_utilisables(runs, debut, fin, meps)`.
+fn ecart_de(
+    r: &RunFacturation,
+    debut: NaiveDate,
+    fin: NaiveDate,
+    premiere_mep: Option<NaiveDate>,
+) -> Option<Ecart> {
+    // Ordre délibéré : l'exclusion prime, c'est le seul motif que
+    // l'utilisateur pilote depuis l'écran.
+    if r.exclu {
+        Some(Ecart::Exclu)
+    } else if r.date < debut || r.date > fin {
+        Some(Ecart::HorsFenetre)
+    } else if premiere_mep.is_none_or(|p| r.date <= p) {
+        Some(Ecart::MepNonPassee)
+    } else {
+        None
+    }
+}
 
 pub fn timeline(
     runs: &[RunFacturation],
@@ -81,17 +111,7 @@ pub fn timeline(
     let premiere_mep = meps.iter().min().copied();
     let mut par_date: HashMap<NaiveDate, Vec<RunJour>> = HashMap::new();
     for r in runs {
-        // Ordre délibéré : l'exclusion prime, c'est le seul motif que
-        // l'utilisateur pilote depuis l'écran.
-        let ecart = if r.exclu {
-            Some(Ecart::Exclu)
-        } else if r.date < debut || r.date > fin {
-            Some(Ecart::HorsFenetre)
-        } else if premiere_mep.is_none_or(|p| r.date <= p) {
-            Some(Ecart::MepNonPassee)
-        } else {
-            None
-        };
+        let ecart = ecart_de(r, debut, fin, premiere_mep);
         let detail = match ecart {
             None => details.iter().find(|d| d.run_num == r.num).cloned(),
             Some(_) => None,
@@ -113,7 +133,7 @@ pub fn timeline(
     while jour <= hi {
         out.push(JourTimeline {
             date: jour.to_string(),
-            jour_semaine: JOURS[jour.weekday().num_days_from_monday() as usize],
+            jour_semaine: JOURS_SEMAINE[jour.weekday().num_days_from_monday() as usize],
             weekend: matches!(jour.weekday(), Weekday::Sat | Weekday::Sun),
             ferie: feries.get(&jour).copied(),
             jalons: Vec::new(),
@@ -264,10 +284,11 @@ mod tests {
 
     #[test]
     fn runs_sur_les_bornes_de_fenetre_sont_retenus() {
-        // Les deux comparaisons de `timeline.rs:88` sont strictes (`<` / `>`) :
-        // les bornes elles-mêmes appartiennent à la fenêtre. Muter l'une en
-        // `<=`/`>=` ferait basculer à tort en `HorsFenetre` un run posé pile
-        // sur `debut` ou `fin`, alors que le moteur le retient.
+        // `r.date < debut || r.date > fin` compare en strict : les bornes
+        // elles-mêmes appartiennent à la fenêtre. Muter l'une en `<=`/`>=`
+        // ferait basculer à tort en `HorsFenetre` un run posé pile sur
+        // `debut` ou `fin`. La non-divergence avec `runs_utilisables` est,
+        // elle, du ressort des tests de miroir.
         let t = timeline(
             &[run("3330", "2026-07-01", &[1]), run("3331", "2026-07-20", &[20])],
             d("2026-07-01"),
@@ -311,13 +332,23 @@ mod tests {
     fn exclusion_manuelle_prime_sur_les_autres_motifs() {
         // L'exclusion est le seul motif que l'utilisateur pilote depuis
         // l'écran : elle doit rester lisible même sur un run par ailleurs
-        // hors fenêtre, sinon décocher la case n'a aucun effet visible.
+        // écarté pour une autre raison, sinon décocher la case n'a aucun
+        // effet visible. Deux cas, un par motif concurrent.
+
+        // Cas 1 : le run est aussi hors fenêtre → Exclu > HorsFenetre.
         let mut r = run("3321", "2026-07-30", &[9]);
         r.exclu = true;
         let t = timeline(&[r], d("2026-07-01"), d("2026-07-20"), &[d("2026-07-05")], &[]);
         let j = t.iter().find(|j| j.date == "2026-07-30").unwrap();
         assert_eq!(j.runs[0].ecart, Some(Ecart::Exclu));
         assert!(j.runs[0].exclu);
+
+        // Cas 2 : le run est dans la fenêtre, avant la MEP → Exclu > MepNonPassee.
+        let mut r2 = run("3322", "2026-07-04", &[4]);
+        r2.exclu = true;
+        let t2 = timeline(&[r2], d("2026-07-01"), d("2026-07-20"), &[d("2026-07-05")], &[]);
+        let j2 = t2.iter().find(|j| j.date == "2026-07-04").unwrap();
+        assert_eq!(j2.runs[0].ecart, Some(Ecart::Exclu));
     }
 
     #[test]
@@ -356,7 +387,7 @@ mod tests {
     }
 
     #[test]
-    fn deux_runs_le_meme_jour_sont_tous_deux_rendus() {
+    fn deux_runs_le_meme_jour_sont_rendus_tries_par_numero() {
         // `parse_runs_csv` refuse deux runs à la même date, mais
         // `PlanParams::calendrier` ne le revérifie pas en reconstruisant les
         // runs depuis les paramètres persistés — et c'est ce chemin-là qui
@@ -392,41 +423,36 @@ mod tests {
 
     #[test]
     fn les_runs_sans_ecart_sont_exactement_ceux_que_retient_le_moteur() {
-        // `Ecart` rejoue à la main le filtre de `calendrier::runs_utilisables`
+        // `ecart_de` rejoue à la main le filtre de `calendrier::runs_utilisables`
         // au lieu de l'appeler — il faut bien un motif, que le filtre ne rend
         // pas. Deux implémentations de la même règle vivent donc dans deux
         // modules : sans ce test, déplacer une borne dans `calendrier` ferait
         // afficher « retenu » des runs que le plan a écartés, sans un bruit.
-        // L'échantillon pose un run pile sur `fin` (F) et un pile sur la
-        // première MEP elle-même (G) : ce sont deux des bornes exactes que
+        // L'échantillon pose un run pile sur la première MEP elle-même (C) et
+        // un pile sur `fin` (E) : ce sont deux des bornes exactes que
         // `runs_utilisables` compare, et un glissement de l'une resterait
-        // invisible sans un run posé dessus. Le run exclu (B) est lui-même
-        // DANS la fenêtre et avant la MEP : sans l'exclusion, seul le filtre
-        // MEP le bloquerait, ce qui isole aussi la priorité
-        // Exclu > MepNonPassee. La borne `debut` ne peut pas rejoindre cet
-        // échantillon : elle exigerait une première MEP antérieure à `debut`,
-        // incompatible avec G qui doit rester dans la fenêtre — elle est
-        // couverte séparément par `le_run_du_debut_de_fenetre_suit_le_moteur`.
+        // invisible sans un run posé dessus. Le run exclu (B) referme le
+        // quatrième filtre (`!r.exclu`) ; sa priorité sur MepNonPassee est,
+        // elle, vérifiée par un cas dédié dans
+        // `exclusion_manuelle_prime_sur_les_autres_motifs`, pas ici. La borne
+        // `debut` ne peut pas rejoindre cet échantillon : elle exigerait une
+        // première MEP antérieure à `debut`, incompatible avec C qui doit
+        // rester dans la fenêtre — elle est couverte séparément par
+        // `le_run_du_debut_de_fenetre_suit_le_moteur`.
         let mut exclu = run("B", "2026-07-04", &[4]);
         exclu.exclu = true;
         let rs = vec![
             run("A", "2026-07-03", &[3]),  // avant la première MEP
             exclu,                          // exclu, dans la fenêtre, avant la MEP
+            run("C", "2026-07-05", &[5]),  // écarté, pile sur la première MEP
             run("D", "2026-07-15", &[15]), // retenu, au milieu de la fenêtre
-            run("C", "2026-07-25", &[25]), // hors fenêtre
-            run("F", "2026-07-20", &[20]), // retenu, pile sur la fin de fenêtre
-            run("G", "2026-07-05", &[5]),  // écarté, pile sur la première MEP
+            run("E", "2026-07-20", &[20]), // retenu, pile sur la fin de fenêtre
+            run("F", "2026-07-25", &[25]), // hors fenêtre
         ];
         let (debut, fin) = (d("2026-07-01"), d("2026-07-20"));
         let meps = vec![d("2026-07-05")];
 
         let t = timeline(&rs, debut, fin, &meps, &[]);
-
-        assert_eq!(
-            t.iter().find(|j| j.date == "2026-07-04").unwrap().runs[0].ecart,
-            Some(Ecart::Exclu),
-            "un run exclu dans la fenêtre et avant la MEP reste Exclu, pas MepNonPassee"
-        );
 
         let mut affiches: Vec<String> = t
             .iter()
@@ -447,14 +473,14 @@ mod tests {
         retenus.sort();
 
         assert_eq!(affiches, retenus, "l'écran et le moteur doivent retenir le même ensemble de runs");
-        assert_eq!(affiches, vec!["D", "F"], "D et F sont les deux seuls à passer les trois filtres");
+        assert_eq!(affiches, vec!["D", "E"], "D et E sont les deux seuls à passer les trois filtres");
     }
 
     #[test]
     fn le_run_du_debut_de_fenetre_suit_le_moteur() {
         // Séparé du test miroir principal : y ajouter un run pile sur `debut`
         // exigerait une première MEP antérieure à `debut`, incompatible avec
-        // le run G posé sur la MEP elle-même là-bas (qui doit, lui, rester
+        // le run C posé sur la MEP elle-même là-bas (qui doit, lui, rester
         // dans la fenêtre) — les deux bornes ne peuvent pas être observées
         // avec la même première MEP. Referme la borne manquante : si
         // `runs_utilisables` mutait `r.date >= debut` en `r.date > debut`,
