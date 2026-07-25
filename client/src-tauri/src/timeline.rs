@@ -21,12 +21,14 @@ pub enum Jalon {
     Mep { rang: usize },
 }
 
-/// Pourquoi un run ne compte pas. Miroir des trois filtres de
-/// `calendrier::runs_utilisables`, qui les enchaîne par `&&` : un run peut
-/// en échouer plusieurs. `runs_utilisables` renvoie aussi une liste vide
-/// quand `meps` est vide (aucune MEP, rien à facturer) — ce repli est rangé
-/// ici dans `MepNonPassee`, qui couvre donc quatre cas, pas trois. Priorité
-/// retenue — `Exclu`, puis `HorsFenetre`, puis `MepNonPassee` : l'exclusion
+/// Pourquoi un run ne compte pas. Quatre motifs pour quatre situations,
+/// vécues différemment par l'utilisateur bien qu'`AucuneMep` et
+/// `MepNonPassee` viennent tous deux du filtre MEP de
+/// `calendrier::runs_utilisables` — l'un de son retour anticipé quand `meps`
+/// est vide, l'autre de la comparaison de dates. Les quatre motifs ne
+/// s'excluent pas mutuellement au niveau des filtres eux-mêmes (enchaînés
+/// par `&&`, un run peut en échouer plusieurs), d'où la priorité retenue —
+/// `Exclu`, puis `HorsFenetre`, puis les deux motifs de MEP : l'exclusion
 /// est le seul motif que l'utilisateur pilote, elle doit rester lisible
 /// même sur un run par ailleurs écarté.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -34,7 +36,14 @@ pub enum Jalon {
 pub enum Ecart {
     Exclu,
     HorsFenetre,
+    /// Des MEP existent, mais aucune ne précède ce run : l'action utile est
+    /// de décaler la MEP ou le run.
     MepNonPassee,
+    /// Aucune MEP n'est définie — l'état initial normal de l'écran, avant
+    /// toute saisie. L'action utile est d'en créer une, pas de décaler une
+    /// date qui n'existe pas : c'est pourquoi ce motif est distinct de
+    /// `MepNonPassee` plutôt que d'y être replié.
+    AucuneMep,
 }
 
 /// Un Run de Facturation tel qu'il s'affiche sur son jour civil.
@@ -86,10 +95,12 @@ fn ecart_de(
         Some(Ecart::Exclu)
     } else if r.date < debut || r.date > fin {
         Some(Ecart::HorsFenetre)
-    } else if premiere_mep.is_none_or(|p| r.date <= p) {
-        Some(Ecart::MepNonPassee)
     } else {
-        None
+        match premiere_mep {
+            None => Some(Ecart::AucuneMep),
+            Some(p) if r.date <= p => Some(Ecart::MepNonPassee),
+            Some(_) => None,
+        }
     }
 }
 
@@ -410,6 +421,9 @@ mod tests {
     #[test]
     fn sans_aucune_mep_tout_run_est_ecarte() {
         // `runs_utilisables` ne rend rien sans MEP : il n'y a rien à facturer.
+        // C'est l'état initial normal de l'écran, avant toute saisie — pas un
+        // cas limite — d'où un motif distinct de `MepNonPassee` : l'action
+        // utile est de créer une MEP, pas de décaler une date.
         let t = timeline(
             &[run("3320", "2026-07-09", &[8])],
             d("2026-07-01"),
@@ -418,7 +432,38 @@ mod tests {
             &[],
         );
         let j = t.iter().find(|j| j.date == "2026-07-09").unwrap();
-        assert_eq!(j.runs[0].ecart, Some(Ecart::MepNonPassee));
+        assert_eq!(j.runs[0].ecart, Some(Ecart::AucuneMep));
+    }
+
+    #[test]
+    fn aucune_mep_se_distingue_de_mep_non_passee() {
+        // Les deux motifs viennent du même filtre MEP de `runs_utilisables`
+        // (`meps` vide, ou run non postérieur à la première), mais pas du
+        // même conseil : créer une MEP n'est pas décaler une date. Sans ce
+        // test, rien n'empêcherait de les refondre en un seul motif.
+        let sans_mep = timeline(
+            &[run("3320", "2026-07-09", &[8])],
+            d("2026-07-01"),
+            d("2026-07-20"),
+            &[],
+            &[],
+        );
+        assert_eq!(
+            sans_mep.iter().find(|j| j.date == "2026-07-09").unwrap().runs[0].ecart,
+            Some(Ecart::AucuneMep)
+        );
+
+        let avec_mep = timeline(
+            &[run("3320", "2026-07-09", &[8])],
+            d("2026-07-01"),
+            d("2026-07-20"),
+            &[d("2026-07-10")],
+            &[],
+        );
+        assert_eq!(
+            avec_mep.iter().find(|j| j.date == "2026-07-09").unwrap().runs[0].ecart,
+            Some(Ecart::MepNonPassee)
+        );
     }
 
     #[test]
