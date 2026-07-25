@@ -864,7 +864,8 @@ pub async fn plan_import_runs(path: String) -> Result<RunsImport, String> {
 #[derive(Serialize)]
 pub struct PlanApercu {
     pub funnel: crate::plan::Funnel,
-    pub details: Vec<crate::plan::DetailRun>,
+    pub timeline: Vec<crate::timeline::JourTimeline>,
+    pub stock_jj: Vec<crate::plan::StockJJ>,
     pub plateformes: Vec<PlateformeApercu>,
     pub avertissements: Vec<String>,
     pub meps: Vec<String>,
@@ -959,10 +960,14 @@ fn calculer_plan(
         .collect();
     plateformes.sort_by(|a, b| b.eligibles.cmp(&a.eligibles).then_with(|| a.nom.cmp(&b.nom)));
 
+    let timeline = crate::timeline::timeline(&runs, debut, fin, &meps, &a.details);
+    let stock_jj = crate::plan::stock_par_jj(&pool, &utilisables);
+
     let actives = a.lignes.iter().filter(|l| !l.retiree()).count();
     let apercu = PlanApercu {
         funnel,
-        details: a.details,
+        timeline,
+        stock_jj,
         plateformes,
         avertissements,
         meps: meps.iter().map(|m| m.to_string()).collect(),
