@@ -1186,6 +1186,14 @@ const PLAN_ETATS = {
   absent_du_fichier: ["stale", "absent du fichier"],
 };
 
+/** Pousse la config courante au backend. Les commandes du plan lisent la
+ *  config SERVEUR : sans cet envoi, elles travailleraient sur celle figée à
+ *  l'entrée de l'étape Run. */
+async function pousserConfig() {
+  try { await invoke("set_config", { cfg: state.config }); }
+  catch (e) { planBanner("error", String(e)); }
+}
+
 function planBanner(kind, texte) {
   const el = $("plan-banner");
   if (!kind) { el.className = "hidden"; el.replaceChildren(); return; }
@@ -1224,11 +1232,14 @@ function renderPlanAside() {
   const entetes = state.preview?.headers ?? [];
   const manque = !cfg.cf_column || !cfg.jj_column;
 
-  const selCol = (id, val, avecVide) => h("select", {
-    id, onchange: (e) => {
-      state.config.input[id.replace("plan-col-", "") === "rs"
-        ? "raison_sociale_column"
-        : id.replace("plan-col-", "") + "_column"] = e.target.value;
+  // `champ` est le nom EXACT du champ d'InputConfig : le mapping est poussé au
+  // backend dans la foulée, sinon le calcul se ferait sur la config figée à
+  // l'entrée de l'étape Run et se plaindrait de colonnes « non désignées »
+  // alors qu'elles sont à l'écran.
+  const selCol = (id, champ, val, avecVide) => h("select", {
+    id, onchange: async (e) => {
+      state.config.input[champ] = e.target.value;
+      await pousserConfig();
       renderPlanAside(); planRecalc();
     },
   },
@@ -1240,10 +1251,12 @@ function renderPlanAside() {
     }));
 
   const bloc = h("div", { id: "plan-cols", class: manque ? "need" : "" },
-    h("label", {}, "Compte de facturation (CF)"), selCol("plan-col-cf", cfg.cf_column, false),
-    h("label", {}, "Jour de cycle (JJ)"), selCol("plan-col-jj", cfg.jj_column, false),
+    h("label", {}, "Compte de facturation (CF)"),
+    selCol("plan-col-cf", "cf_column", cfg.cf_column, false),
+    h("label", {}, "Jour de cycle (JJ)"),
+    selCol("plan-col-jj", "jj_column", cfg.jj_column, false),
     h("label", {}, "Raison sociale ", h("span", { class: "muted" }, "— information")),
-    selCol("plan-col-rs", cfg.raison_sociale_column, true),
+    selCol("plan-col-rs", "raison_sociale_column", cfg.raison_sociale_column, true),
     h("p", { class: "field-hint" }, "Modifiable ici comme à l'étape Format : c'est le même réglage."));
 
   const chips = h("div", { class: "chips" },
@@ -1728,6 +1741,9 @@ async function ouvrirPlan() {
   $("plan-screen").classList.remove("hidden");
   $("plan-sub").textContent = state.inputPath
     ? state.inputPath.split(/[\\/]/).pop() : "";
+  // Le mapping a pu changer depuis l'entrée dans l'étape Run (profil chargé,
+  // étape Format revisitée) : on resynchronise avant tout calcul.
+  await pousserConfig();
   // État persisté : paramètres et calendrier du plan enregistré.
   try {
     const enr = await invoke("plan_load");
