@@ -15,11 +15,15 @@ use std::collections::HashMap;
 pub enum Jalon {
     DebutFenetre,
     FinFenetre,
+    /// 1-basé, comme `DetailRun.mep_id`.
     Mep { rang: usize },
 }
 
-/// Pourquoi un run ne compte pas. Miroir exact des trois filtres de
-/// `calendrier::runs_utilisables`.
+/// Pourquoi un run ne compte pas. Miroir des trois filtres de
+/// `calendrier::runs_utilisables`, qui les enchaîne par `&&` : un run peut
+/// en échouer plusieurs. Priorité retenue — `Exclu`, puis `HorsFenetre`,
+/// puis `MepNonPassee` : l'exclusion est le seul motif que l'utilisateur
+/// pilote, elle doit rester lisible même sur un run par ailleurs écarté.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Ecart {
@@ -28,16 +32,20 @@ pub enum Ecart {
     MepNonPassee,
 }
 
+/// Un Run de Facturation tel qu'il s'affiche sur son jour civil.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct RunJour {
     pub num: String,
     pub jjs: Vec<u8>,
+    /// Redondant avec `Ecart::Exclu`, qui prime : la case à cocher de l'écran
+    /// lit un booléen. Invariant : `exclu` ⟺ `ecart == Some(Ecart::Exclu)`.
     pub exclu: bool,
     pub ecart: Option<Ecart>,
     /// Présent si et seulement si `ecart` est `None`.
     pub detail: Option<DetailRun>,
 }
 
+/// Un jour civil de la timeline, avec tout ce qui peut y être accroché.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct JourTimeline {
     /// ISO, comme le reste de la charge utile envoyée au JS.
@@ -47,8 +55,9 @@ pub struct JourTimeline {
     pub weekend: bool,
     pub ferie: Option<&'static str>,
     pub jalons: Vec<Jalon>,
-    /// Une liste, pas un `Option` : rien n'interdit deux runs à la même date,
-    /// et un run perdu en silence est ce que ce lot corrige.
+    /// Une liste, pas un `Option` : `parse_runs_csv` refuse deux runs à la même
+    /// date, mais `PlanParams::calendrier` ne le revérifie pas — et un run perdu
+    /// en silence est exactement ce que ce lot corrige.
     pub runs: Vec<RunJour>,
 }
 
@@ -61,8 +70,8 @@ pub fn timeline(
     _meps: &[NaiveDate],
     _details: &[DetailRun],
 ) -> Vec<JourTimeline> {
-    let lo = runs.iter().map(|r| r.date).min().unwrap_or(debut).min(debut);
-    let hi = runs.iter().map(|r| r.date).max().unwrap_or(fin).max(fin);
+    let lo = runs.iter().map(|r| r.date).fold(debut, NaiveDate::min);
+    let hi = runs.iter().map(|r| r.date).fold(fin, NaiveDate::max);
 
     let mut feries: HashMap<NaiveDate, &'static str> = HashMap::new();
     for annee in lo.year()..=hi.year() {
