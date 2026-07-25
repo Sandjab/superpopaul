@@ -107,7 +107,7 @@ mod tests {
         );
         assert!(
             t.iter().all(|j| j.runs.is_empty()),
-            "sans calendrier chargé, l'étendue se réduit à la fenêtre et aucun jour ne porte de run"
+            "aucun run chargé : aucun jour ne doit porter de run"
         );
     }
 
@@ -125,6 +125,38 @@ mod tests {
         );
         assert_eq!(t.first().unwrap().date, "2026-07-10");
         assert_eq!(t.last().unwrap().date, "2026-07-20");
+    }
+
+    #[test]
+    fn etendue_ne_se_referme_pas_avant_la_fin_de_fenetre() {
+        // Le dernier run tombe avant la fin de fenêtre. Si l'étendue
+        // s'arrêtait au dernier run, les jours sans run de fin de fenêtre
+        // disparaîtraient de l'écran — l'inverse du trou couvert plus haut,
+        // mais tout aussi trompeur.
+        let t = timeline(
+            &[run("3326", "2026-07-08", &[17])],
+            d("2026-07-05"),
+            d("2026-07-20"),
+            &[],
+            &[],
+        );
+        assert_eq!(t.last().unwrap().date, "2026-07-20");
+    }
+
+    #[test]
+    fn feries_couverts_a_cheval_sur_deux_annees_civiles() {
+        // Une fenêtre FUT à cheval sur le changement d'année est banale ; si
+        // la boucle sur les années ne prenait que `lo.year()`, tous les
+        // fériés de janvier disparaîtraient sans bruit.
+        let t = timeline(&[], d("2026-12-24"), d("2027-01-02"), &[], &[]);
+        assert_eq!(
+            t.iter().find(|j| j.date == "2026-12-25").unwrap().ferie,
+            Some("Noël")
+        );
+        assert_eq!(
+            t.iter().find(|j| j.date == "2027-01-01").unwrap().ferie,
+            Some("Jour de l'an")
+        );
     }
 
     #[test]
