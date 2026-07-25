@@ -95,9 +95,8 @@ nommées, là où peppolstat les laissait sous un « férié » générique.
 // timeline.rs
 pub enum Jalon { DebutFenetre, FinFenetre, Mep(usize) }   // Mep : rang, 1-indexé
 
-/// Pourquoi un run ne compte pas. Miroir exact des trois filtres de
-/// `calendrier::runs_utilisables`.
-pub enum Ecart { Exclu, HorsFenetre, MepNonPassee }
+/// Pourquoi un run ne compte pas. Miroir de `calendrier::runs_utilisables`.
+pub enum Ecart { Exclu, HorsFenetre, MepNonPassee, AucuneMep }
 
 pub struct RunJour {
     pub num: String,
@@ -142,6 +141,21 @@ traite ensemble : un run antérieur à la première MEP, et un run tombant **le
 jour même** de cette MEP. Le libellé retenu — « la première MEP n'est pas
 encore passée » — est juste dans les deux cas, là où « avant la première MEP »
 serait faux pour le second.
+
+`Ecart::AucuneMep` en est séparé, bien que `runs_utilisables` les traite du
+même geste (retour anticipé quand `meps` est vide). Les deux situations
+n'appellent pas la même action : décaler une date d'un côté, créer une MEP de
+l'autre. Et « aucune MEP définie » n'est pas un cas limite — c'est l'état
+initial de l'écran, avant toute saisie. La distinction est tranchée côté Rust
+parce que le rendu ne porte aucune logique métier.
+
+**Priorité entre motifs**, imposée par le fait que `runs_utilisables` enchaîne
+ses conditions par `&&` — un run peut en échouer plusieurs, `Option<Ecart>`
+n'en garde qu'un : `Exclu` > `HorsFenetre` > (`AucuneMep` | `MepNonPassee`,
+mutuellement exclusifs). `Exclu` prime parce que c'est le seul motif que
+l'utilisateur pilote depuis l'écran ; `HorsFenetre` prime sur les motifs de MEP
+parce qu'un run hors fenêtre le reste quoi qu'on fasse aux MEP, et que le motif
+affiché est lu comme un conseil d'action.
 
 ```rust
 // plan.rs
@@ -225,6 +239,14 @@ Tous les chiffres en `font-variant-numeric: tabular-nums`, comme
 - **Un run tombant le jour même de la première MEP porte `MepNonPassee`.** Le
   pourquoi : le filtre est strict (`>`), et c'est le cas limite que le libellé
   doit couvrir sans mentir.
+- **Sans aucune MEP, le motif est `AucuneMep`, pas `MepNonPassee`.** Le
+  pourquoi : les deux motifs sont lus comme des conseils d'action opposés, et
+  c'est l'état initial de l'écran.
+- **Les runs sans écart sont exactement ceux que retient
+  `calendrier::runs_utilisables`.** Le pourquoi : `timeline` rejoue ce filtre à
+  la main faute de pouvoir l'appeler — il ne rend pas de motif — donc deux
+  implémentations de la même règle cohabitent. L'échantillon du test doit poser
+  des runs **sur les bornes**, sinon il ne peut pas voir les bornes bouger.
 - Un run exclu à la main porte `Exclu`, et le porte même s'il est aussi hors
   fenêtre — l'exclusion est le seul motif que l'utilisateur contrôle, elle prime
   à l'affichage.
