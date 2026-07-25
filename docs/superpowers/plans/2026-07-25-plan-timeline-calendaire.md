@@ -303,8 +303,9 @@ pub struct JourTimeline {
     pub weekend: bool,
     pub ferie: Option<&'static str>,
     pub jalons: Vec<Jalon>,
-    /// Une liste, pas un `Option` : rien n'interdit deux runs à la même date,
-    /// et un run perdu en silence est ce que ce lot corrige.
+    /// Une liste, pas un `Option` : `parse_runs_csv` refuse deux runs à la même
+    /// date, mais `PlanParams::calendrier` ne le revérifie pas — et un run perdu
+    /// en silence est exactement ce que ce lot corrige.
     pub runs: Vec<RunJour>,
 }
 
@@ -406,8 +407,8 @@ pub fn timeline(
     _meps: &[NaiveDate],
     _details: &[DetailRun],
 ) -> Vec<JourTimeline> {
-    let lo = runs.iter().map(|r| r.date).min().unwrap_or(debut).min(debut);
-    let hi = runs.iter().map(|r| r.date).max().unwrap_or(fin).max(fin);
+    let lo = runs.iter().map(|r| r.date).fold(debut, NaiveDate::min);
+    let hi = runs.iter().map(|r| r.date).fold(fin, NaiveDate::max);
 
     let mut feries: HashMap<NaiveDate, &'static str> = HashMap::new();
     for annee in lo.year()..=hi.year() {
@@ -534,8 +535,11 @@ git commit -m "feat(superpopaul): module timeline — jours civils, week-ends, f
 
     #[test]
     fn deux_runs_le_meme_jour_sont_tous_deux_rendus() {
-        // Rien dans le contrat de runs.csv n'interdit deux runs à la même
-        // date. En perdre un en silence serait la faute que ce lot corrige.
+        // `parse_runs_csv` refuse deux runs à la même date, mais
+        // `PlanParams::calendrier` ne le revérifie pas en reconstruisant les
+        // runs depuis les paramètres persistés — et c'est ce chemin-là qui
+        // alimente l'écran. En perdre un en silence serait la faute que ce
+        // lot corrige.
         let t = timeline(
             &[run("3320", "2026-07-09", &[8]), run("3321", "2026-07-09", &[9])],
             d("2026-07-01"),
@@ -562,6 +566,40 @@ git commit -m "feat(superpopaul): module timeline — jours civils, week-ends, f
         let j = t.iter().find(|j| j.date == "2026-07-09").unwrap();
         assert_eq!(j.runs[0].ecart, Some(Ecart::MepNonPassee));
     }
+
+    #[test]
+    fn les_runs_sans_ecart_sont_exactement_ceux_que_retient_le_moteur() {
+        // `Ecart` rejoue à la main le filtre de `calendrier::runs_utilisables`
+        // au lieu de l'appeler — il faut bien un motif, que le filtre ne rend
+        // pas. Deux implémentations de la même règle vivent donc dans deux
+        // modules : sans ce test, déplacer une borne dans `calendrier` ferait
+        // afficher « retenu » des runs que le plan a écartés, sans un bruit.
+        let mut exclu = run("B", "2026-07-10", &[10]);
+        exclu.exclu = true;
+        let rs = vec![
+            run("A", "2026-07-03", &[3]),  // avant la première MEP
+            exclu,                          // exclu à la main
+            run("D", "2026-07-15", &[15]), // le seul retenu
+            run("C", "2026-07-25", &[25]), // hors fenêtre
+        ];
+        let (debut, fin) = (d("2026-07-01"), d("2026-07-20"));
+        let meps = vec![d("2026-07-05")];
+
+        let affiches: Vec<String> = timeline(&rs, debut, fin, &meps, &[])
+            .iter()
+            .flat_map(|j| &j.runs)
+            .filter(|r| r.ecart.is_none())
+            .map(|r| r.num.clone())
+            .collect();
+        let retenus: Vec<String> =
+            crate::calendrier::runs_utilisables(&rs, debut, fin, &meps)
+                .iter()
+                .map(|r| r.num.clone())
+                .collect();
+
+        assert_eq!(affiches, retenus, "l'écran et le moteur doivent retenir les mêmes runs");
+        assert_eq!(affiches, vec!["D"], "seul D passe les trois filtres");
+    }
 ```
 
 - [ ] **Étape 2 : lancer les tests pour les voir échouer**
@@ -570,7 +608,7 @@ git commit -m "feat(superpopaul): module timeline — jours civils, week-ends, f
 cargo test --manifest-path client/src-tauri/Cargo.toml timeline::
 ```
 
-Attendu : ÉCHEC — `index out of bounds: the len is 0` sur `j.runs[0]`, les six
+Attendu : ÉCHEC — `index out of bounds: the len is 0` sur `j.runs[0]`, les sept
 nouveaux tests en échec.
 
 - [ ] **Étape 3 : écrire l'implémentation**
@@ -585,8 +623,8 @@ pub fn timeline(
     meps: &[NaiveDate],
     details: &[DetailRun],
 ) -> Vec<JourTimeline> {
-    let lo = runs.iter().map(|r| r.date).min().unwrap_or(debut).min(debut);
-    let hi = runs.iter().map(|r| r.date).max().unwrap_or(fin).max(fin);
+    let lo = runs.iter().map(|r| r.date).fold(debut, NaiveDate::min);
+    let hi = runs.iter().map(|r| r.date).fold(fin, NaiveDate::max);
 
     let mut feries: HashMap<NaiveDate, &'static str> = HashMap::new();
     for annee in lo.year()..=hi.year() {
@@ -646,7 +684,7 @@ pub fn timeline(
 cargo test --manifest-path client/src-tauri/Cargo.toml timeline::
 ```
 
-Attendu : `test result: ok. 10 passed`.
+Attendu : `test result: ok. 13 passed`.
 
 - [ ] **Étape 5 : commit**
 
@@ -742,7 +780,7 @@ L'ordre d'insertion place les MEP avant les bornes le même jour, ce que fige
 cargo test --manifest-path client/src-tauri/Cargo.toml timeline::
 ```
 
-Attendu : `test result: ok. 13 passed`.
+Attendu : `test result: ok. 16 passed`.
 
 - [ ] **Étape 5 : commit**
 
@@ -912,8 +950,8 @@ cargo check --manifest-path client/src-tauri/Cargo.toml --bins
 cargo test  --manifest-path client/src-tauri/Cargo.toml
 ```
 
-Attendu : compilation sans erreur ; `test result: ok`, avec **431
-tests** (412 avant ce lot, + 19 sur les tâches 1 à 5). Si un test préexistant casse,
+Attendu : compilation sans erreur ; `test result: ok`, avec **434
+tests** (412 avant ce lot, + 22 sur les tâches 1 à 5). Si un test préexistant casse,
 s'arrêter et comprendre avant de continuer.
 
 - [ ] **Étape 4 : commit**
@@ -1191,7 +1229,7 @@ cargo check --manifest-path client/src-tauri/Cargo.toml --bins
 cargo clippy --manifest-path client/src-tauri/Cargo.toml --all-targets 2>&1 | grep -c warning
 ```
 
-Attendu : suite verte (431 tests), compilation propre, et **5 warnings
+Attendu : suite verte (434 tests), compilation propre, et **5 warnings
 clippy** — les préexistants, pas un de plus. Un sixième signifie que ce lot en
 a introduit un.
 

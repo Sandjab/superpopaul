@@ -116,9 +116,11 @@ pub struct JourTimeline {
     /// Plusieurs jalons peuvent tomber le même jour (une MEP le jour de la
     /// fin de fenêtre, par exemple).
     pub jalons: Vec<Jalon>,
-    /// Une liste, pas un `Option` : rien dans le contrat de `runs.csv`
-    /// n'interdit deux runs à la même date, et un run perdu en silence est
-    /// exactement ce que ce lot corrige.
+    /// Une liste, pas un `Option` : `parse_runs_csv` refuse deux runs à la
+    /// même date (`calendrier.rs:104-111`), mais `PlanParams::calendrier` ne
+    /// le revérifie pas en reconstruisant les runs depuis les paramètres
+    /// persistés — et c'est ce chemin-là qui alimente l'écran. Un run perdu
+    /// en silence est exactement ce que ce lot corrige.
     pub runs: Vec<RunJour>,
 }
 
