@@ -263,6 +263,26 @@ mod tests {
     }
 
     #[test]
+    fn run_hors_fenetre_et_avant_la_premiere_mep_affiche_hors_fenetre() {
+        // Le motif affiché est un conseil d'action déguisé. Un run du 15 juin,
+        // avec une fenêtre qui commence en juillet et une première MEP le
+        // 5 juillet, échoue aux deux filtres à la fois. Afficher
+        // `MepNonPassee` laisserait croire qu'avancer la MEP suffirait — c'est
+        // faux, ce run reste hors fenêtre quoi qu'il arrive sur les MEP.
+        // `HorsFenetre` est le seul motif qui décrit un blocage qui tient
+        // indépendamment des MEP : c'est le bon conseil.
+        let t = timeline(
+            &[run("3300", "2026-06-15", &[15])],
+            d("2026-07-01"),
+            d("2026-07-20"),
+            &[d("2026-07-05")],
+            &[],
+        );
+        let j = t.iter().find(|j| j.date == "2026-06-15").unwrap();
+        assert_eq!(j.runs[0].ecart, Some(Ecart::HorsFenetre));
+    }
+
+    #[test]
     fn exclusion_manuelle_prime_sur_les_autres_motifs() {
         // L'exclusion est le seul motif que l'utilisateur pilote depuis
         // l'écran : elle doit rester lisible même sur un run par ailleurs
