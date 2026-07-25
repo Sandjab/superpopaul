@@ -8,7 +8,7 @@ use crate::report;
 use crate::resolver::{calibrate, CalibrationReport, Engine, EngineEvent, EngineParams, RunHandle};
 use crate::store::Store;
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -727,6 +727,380 @@ pub async fn generate_output(state: State<'_, AppState>) -> Result<String, Strin
             stamp.as_deref(),
         )?;
         Ok(written.display().to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+// ---------------------------------------------------------------------------
+// Plan de charge (Runs de Facturation)
+// ---------------------------------------------------------------------------
+
+/// Scan du fichier courant + jointures, converti en entrées du moteur de plan.
+/// Glue impure, non testée unitairement (convention des `*_from_scan`) : toute
+/// la logique vit dans `plan.rs`.
+fn plan_entrees_from_scan(
+    store: &Store,
+    input: &Path,
+    cfg: &Config,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<Vec<crate::plan::LigneEntree>, String> {
+    if cfg.input.cf_column.is_empty() || cfg.input.jj_column.is_empty() {
+        return Err("désigne les colonnes « compte de facturation » et « jour de cycle » \
+                    avant d'établir un plan de charge"
+            .into());
+    }
+    let meta = csv_io::sniff(input)?;
+    // Un seul passage pour toutes les colonnes du plan.
+    let mut noms: Vec<&str> = vec![
+        cfg.input.cf_column.as_str(),
+        cfg.input.pid_column.as_str(),
+        cfg.input.jj_column.as_str(),
+    ];
+    let veut_rs = !cfg.input.raison_sociale_column.is_empty();
+    if veut_rs {
+        noms.push(cfg.input.raison_sociale_column.as_str());
+    }
+    let cols = csv_io::read_columns(input, &meta, &noms)?;
+    let (cfs, pids, jjs) = (&cols[0], &cols[1], &cols[2]);
+
+    let uniques = unique_canonical(pids.clone());
+    let resolutions = store.load_map(&uniques)?;
+    let valeurs: Vec<String> = uniques
+        .iter()
+        .filter_map(|p| crate::directory::parse_0225_value(p))
+        .collect();
+    let present = if store.peppol_directory_status()?.is_some() {
+        store.directory_present(&valeurs)?
+    } else {
+        HashSet::new()
+    };
+    let ppf = if store.ppf_summary()?.distinct_addr > 0 {
+        store.ppf_flags(&valeurs, &cfg.ppf.motifs())?
+    } else {
+        HashMap::new()
+    };
+
+    let mut out = Vec::with_capacity(cfs.len());
+    for (i, cf_brut) in cfs.iter().enumerate() {
+        let cf = cf_brut.trim();
+        if cf.is_empty() {
+            continue; // une ligne sans compte de facturation n'est pas planifiable
+        }
+        let participant = crate::pid::canonical(pids.get(i).map(String::as_str).unwrap_or(""));
+        let r = resolutions.get(&participant);
+        let pa = r
+            .and_then(|r| crate::repartition::pa_key(r.pa_name.as_deref(), r.pa_code.as_deref()))
+            .unwrap_or_default();
+        // « Résolu » vaut aussi « avec une plateforme identifiée » : les quotas
+        // sont par plateforme, un compte sans PA n'y a pas sa place.
+        let resolu = r.map(|r| r.api_status == "ok").unwrap_or(false) && !pa.is_empty();
+        let ctc_ready = r.map(|r| output::ctc_status(r, now) == "ready").unwrap_or(false);
+        let (ppf_usable, in_directory) = match crate::directory::parse_0225_value(&participant) {
+            Some(v) => (
+                ppf.get(&v).map(|f| f.usable).unwrap_or(false),
+                present.contains(&v),
+            ),
+            None => (false, false),
+        };
+        out.push(crate::plan::LigneEntree {
+            cf: cf.to_string(),
+            participant,
+            jj_brut: jjs.get(i).cloned().unwrap_or_default(),
+            raison_sociale: if veut_rs {
+                cols[3].get(i).cloned().unwrap_or_default()
+            } else {
+                String::new()
+            },
+            pa,
+            resolu,
+            ctc_ready,
+            ppf_usable,
+            in_directory,
+            resolved_at: r.map(|r| r.resolved_at).unwrap_or(0),
+        });
+    }
+    Ok(out)
+}
+
+#[derive(Serialize)]
+pub struct RunsImport {
+    pub runs: Vec<crate::plan::RunParam>,
+    pub erreurs: Vec<String>,
+}
+
+/// Parse un `runs.csv`. Les erreurs sont rendues toutes ensemble, avec les
+/// lignes valides : corriger un fichier erreur après erreur serait pénible.
+#[tauri::command]
+pub async fn plan_import_runs(path: String) -> Result<RunsImport, String> {
+    tokio::task::spawn_blocking(move || {
+        let p = PathBuf::from(&path);
+        let meta = csv_io::sniff(&p)?;
+        let brut = std::fs::read(&p).map_err(|e| format!("lecture {p:?} : {e}"))?;
+        let texte = if meta.encoding == "utf-8" {
+            String::from_utf8_lossy(&brut).into_owned()
+        } else {
+            encoding_rs::WINDOWS_1252.decode(&brut).0.into_owned()
+        };
+        let (runs, erreurs) = crate::calendrier::parse_runs_csv(&texte);
+        Ok(RunsImport {
+            runs: runs
+                .into_iter()
+                .map(|r| crate::plan::RunParam {
+                    num: r.num,
+                    date: r.date.to_string(),
+                    jjs: r.jjs,
+                    exclu: r.exclu,
+                })
+                .collect(),
+            erreurs,
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Ce que l'écran de plan affiche après un calcul.
+#[derive(Serialize)]
+pub struct PlanApercu {
+    pub funnel: crate::plan::Funnel,
+    pub details: Vec<crate::plan::DetailRun>,
+    pub plateformes: Vec<PlateformeApercu>,
+    pub avertissements: Vec<String>,
+    pub meps: Vec<String>,
+    /// Cible effective (celle saisie, ou la taille du pool si elle est vide).
+    pub cible: usize,
+    pub total: usize,
+    pub geles: usize,
+    pub epingles: usize,
+    pub retires: usize,
+}
+
+#[derive(Serialize)]
+pub struct PlateformeApercu {
+    pub nom: String,
+    pub eligibles: usize,
+    pub quota: usize,
+}
+
+/// Calcule le plan SANS rien écrire. C'est le vrai calcul, pas une
+/// approximation : explorer des scénarios ne coûte donc rien, et la
+/// persistance ne sert qu'à figer et livrer.
+#[tauri::command]
+pub async fn plan_preview(
+    state: State<'_, AppState>,
+    params: crate::plan::PlanParams,
+) -> Result<PlanApercu, String> {
+    let cfg = state.current_config()?;
+    let input = state.input_path()?;
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || {
+        let (apercu, _) = calculer_plan(&store, &input, &cfg, &params)?;
+        Ok(apercu)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Cœur partagé par l'aperçu et la génération : construit le pool, régénère,
+/// et rend l'aperçu plus le plan complet.
+fn calculer_plan(
+    store: &Arc<Mutex<Store>>,
+    input: &Path,
+    cfg: &Config,
+    params: &crate::plan::PlanParams,
+) -> Result<(PlanApercu, Vec<crate::plan::LignePlan>), String> {
+    let now = chrono::Utc::now();
+    let aujourdhui = chrono::Local::now().date_naive();
+    let (runs, debut, fin, meps_fournies) = params.calendrier()?;
+
+    let entrees = {
+        let s = store.lock().unwrap();
+        plan_entrees_from_scan(&s, input, cfg, now)?
+    };
+    let (pool, funnel) = crate::plan::construire_pool(&entrees, &params.pa_exclues())?;
+
+    let (meps, mut avertissements) =
+        crate::calendrier::completer_meps(&runs, debut, fin, &meps_fournies, params.mep_count);
+    let utilisables = crate::calendrier::runs_utilisables(&runs, debut, fin, &meps);
+
+    // Plan existant : ce qui doit survivre au re-tirage.
+    let ancien = store.lock().unwrap().charger_plan()?;
+    let preserves = match &ancien {
+        Some((lignes, _)) => crate::plan::Preserves::depuis(lignes, aujourdhui),
+        None => crate::plan::Preserves::default(),
+    };
+
+    let cible = params.cible.unwrap_or(pool.len() + preserves.consomme());
+    let a = crate::plan::regenerer(
+        &pool,
+        &utilisables,
+        &meps,
+        params.seed,
+        cible,
+        &params.rampe,
+        &preserves,
+    )?;
+    avertissements.extend(a.avertissements.clone());
+
+    let stock: std::collections::BTreeMap<String, usize> =
+        pool.iter().fold(Default::default(), |mut m, c| {
+            *m.entry(c.pa.clone()).or_insert(0) += 1;
+            m
+        });
+    let quotas = crate::plan::quotas_par_pa(cible, &stock);
+    let mut plateformes: Vec<PlateformeApercu> = stock
+        .iter()
+        .map(|(nom, n)| PlateformeApercu {
+            nom: nom.clone(),
+            eligibles: *n,
+            quota: quotas.get(nom).copied().unwrap_or(0),
+        })
+        .collect();
+    plateformes.sort_by(|a, b| b.eligibles.cmp(&a.eligibles).then_with(|| a.nom.cmp(&b.nom)));
+
+    let actives = a.lignes.iter().filter(|l| !l.retiree()).count();
+    let apercu = PlanApercu {
+        funnel,
+        details: a.details,
+        plateformes,
+        avertissements,
+        meps: meps.iter().map(|m| m.to_string()).collect(),
+        cible,
+        total: actives,
+        geles: preserves.gelees.len(),
+        epingles: preserves.epinglees.len(),
+        retires: a.lignes.iter().filter(|l| l.retiree()).count(),
+    };
+    Ok((apercu, a.lignes))
+}
+
+/// Calcule le plan ET l'écrit (lignes + paramètres dans une transaction),
+/// puis produit les fichiers par MEP.
+#[tauri::command]
+pub async fn plan_generate(
+    state: State<'_, AppState>,
+    params: crate::plan::PlanParams,
+) -> Result<PlanGeneration, String> {
+    let cfg = state.current_config()?;
+    let input = state.input_path()?;
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || {
+        let (apercu, lignes) = calculer_plan(&store, &input, &cfg, &params)?;
+        let horodatage = chrono::Utc::now().timestamp();
+        let lignes: Vec<crate::plan::LignePlan> = lignes
+            .into_iter()
+            .map(|mut l| {
+                if l.planned_at == 0 {
+                    l.planned_at = horodatage;
+                }
+                l
+            })
+            .collect();
+        let meta = crate::store::PlanMeta {
+            fichier: input
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            hash: sha256_hex(&std::fs::read(&input).map_err(|e| format!("lecture entrée : {e}"))?),
+            genere_le: horodatage,
+            params_yaml: params.vers_yaml()?,
+        };
+        store.lock().unwrap().ecrire_plan(&lignes, &meta)?;
+        let fichiers = ecrire_fichiers_mep(&input, &cfg, &lignes)?;
+        Ok(PlanGeneration { apercu, fichiers })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[derive(Serialize)]
+pub struct PlanGeneration {
+    pub apercu: PlanApercu,
+    pub fichiers: Vec<FichierMep>,
+}
+
+#[derive(Serialize)]
+pub struct FichierMep {
+    pub chemin: String,
+    pub mep_id: usize,
+    pub comptes: usize,
+}
+
+/// Un fichier par MEP, **cumulatif** (MEP 1..n), comptes nus triés, un par
+/// ligne. Les lignes retirées sont exclues de TOUS les fichiers, y compris sur
+/// une MEP gelée — c'est l'objet même du retrait.
+fn ecrire_fichiers_mep(
+    input: &Path,
+    cfg: &Config,
+    lignes: &[crate::plan::LignePlan],
+) -> Result<Vec<FichierMep>, String> {
+    let dir = resolved_out_dir(input, &cfg.output.dir);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("création {dir:?} : {e}"))?;
+    let souche = input
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "sortie".into());
+
+    let mut meps: Vec<(usize, String)> = lignes
+        .iter()
+        .filter(|l| !l.retiree())
+        .map(|l| (l.mep_id, l.mep_date.to_string()))
+        .collect();
+    meps.sort();
+    meps.dedup();
+
+    let mut out = Vec::new();
+    for (mep_id, mep_date) in meps {
+        let mut comptes: Vec<&str> = lignes
+            .iter()
+            .filter(|l| !l.retiree() && l.mep_id <= mep_id)
+            .map(|l| l.cf.as_str())
+            .collect();
+        comptes.sort_unstable();
+        comptes.dedup();
+        let chemin = dir.join(format!("{souche}_plan_mep_{mep_id}_{mep_date}.txt"));
+        let mut contenu = comptes.join("\n");
+        contenu.push('\n');
+        std::fs::write(&chemin, contenu).map_err(|e| format!("écriture {chemin:?} : {e}"))?;
+        out.push(FichierMep {
+            chemin: chemin.display().to_string(),
+            mep_id,
+            comptes: comptes.len(),
+        });
+    }
+    Ok(out)
+}
+
+#[derive(Serialize)]
+pub struct PlanEnregistre {
+    pub params: crate::plan::PlanParams,
+    pub fichier: String,
+    pub genere_le: i64,
+    /// Vrai si le fichier d'entrée courant n'est pas celui qui a produit le
+    /// plan : les lignes gelées peuvent alors ne plus correspondre.
+    pub autre_fichier: bool,
+}
+
+/// État persisté, au retour sur l'écran de plan.
+#[tauri::command]
+pub async fn plan_load(state: State<'_, AppState>) -> Result<Option<PlanEnregistre>, String> {
+    let input = state.input_path().ok();
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || {
+        let Some((_, meta)) = store.lock().unwrap().charger_plan()? else {
+            return Ok(None);
+        };
+        let courant = input
+            .as_ref()
+            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .unwrap_or_default();
+        Ok(Some(PlanEnregistre {
+            params: crate::plan::PlanParams::depuis_yaml(&meta.params_yaml)?,
+            autre_fichier: !meta.fichier.is_empty() && meta.fichier != courant,
+            fichier: meta.fichier,
+            genere_le: meta.genere_le,
+        }))
     })
     .await
     .map_err(|e| e.to_string())?

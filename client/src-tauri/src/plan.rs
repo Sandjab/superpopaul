@@ -165,7 +165,8 @@ fn parse_jj(brut: &str) -> Option<u8> {
 // ---------------------------------------------------------------------------
 
 /// Profil des volumes de premières factures par Run de Facturation.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "forme", rename_all = "lowercase")]
 pub enum Forme {
     Plate,
     Lineaire,
@@ -175,15 +176,17 @@ pub enum Forme {
 }
 
 /// Phase pilote : `runs` premiers runs à `cf_par_run` comptes chacun.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Pilote {
     pub runs: usize,
     pub cf_par_run: usize,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Rampe {
+    #[serde(flatten)]
     pub forme: Forme,
+    #[serde(default)]
     pub pilote: Option<Pilote>,
 }
 
@@ -467,6 +470,34 @@ pub fn trier_par_priorite(pool: &[CfCandidat], seed: u64) -> Vec<CfCandidat> {
     out
 }
 
+/// Ce qui s'est passé sur un Run de Facturation. `report_entrant` est une
+/// donnée à part entière et non une différence à recalculer : à l'écran, un
+/// run qui place plus que son volume de rampe est incompréhensible sans elle.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct DetailRun {
+    pub run_num: String,
+    pub run_date: String,
+    pub jjs: Vec<u8>,
+    pub mep_id: usize,
+    pub mep_date: String,
+    /// Volume issu de la rampe, hors report.
+    pub vise: usize,
+    pub report_entrant: usize,
+    /// Comptes atteignables sur les jours de cycle du run au moment où il joue.
+    pub stock: usize,
+    pub place: usize,
+    /// Ce qui glisse au run suivant.
+    pub reliquat: usize,
+}
+
+/// Résultat d'une allocation.
+#[derive(Debug, Clone, Default)]
+pub struct Allocation {
+    pub lignes: Vec<LignePlan>,
+    pub details: Vec<DetailRun>,
+    pub avertissements: Vec<String>,
+}
+
 /// Affecte les comptes du pool aux Runs de Facturation, chronologiquement.
 ///
 /// - le volume qu'un run ne peut pas absorber (stock insuffisant sur ses JJ)
@@ -485,8 +516,9 @@ pub fn allouer(
     cible: usize,
     rampe: &Rampe,
     preserves: &Preserves,
-) -> (Vec<LignePlan>, Vec<String>) {
+) -> Allocation {
     let mut avertissements: Vec<String> = Vec::new();
+    let mut details: Vec<DetailRun> = Vec::new();
     let classes = trier_par_priorite(pool, seed);
 
     // Rang de chaque compte dans l'ordre de priorité : sert à compléter un run
@@ -590,6 +622,18 @@ pub fn allouer(
             *places_par_pa.entry(c.pa.as_str()).or_insert(0) += 1;
             lignes.push(ligne_de(c, run, mep_id, mep_date, Origine::Auto));
         }
+        details.push(DetailRun {
+            run_num: run.num.clone(),
+            run_date: run.date.to_string(),
+            jjs: run.jjs.clone(),
+            mep_id,
+            mep_date: mep_date.to_string(),
+            vise: volumes.get(&run.num).copied().unwrap_or(0),
+            report_entrant: report,
+            stock,
+            place: pris,
+            reliquat: vise - pris,
+        });
         report = vise - pris;
     }
 
@@ -633,7 +677,7 @@ pub fn allouer(
             ));
         }
     }
-    (lignes, avertissements)
+    Allocation { lignes, details, avertissements }
 }
 
 /// Régénère le plan : les lignes préservées sont reprises telles quelles, le
@@ -647,7 +691,7 @@ pub fn regenerer(
     cible: usize,
     rampe: &Rampe,
     preserves: &Preserves,
-) -> Result<(Vec<LignePlan>, Vec<String>), String> {
+) -> Result<Allocation, String> {
     // Une MEP gelée absente de la configuration ferait changer un fichier
     // cumulatif déjà transmis, en silence. Refus explicite.
     for g in &preserves.gelees {
@@ -670,12 +714,12 @@ pub fn regenerer(
     // Les préservées actives consomment leur part : la rampe ne pourvoit que
     // le complément, mais les quotas raisonnent sur le plan complet.
     let restante = cible.saturating_sub(preserves.consomme());
-    let (nouvelles, avertissements) =
-        allouer(&candidats, runs, meps, seed, restante, rampe, preserves);
+    let mut a = allouer(&candidats, runs, meps, seed, restante, rampe, preserves);
 
     let mut plan = preserves.conservees();
-    plan.extend(nouvelles);
-    Ok((plan, avertissements))
+    plan.append(&mut a.lignes);
+    a.lignes = plan;
+    Ok(a)
 }
 
 /// Runs pouvant accueillir ce jour de cycle. Le sélecteur de l'IHM ne propose
@@ -844,6 +888,92 @@ fn ligne_de(
         resolved_at: c.resolved_at,
         planned_at: 0,
         retire: None,
+    }
+}
+
+/// Paramètres d'un plan, tels qu'ils circulent entre l'IHM et le moteur et
+/// tels qu'ils sont persistés (`plan_meta.params_yaml`).
+///
+/// Les dates sont des chaînes ISO, comme en base : pas de dépendance à une
+/// feature `serde` de chrono, et le front manipule déjà des chaînes ISO.
+/// Les valeurs illisibles sont refusées à la conversion, jamais devinées.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PlanParams {
+    /// Calendrier importé (`runs.csv`), exclusions comprises.
+    pub runs: Vec<RunParam>,
+    pub debut: String,
+    pub fin: String,
+    pub meps: Vec<String>,
+    #[serde(default)]
+    pub mep_count: usize,
+    /// `None` = tout le pool éligible atteignable.
+    #[serde(default)]
+    pub cible: Option<usize>,
+    #[serde(default)]
+    pub seed: u64,
+    #[serde(default)]
+    pub pa_exclues: Vec<String>,
+    pub rampe: Rampe,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct RunParam {
+    pub num: String,
+    pub date: String,
+    pub jjs: Vec<u8>,
+    #[serde(default)]
+    pub exclu: bool,
+}
+
+fn jour_iso(brut: &str, champ: &str) -> Result<chrono::NaiveDate, String> {
+    chrono::NaiveDate::parse_from_str(brut.trim(), "%Y-%m-%d")
+        .map_err(|_| format!("{champ} : date ISO attendue, reçu « {brut} »"))
+}
+
+impl PlanParams {
+    /// Reconstruit le calendrier. Refuse une fenêtre inversée : c'est une
+    /// saisie fausse, pas un cas limite à absorber.
+    pub fn calendrier(
+        &self,
+    ) -> Result<(Vec<RunFacturation>, chrono::NaiveDate, chrono::NaiveDate, Vec<chrono::NaiveDate>), String>
+    {
+        let debut = jour_iso(&self.debut, "début de fenêtre")?;
+        let fin = jour_iso(&self.fin, "fin de fenêtre")?;
+        if fin <= debut {
+            return Err(format!("fenêtre FUT : la fin ({fin}) doit suivre le début ({debut})"));
+        }
+        let mut runs = Vec::with_capacity(self.runs.len());
+        for r in &self.runs {
+            let mut jjs = r.jjs.clone();
+            jjs.sort_unstable();
+            jjs.dedup();
+            runs.push(RunFacturation {
+                num: r.num.clone(),
+                date: jour_iso(&r.date, &format!("run {}", r.num))?,
+                jjs,
+                exclu: r.exclu,
+            });
+        }
+        runs.sort_by(|a, b| a.date.cmp(&b.date).then_with(|| a.num.cmp(&b.num)));
+        let mut meps = Vec::with_capacity(self.meps.len());
+        for m in &self.meps {
+            meps.push(jour_iso(m, "MEP")?);
+        }
+        meps.sort_unstable();
+        meps.dedup();
+        Ok((runs, debut, fin, meps))
+    }
+
+    pub fn pa_exclues(&self) -> HashSet<String> {
+        self.pa_exclues.iter().cloned().collect()
+    }
+
+    pub fn vers_yaml(&self) -> Result<String, String> {
+        serde_yaml::to_string(self).map_err(|e| format!("sérialisation des paramètres : {e}"))
+    }
+
+    pub fn depuis_yaml(yaml: &str) -> Result<Self, String> {
+        serde_yaml::from_str(yaml).map_err(|e| format!("paramètres illisibles : {e}"))
     }
 }
 
@@ -1415,10 +1545,55 @@ mod tests {
     }
 
     #[test]
+    fn allocation_expose_le_detail_chiffre_de_chaque_run() {
+        // L'IHM affiche visé · report · stock · placé · reliquat. Le report
+        // entrant DOIT être une donnée distincte : sans lui, un run qui place
+        // plus que son volume de rampe est incompréhensible à l'écran.
+        let mut pool: Vec<CfCandidat> =
+            (0..10).map(|i| cand(&format!("A{i}"), 5, "PA")).collect();
+        pool.extend((0..10).map(|i| cand(&format!("B{i}"), 20, "PA")));
+        let rs = vec![
+            RunFacturation { num: "R1".into(), date: d("2026-02-15"), jjs: vec![5], exclu: false },
+            RunFacturation { num: "R2".into(), date: d("2026-03-15"), jjs: vec![5, 20], exclu: false },
+        ];
+        let a = allouer(&pool, &rs, &meps1(), 42, 20, &rampe(Forme::Plate), &Preserves::default());
+        assert_eq!(a.details.len(), 2);
+        let r1 = &a.details[0];
+        assert_eq!(r1.run_num, "R1");
+        assert_eq!(r1.vise, 10);
+        assert_eq!(r1.report_entrant, 0);
+        assert_eq!(r1.stock, 10, "seuls les comptes au JJ 5 sont atteignables");
+        assert_eq!(r1.place, 10);
+        assert_eq!(r1.reliquat, 0);
+        let r2 = &a.details[1];
+        assert_eq!(r2.vise, 10);
+        assert_eq!(r2.report_entrant, 0);
+        assert_eq!(r2.place, 10);
+    }
+
+    #[test]
+    fn detail_montre_le_report_entrant_du_run_suivant() {
+        // R1 ne peut placer que 2 comptes sur 10 visés : 8 glissent sur R2,
+        // qui place alors plus que son propre volume.
+        let mut pool: Vec<CfCandidat> = (0..2).map(|i| cand(&format!("A{i}"), 5, "PA")).collect();
+        pool.extend((0..18).map(|i| cand(&format!("B{i:02}"), 20, "PA")));
+        let rs = vec![
+            RunFacturation { num: "R1".into(), date: d("2026-02-15"), jjs: vec![5], exclu: false },
+            RunFacturation { num: "R2".into(), date: d("2026-03-15"), jjs: vec![5, 20], exclu: false },
+        ];
+        let a = allouer(&pool, &rs, &meps1(), 42, 20, &rampe(Forme::Plate), &Preserves::default());
+        assert_eq!(a.details[0].place, 2);
+        assert_eq!(a.details[0].reliquat, 8);
+        assert_eq!(a.details[1].report_entrant, 8);
+        assert_eq!(a.details[1].place, 18, "10 visés + 8 reportés");
+    }
+
+    #[test]
     fn allocation_nominale_respecte_les_volumes_de_rampe() {
         let pool: Vec<CfCandidat> = (0..100).map(|i| cand(&format!("CF{i:03}"), 5, "PA")).collect();
         let rs = runs_jj(4, &[5]);
-        let (lignes, warns) = allouer(&pool, &rs, &meps1(), 42, 100, &rampe(Forme::Plate), &Preserves::default());
+        let a = allouer(&pool, &rs, &meps1(), 42, 100, &rampe(Forme::Plate), &Preserves::default());
+        let (lignes, warns) = (a.lignes, a.avertissements);
         assert_eq!(lignes.len(), 100);
         assert!(warns.is_empty(), "{warns:?}");
         for r in &rs {
@@ -1432,7 +1607,7 @@ mod tests {
         let pool: Vec<CfCandidat> = (0..4).map(|i| cand(&format!("CF{i}"), 5, "PA")).collect();
         let rs = runs_jj(2, &[5]);
         let meps = vec![d("2026-01-01"), d("2026-03-01")];
-        let (lignes, _) = allouer(&pool, &rs, &meps, 42, 4, &rampe(Forme::Plate), &Preserves::default());
+        let lignes = allouer(&pool, &rs, &meps, 42, 4, &rampe(Forme::Plate), &Preserves::default()).lignes;
         // R1 = 15/02 → MEP 1 ; R2 = 15/03 → MEP 2.
         let l1 = lignes.iter().find(|l| l.run_num == "R1").unwrap();
         let l2 = lignes.iter().find(|l| l.run_num == "R2").unwrap();
@@ -1452,7 +1627,8 @@ mod tests {
             RunFacturation { num: "R1".into(), date: d("2026-02-15"), jjs: vec![5], exclu: false },
             RunFacturation { num: "R2".into(), date: d("2026-03-15"), jjs: vec![5, 20], exclu: false },
         ];
-        let (lignes, warns) = allouer(&pool, &rs, &meps1(), 42, 20, &rampe(Forme::Plate), &Preserves::default());
+        let a = allouer(&pool, &rs, &meps1(), 42, 20, &rampe(Forme::Plate), &Preserves::default());
+        let (lignes, warns) = (a.lignes, a.avertissements);
         assert_eq!(lignes.len(), 20, "tout est placé au final : {warns:?}");
         assert_eq!(lignes.iter().filter(|l| l.run_num == "R1").count(), 10);
         assert_eq!(lignes.iter().filter(|l| l.run_num == "R2").count(), 10);
@@ -1463,7 +1639,8 @@ mod tests {
         // Cible 20, mais seulement 5 comptes atteignables.
         let pool: Vec<CfCandidat> = (0..5).map(|i| cand(&format!("CF{i}"), 5, "PA")).collect();
         let rs = runs_jj(2, &[5]);
-        let (lignes, warns) = allouer(&pool, &rs, &meps1(), 42, 20, &rampe(Forme::Plate), &Preserves::default());
+        let a = allouer(&pool, &rs, &meps1(), 42, 20, &rampe(Forme::Plate), &Preserves::default());
+        let (lignes, warns) = (a.lignes, a.avertissements);
         assert_eq!(lignes.len(), 5, "ce qui peut être placé l'est");
         assert!(
             warns.iter().any(|w| w.contains("15")),
@@ -1474,7 +1651,8 @@ mod tests {
     #[test]
     fn allocation_sans_run_utilisable_avertit() {
         let pool = vec![cand("CF1", 5, "PA")];
-        let (lignes, warns) = allouer(&pool, &[], &meps1(), 42, 10, &rampe(Forme::Plate), &Preserves::default());
+        let a = allouer(&pool, &[], &meps1(), 42, 10, &rampe(Forme::Plate), &Preserves::default());
+        let (lignes, warns) = (a.lignes, a.avertissements);
         assert!(lignes.is_empty());
         assert!(warns.iter().any(|w| w.contains("10")), "{warns:?}");
     }
@@ -1483,7 +1661,7 @@ mod tests {
     fn allocation_n_affecte_jamais_deux_fois_le_meme_compte() {
         let pool: Vec<CfCandidat> = (0..30).map(|i| cand(&format!("CF{i:02}"), 5, "PA")).collect();
         let rs = runs_jj(5, &[5]);
-        let (lignes, _) = allouer(&pool, &rs, &meps1(), 42, 30, &rampe(Forme::Lineaire), &Preserves::default());
+        let lignes = allouer(&pool, &rs, &meps1(), 42, 30, &rampe(Forme::Lineaire), &Preserves::default()).lignes;
         let uniques: HashSet<&str> = lignes.iter().map(|l| l.cf.as_str()).collect();
         assert_eq!(uniques.len(), lignes.len(), "doublon d'affectation");
     }
@@ -1502,7 +1680,7 @@ mod tests {
             RunFacturation { num: "R2".into(), date: d("2026-03-15"), jjs: vec![5, 20], exclu: false },
             RunFacturation { num: "R3".into(), date: d("2026-04-15"), jjs: vec![20], exclu: false },
         ];
-        let (lignes, _) = allouer(&pool, &rs, &meps1(), 42, 1, &rampe(Forme::Plate), &Preserves::default());
+        let lignes = allouer(&pool, &rs, &meps1(), 42, 1, &rampe(Forme::Plate), &Preserves::default()).lignes;
         let p = lignes.iter().find(|l| l.pa == "Petite").expect("plateforme non représentée");
         assert_eq!(p.origine, Origine::Couverture);
         assert_eq!(p.run_num, "R2", "le PREMIER run couvrant le JJ 20");
@@ -1520,7 +1698,7 @@ mod tests {
             RunFacturation { num: "R1".into(), date: d("2026-02-15"), jjs: vec![5], exclu: false },
             RunFacturation { num: "R2".into(), date: d("2026-03-15"), jjs: vec![5, 20], exclu: false },
         ];
-        let (lignes, _) = allouer(&pool, &rs, &meps1(), 42, 2, &rampe(Forme::Plate), &Preserves::default());
+        let lignes = allouer(&pool, &rs, &meps1(), 42, 2, &rampe(Forme::Plate), &Preserves::default()).lignes;
         let p = lignes.iter().find(|l| l.pa == "Petite").expect("plateforme non représentée");
         assert_eq!(p.origine, Origine::Auto);
     }
@@ -1532,7 +1710,8 @@ mod tests {
             (0..5).map(|i| cand(&format!("G{i}"), 5, "Grosse")).collect();
         pool.push(cand("P1", 20, "Orpheline"));
         let rs = runs_jj(2, &[5]);
-        let (lignes, warns) = allouer(&pool, &rs, &meps1(), 42, 5, &rampe(Forme::Plate), &Preserves::default());
+        let a = allouer(&pool, &rs, &meps1(), 42, 5, &rampe(Forme::Plate), &Preserves::default());
+        let (lignes, warns) = (a.lignes, a.avertissements);
         assert!(!lignes.iter().any(|l| l.pa == "Orpheline"));
         assert!(
             warns.iter().any(|w| w.contains("Orpheline")),
@@ -1544,9 +1723,83 @@ mod tests {
     fn allocation_est_reproductible_a_seed_egal() {
         let pool: Vec<CfCandidat> = (0..40).map(|i| cand(&format!("CF{i:02}"), 5, "PA")).collect();
         let rs = runs_jj(3, &[5]);
-        let a = allouer(&pool, &rs, &meps1(), 7, 20, &rampe(Forme::Lineaire), &Preserves::default()).0;
-        let b = allouer(&pool, &rs, &meps1(), 7, 20, &rampe(Forme::Lineaire), &Preserves::default()).0;
+        let a = allouer(&pool, &rs, &meps1(), 7, 20, &rampe(Forme::Lineaire), &Preserves::default()).lignes;
+        let b = allouer(&pool, &rs, &meps1(), 7, 20, &rampe(Forme::Lineaire), &Preserves::default()).lignes;
         assert_eq!(a, b);
+    }
+
+    // ------------------------------------------------------------ params
+
+    fn params_ok() -> PlanParams {
+        PlanParams {
+            runs: vec![
+                RunParam { num: "R2".into(), date: "2026-03-15".into(), jjs: vec![5, 1, 5], exclu: false },
+                RunParam { num: "R1".into(), date: "2026-02-15".into(), jjs: vec![5], exclu: true },
+            ],
+            debut: "2026-01-01".into(),
+            fin: "2026-12-31".into(),
+            meps: vec!["2026-02-01".into(), "2026-01-15".into(), "2026-02-01".into()],
+            mep_count: 2,
+            cible: Some(100),
+            seed: 42,
+            pa_exclues: vec!["Esker".into()],
+            rampe: rampe(Forme::Plate),
+        }
+    }
+
+    #[test]
+    fn params_calendrier_trie_dedoublonne_et_conserve_les_exclusions() {
+        let (runs, debut, fin, meps) = params_ok().calendrier().unwrap();
+        assert_eq!(debut, d("2026-01-01"));
+        assert_eq!(fin, d("2026-12-31"));
+        assert_eq!(runs[0].num, "R1", "runs triés par date");
+        assert!(runs[0].exclu, "l'exclusion est conservée");
+        assert_eq!(runs[1].jjs, vec![1, 5], "JJ triés et dédoublonnés");
+        assert_eq!(meps, vec![d("2026-01-15"), d("2026-02-01")], "MEP triées, dédoublonnées");
+    }
+
+    #[test]
+    fn params_refusent_une_fenetre_inversee() {
+        let mut p = params_ok();
+        p.fin = "2025-01-01".into();
+        let err = p.calendrier().unwrap_err();
+        assert!(err.contains("fenêtre"), "{err}");
+    }
+
+    #[test]
+    fn params_refusent_une_date_illisible_en_nommant_le_champ() {
+        let mut p = params_ok();
+        p.runs[0].date = "15/03/2026".into();
+        let err = p.calendrier().unwrap_err();
+        assert!(err.contains("R2"), "le run fautif doit être nommé : {err}");
+    }
+
+    #[test]
+    fn params_aller_retour_yaml() {
+        let p = params_ok();
+        let back = PlanParams::depuis_yaml(&p.vers_yaml().unwrap()).unwrap();
+        assert_eq!(back, p);
+    }
+
+    #[test]
+    fn params_yaml_conserve_la_rampe_avec_pilote() {
+        let mut p = params_ok();
+        p.rampe = Rampe {
+            forme: Forme::Geometrique { raison: 1.55 },
+            pilote: Some(Pilote { runs: 2, cf_par_run: 10 }),
+        };
+        let back = PlanParams::depuis_yaml(&p.vers_yaml().unwrap()).unwrap();
+        assert_eq!(back.rampe, p.rampe);
+    }
+
+    #[test]
+    fn params_yaml_conserve_une_rampe_manuelle() {
+        let mut p = params_ok();
+        p.rampe = rampe(Forme::Manuelle {
+            volumes: [("R1".to_string(), 7usize)].into_iter().collect(),
+        });
+        let back = PlanParams::depuis_yaml(&p.vers_yaml().unwrap()).unwrap();
+        assert_eq!(back.rampe, p.rampe);
     }
 
     // -------------------------------------------------------- régénération
@@ -1608,7 +1861,7 @@ mod tests {
         let manuel = lp("CF7", 5, "PA", "2026-12-01", Origine::Manuel);
         let p = Preserves { epinglees: vec![manuel], ..Preserves::default() };
 
-        let (plan, _) = regenerer(&pool, &rs, &meps1(), 42, 10, &rampe(Forme::Lineaire), &p).unwrap();
+        let plan = regenerer(&pool, &rs, &meps1(), 42, 10, &rampe(Forme::Lineaire), &p).unwrap().lignes;
         let l = plan.iter().find(|l| l.cf == "CF7").expect("la retouche a disparu");
         assert_eq!(l.origine, Origine::Manuel);
         assert_eq!(l.run_num, "R1", "elle n'a pas été replacée par la rampe");
@@ -1619,10 +1872,9 @@ mod tests {
     fn regeneration_une_ligne_auto_est_bien_retiree() {
         let pool: Vec<CfCandidat> = (0..5).map(|i| cand(&format!("CF{i}"), 5, "PA")).collect();
         let rs = runs_jj(2, &[5]);
-        let (plan, _) = regenerer(
+        let plan = regenerer(
             &pool, &rs, &meps1(), 42, 5, &rampe(Forme::Plate), &Preserves::default(),
-        )
-        .unwrap();
+        ).unwrap().lignes;
         assert!(plan.iter().all(|l| l.origine == Origine::Auto));
         assert_eq!(plan.len(), 5);
     }
@@ -1637,7 +1889,7 @@ mod tests {
         retire.retire = Some(Retrait { le: 1, motif: "compte clôturé".into() });
         let p = Preserves { retirees: vec![retire], ..Preserves::default() };
 
-        let (plan, _) = regenerer(&pool, &rs, &meps1(), 42, 5, &rampe(Forme::Plate), &p).unwrap();
+        let plan = regenerer(&pool, &rs, &meps1(), 42, 5, &rampe(Forme::Plate), &p).unwrap().lignes;
         let l = plan.iter().find(|l| l.cf == "CF3").expect("la trace doit rester");
         assert!(l.retiree(), "CF3 ne doit pas redevenir actif");
         assert_eq!(plan.iter().filter(|l| l.cf == "CF3").count(), 1);
@@ -1652,7 +1904,7 @@ mod tests {
             epinglees: vec![lp("CF01", 5, "PA", "2026-12-01", Origine::Manuel)],
             ..Preserves::default()
         };
-        let (plan, _) = regenerer(&pool, &rs, &meps1(), 42, 10, &rampe(Forme::Plate), &p).unwrap();
+        let plan = regenerer(&pool, &rs, &meps1(), 42, 10, &rampe(Forme::Plate), &p).unwrap().lignes;
         let actives = plan.iter().filter(|l| !l.retiree()).count();
         assert_eq!(actives, 10, "cible tenue, gelées et épinglées comprises");
         let uniques: HashSet<&str> = plan.iter().map(|l| l.cf.as_str()).collect();
@@ -1820,7 +2072,7 @@ mod tests {
             forme: Forme::Plate,
             pilote: Some(Pilote { runs: 2, cf_par_run: 10 }),
         };
-        let (_, warns) = allouer(&pool, &rs, &meps1(), 42, 25, &r, &Preserves::default());
+        let warns = allouer(&pool, &rs, &meps1(), 42, 25, &r, &Preserves::default()).avertissements;
         assert!(warns.iter().any(|w| w.contains("pilote")), "{warns:?}");
     }
 }
