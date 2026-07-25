@@ -288,9 +288,7 @@ pub fn quotas_par_pa(cible: usize, pool_par_pa: &BTreeMap<String, usize>) -> BTr
     quotas
 }
 
-/// Distribution du pool sur les jours de cycle, et couverture par les runs
-/// **retenus**. Toujours 31 entrées : un jour de cycle vide est une
-/// information, pas une absence.
+/// Un jour de cycle : sa part du pool, et s'il est couvert par un run retenu.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub struct StockJJ {
     pub jj: u8,
@@ -298,6 +296,9 @@ pub struct StockJJ {
     pub couvert: bool,
 }
 
+/// Distribution du pool sur les jours de cycle, et couverture par les runs
+/// **retenus**. Toujours 31 entrées : un jour de cycle vide est une
+/// information, pas une absence.
 pub fn stock_par_jj(pool: &[CfCandidat], retenus: &[RunFacturation]) -> Vec<StockJJ> {
     let mut comptes = [0usize; 32];
     for c in pool {
@@ -1556,11 +1557,11 @@ mod tests {
 
     #[test]
     fn stock_par_jj_rend_les_trente_et_un_jours() {
-        let s = stock_par_jj(&[cand("A", 8, "PA1")], &[]);
+        let s = stock_par_jj(&[cand("A", 8, "PA1"), cand("A2", 8, "PA1")], &[]);
         assert_eq!(s.len(), 31, "les jours de cycle vides comptent aussi");
         assert_eq!(s[0].jj, 1);
         assert_eq!(s[30].jj, 31);
-        assert_eq!(s[7].comptes, 1, "le jour de cycle 8 porte un compte");
+        assert_eq!(s[7].comptes, 2, "deux comptes sur le même jour de cycle s'additionnent");
     }
 
     #[test]
@@ -1589,7 +1590,7 @@ mod tests {
         // `calendrier::runs_utilisables` : cette fonction ne reçoit que des
         // runs déjà retenus, elle n'a pas à le refaire.
         let s = stock_par_jj(&[cand("A", 9, "PA1")], &[]);
-        assert!(!s[8].couvert);
+        assert!(s.iter().all(|x| !x.couvert), "aucun jour de cycle n'est couvert");
     }
 
     #[test]
@@ -1600,6 +1601,8 @@ mod tests {
         // silencieux, c'est un accès mémoire à garder valide.
         let s = stock_par_jj(&[cand("A", 31, "PA1")], &[]);
         assert_eq!(s[30].comptes, 1, "jj=31 est une borne haute valide");
+        let s1 = stock_par_jj(&[cand("Y", 1, "PA1")], &[]);
+        assert_eq!(s1[0].comptes, 1, "jj=1 est une borne basse valide");
 
         let mut hors_bornes = cand("Z", 1, "PA1");
         hors_bornes.jj = 0;
