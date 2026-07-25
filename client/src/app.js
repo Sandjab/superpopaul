@@ -1351,6 +1351,77 @@ function marche(lbl, val, base, precedent, final) {
     h("span", { class: "loss" }, perte));
 }
 
+const TL_MOIS = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet",
+  "août", "septembre", "octobre", "novembre", "décembre"];
+
+const TL_ECARTS = {
+  exclu: "exclu à la main",
+  hors_fenetre: "hors fenêtre",
+  mep_non_passee: "la première MEP n'est pas encore passée",
+  aucune_mep: "aucune MEP n'est définie",
+};
+
+/** « Juillet 2026 » depuis une date ISO, sans passer par Date (fuseaux). */
+function libelleMois(iso) {
+  const m = TL_MOIS[+iso.slice(5, 7) - 1];
+  return `${m[0].toUpperCase()}${m.slice(1)} ${iso.slice(0, 4)}`;
+}
+
+function celluleJour(j) {
+  return h("td", { class: "tl-jour" }, `${j.jour_semaine} ${j.date.slice(8)}`);
+}
+
+function ligneJalon(j, jl) {
+  const texte = jl.sorte === "mep" ? `MEP ${jl.rang}`
+    : jl.sorte === "debut_fenetre" ? "Début de la fenêtre FUT"
+    : "Fin de la fenêtre FUT";
+  const tr = h("tr", { class: jl.sorte === "mep" ? "tl-mep" : "tl-borne" },
+    celluleJour(j),
+    h("td", { colspan: "8" }, h("span", { class: "flag" }, texte)));
+  return tr;
+}
+
+function ligneVide(j) {
+  const notes = [];
+  if (j.ferie) notes.push(`férié — ${j.ferie}`);
+  else if (j.weekend) notes.push("week-end");
+  return h("tr", { class: j.weekend || j.ferie ? "tl-off" : "" },
+    celluleJour(j),
+    h("td", { colspan: "8", class: "tl-note" }, notes.join("")));
+}
+
+function ligneRun(j, r) {
+  const cb = h("input", { type: "checkbox", onchange: () => {
+    const cible = plan.runs.find((x) => x.num === r.num);
+    if (cible) cible.exclu = !cible.exclu;
+    planRecalc();
+  } });
+  cb.checked = r.exclu;
+  const boite = h("td", {}, h("label", { class: "tl-chk" }, cb, " exclure"));
+
+  if (r.ecart) {
+    return h("tr", { class: "tl-ecarte" },
+      celluleJour(j),
+      h("td", {}, r.num),
+      h("td", { class: "jj" }, r.jjs.join(" · ")),
+      h("td", { colspan: "5", class: "tl-why" }, `écarté — ${TL_ECARTS[r.ecart] ?? r.ecart}`),
+      boite);
+  }
+  const d = r.detail;
+  return h("tr", { class: "tl-run" },
+    celluleJour(j),
+    h("td", {}, r.num),
+    h("td", { class: "jj" }, r.jjs.join(" · ")),
+    h("td", { class: "n" }, fmtN(d.vise)),
+    h("td", { class: d.report_entrant ? "n carry" : "n zero" },
+      d.report_entrant ? `+${fmtN(d.report_entrant)}` : "—"),
+    h("td", { class: "n" }, fmtN(d.stock)),
+    h("td", { class: "n" }, fmtN(d.place)),
+    h("td", { class: d.reliquat ? "n carry" : "n zero" },
+      d.reliquat ? `+${fmtN(d.reliquat)}` : "0"),
+    boite);
+}
+
 function renderPlanParam() {
   const box = $("plan-param");
   const a = plan.apercu;
@@ -1378,24 +1449,68 @@ function renderPlanParam() {
     marche("COMPTES ÉLIGIBLES", f.eligibles, b, f.ppf_usable, true)));
 
   noeuds.push(h("h2", {}, "Runs de Facturation"));
+  const retenus = a.timeline.reduce(
+    (n, j) => n + j.runs.filter((r) => !r.ecart).length, 0);
+  const totalRuns = a.timeline.reduce((n, j) => n + j.runs.length, 0);
   noeuds.push(h("p", { class: "field-hint" },
-    `${a.details.length} run(s) retenu(s) · rattachement à la dernière MEP strictement antérieure.`));
-  const tbl = h("table", { class: "plan-data" },
-    h("tr", {}, ...["Run", "Date", "JJ facturés", "MEP", "Visé", "Report", "Stock JJ", "Placé", "Reliquat"]
-      .map((t, i) => h("th", { class: i >= 4 ? "n" : "" }, t))));
-  for (const d of a.details) {
-    tbl.append(h("tr", {},
-      h("td", {}, d.run_num),
-      h("td", {}, d.run_date),
-      h("td", { class: "jj" }, d.jjs.join(", ")),
-      h("td", {}, `${d.mep_id} (${d.mep_date})`),
-      h("td", { class: "n" }, fmtN(d.vise)),
-      h("td", { class: d.report_entrant ? "n carry" : "n zero" }, d.report_entrant ? `+${fmtN(d.report_entrant)}` : "—"),
-      h("td", { class: "n" }, fmtN(d.stock)),
-      h("td", { class: "n" }, fmtN(d.place)),
-      h("td", { class: d.reliquat ? "n carry" : "n zero" }, d.reliquat ? `+${fmtN(d.reliquat)}` : "0")));
+    `${fmtN(retenus)} run(s) retenu(s) sur ${fmtN(totalRuns)} affiché(s) · rattachement à la dernière MEP strictement antérieure. Décocher un run le retire du plan.`));
+
+  const tbl = h("table", { class: "plan-tl" },
+    h("tr", {}, ...[["Jour", ""], ["Run", ""], ["Jours facturés", ""],
+                    ["Visé", "n"], ["Report", "n"], ["Stock", "n"],
+                    ["Placé", "n"], ["Reliquat", "n"], ["", ""]]
+      .map(([t, c]) => h("th", { class: c }, t))));
+
+  let moisCourant = "";
+  for (const j of a.timeline) {
+    const mois = j.date.slice(0, 7);
+    if (mois !== moisCourant) {
+      moisCourant = mois;
+      tbl.append(h("tr", { class: "tl-mois" },
+        h("td", { colspan: "9" }, libelleMois(j.date))));
+    }
+    // Les bornes encadrent le contenu du jour, elles ne le précèdent pas
+    // toutes les deux : un run posé pile sur `fin` est RETENU, donc afficher
+    // « fin de fenêtre » au-dessus de lui le montrerait hors fenêtre alors
+    // qu'il compte. Symétriquement, « début de fenêtre » doit rester au-dessus.
+    // Une MEP reste au-dessus aussi : les runs de ce jour-là sont écartés par
+    // elle, le motif se lit alors juste sous sa cause.
+    for (const jl of j.jalons.filter((x) => x.sorte !== "fin_fenetre"))
+      tbl.append(ligneJalon(j, jl));
+    if (!j.runs.length) tbl.append(ligneVide(j));
+    else for (const r of j.runs) tbl.append(ligneRun(j, r));
+    for (const jl of j.jalons.filter((x) => x.sorte === "fin_fenetre"))
+      tbl.append(ligneJalon(j, jl));
   }
-  noeuds.push(tbl);
+  noeuds.push(h("div", { class: "tl-scroll" }, tbl));
+
+  const totalPool = a.stock_jj.reduce((n, s) => n + s.comptes, 0);
+  const atteignables = a.stock_jj.reduce((n, s) => n + (s.couvert ? s.comptes : 0), 0);
+  const maxJJ = Math.max(1, ...a.stock_jj.map((s) => s.comptes));
+  noeuds.push(h("h2", {}, "Stock par jour de cycle"));
+  // Sans aucune MEP, `runs_utilisables` ne retient rien et les 31 jours
+  // ressortent non couverts : 31 barres rouges diraient « tout est perdu »
+  // alors que le message utile est qu'aucun run n'est encore utilisable.
+  if (!a.timeline.some((j) => j.runs.some((r) => !r.ecart))) {
+    noeuds.push(h("p", { class: "field-hint" },
+      "Aucun Run de Facturation n'est retenu : la couverture des jours de cycle ne veut encore rien dire."));
+  }
+  noeuds.push(h("p", { class: "field-hint" },
+    "Comptes du pool éligible, par jour de cycle de facturation. En rouge, les jours qu'aucun run retenu ne couvre : ces comptes sont hors d'atteinte tant que le calendrier ou la fenêtre ne change pas."));
+  const barres = h("div", { class: "jj-bars" });
+  for (const s of a.stock_jj) {
+    const titre = s.couvert
+      ? `Jour de cycle ${s.jj} — ${fmtN(s.comptes)} comptes — couvert`
+      : `Jour de cycle ${s.jj} — ${fmtN(s.comptes)} comptes — aucun run retenu ne le couvre`;
+    barres.append(h("div", { class: s.couvert ? "jj-bar" : "jj-bar no", title: titre },
+      h("i", { style: `height:${((s.comptes / maxJJ) * 100).toFixed(1)}%` }),
+      h("span", {}, String(s.jj))));
+  }
+  noeuds.push(barres);
+  noeuds.push(h("p", { class: "jj-legend" },
+    h("b", {}, fmtN(totalPool)), " comptes éligibles · ",
+    h("b", {}, fmtN(atteignables)), " atteignables par les runs retenus · ",
+    h("b", {}, fmtN(totalPool - atteignables)), " hors d'atteinte."));
 
   if (a.avertissements.length) {
     const w = h("div", { class: "plan-warns" });
