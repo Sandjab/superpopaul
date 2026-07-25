@@ -672,9 +672,22 @@ mod tests {
             "les fériés sortent triés par date"
         );
         let noms: Vec<&str> = f.iter().map(|(_, n)| *n).collect();
-        assert!(
-            noms.contains(&"Ascension") && noms.contains(&"Lundi de Pentecôte"),
-            "les trois fériés mobiles sont nommés, pas laissés sous un « férié » générique"
+        assert_eq!(
+            noms,
+            vec![
+                "Jour de l'an",
+                "Lundi de Pâques",
+                "Fête du Travail",
+                "Victoire 1945",
+                "Ascension",
+                "Lundi de Pentecôte",
+                "Fête nationale",
+                "Assomption",
+                "Toussaint",
+                "Armistice",
+                "Noël",
+            ],
+            "les onze fériés sont nommés, dans l'ordre des dates triées — aucun sous un « férié » générique"
         );
     }
 
