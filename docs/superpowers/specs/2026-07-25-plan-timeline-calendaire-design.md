@@ -116,7 +116,10 @@ pub struct JourTimeline {
     /// Plusieurs jalons peuvent tomber le même jour (une MEP le jour de la
     /// fin de fenêtre, par exemple).
     pub jalons: Vec<Jalon>,
-    pub run: Option<RunJour>,
+    /// Une liste, pas un `Option` : rien dans le contrat de `runs.csv`
+    /// n'interdit deux runs à la même date, et un run perdu en silence est
+    /// exactement ce que ce lot corrige.
+    pub runs: Vec<RunJour>,
 }
 
 pub fn timeline(
@@ -134,9 +137,9 @@ retenus est assumée, le rendu lit toujours les champs de `RunJour`.
 
 `Ecart::MepNonPassee` couvre deux cas que le filtre `r.date > premiere_mep`
 traite ensemble : un run antérieur à la première MEP, et un run tombant **le
-jour même** de cette MEP. Le libellé retenu — « la 1ʳᵉ MEP n'est pas encore
-passée » — est juste dans les deux cas, là où « avant la 1ʳᵉ MEP » serait faux
-pour le second.
+jour même** de cette MEP. Le libellé retenu — « la première MEP n'est pas
+encore passée » — est juste dans les deux cas, là où « avant la première MEP »
+serait faux pour le second.
 
 ```rust
 // plan.rs
