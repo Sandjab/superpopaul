@@ -10,6 +10,7 @@ pub mod directory;
 pub mod modes;
 pub mod output;
 pub mod pid;
+pub mod plan;
 pub mod ppf;
 pub mod repartition;
 pub mod resolver;
