@@ -1777,6 +1777,7 @@ async function ouvrirPlan() {
 
 function fermerPlan() { $("plan-screen").classList.add("hidden"); }
 
+$("btn-plan-open").addEventListener("click", ouvrirPlan);
 $("btn-plan-close").addEventListener("click", fermerPlan);
 $("btn-plan-back").addEventListener("click", fermerPlan);
 document.querySelectorAll(".plan-tab").forEach((b) =>
