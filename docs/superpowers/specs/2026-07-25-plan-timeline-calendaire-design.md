@@ -93,7 +93,10 @@ nommées, là où peppolstat les laissait sous un « férié » générique.
 
 ```rust
 // timeline.rs
-pub enum Jalon { DebutFenetre, FinFenetre, Mep(usize) }   // Mep : rang, 1-indexé
+// `Mep { rang }` et non `Mep(usize)` : serde ne sait pas taguer en interne un
+// variant newtype, et le JS attend `{"sorte":"mep","rang":1}`. Rang 1-basé,
+// aligné sur `DetailRun.mep_id`.
+pub enum Jalon { DebutFenetre, FinFenetre, Mep { rang: usize } }
 
 /// Pourquoi un run ne compte pas. Miroir de `calendrier::runs_utilisables`.
 pub enum Ecart { Exclu, HorsFenetre, MepNonPassee, AucuneMep }
