@@ -1106,6 +1106,302 @@ pub async fn plan_load(state: State<'_, AppState>) -> Result<Option<PlanEnregist
     .map_err(|e| e.to_string())?
 }
 
+/// Une ligne du plan telle que l'onglet « Comptes de facturation » l'affiche.
+/// L'état d'éligibilité est **recalculé** à chaque lecture, jamais figé : un
+/// compte peut être devenu inéligible depuis le tirage.
+#[derive(Serialize)]
+pub struct LigneRecap {
+    pub cf: String,
+    pub participant: String,
+    pub raison_sociale: String,
+    pub jj: u8,
+    pub pa: String,
+    pub mep_id: usize,
+    pub mep_date: String,
+    pub run_num: String,
+    pub run_date: String,
+    pub origine: String,
+    pub gelee: bool,
+    pub retire_motif: Option<String>,
+    /// « eligible » · « ctc_non_pret » · « ppf_non_utilisable » ·
+    /// « absent_du_fichier ».
+    pub etat: String,
+}
+
+/// Un compte du fichier absent du plan, proposable à l'ajout.
+#[derive(Serialize)]
+pub struct Candidat {
+    pub cf: String,
+    pub raison_sociale: String,
+    pub jj: u8,
+    pub pa: String,
+    pub eligible: bool,
+}
+
+fn etat_de(e: Option<&crate::plan::LigneEntree>) -> String {
+    match e {
+        None => "absent_du_fichier".into(),
+        Some(e) if !e.ctc_ready => "ctc_non_pret".into(),
+        Some(e) if !e.ppf_usable => "ppf_non_utilisable".into(),
+        _ => "eligible".into(),
+    }
+}
+
+/// Récapitulatif complet du plan. Le filtrage et le tri vivent côté IHM : la
+/// volumétrie (quelques milliers de lignes) ne justifie pas de les redescendre.
+#[tauri::command]
+pub async fn plan_lignes(state: State<'_, AppState>) -> Result<Vec<LigneRecap>, String> {
+    let cfg = state.current_config()?;
+    let input = state.input_path()?;
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || {
+        let Some((lignes, _)) = store.lock().unwrap().charger_plan()? else {
+            return Ok(Vec::new());
+        };
+        let par_cf = entrees_par_cf(&store, &input, &cfg)?;
+        let aujourdhui = chrono::Local::now().date_naive();
+        Ok(lignes
+            .into_iter()
+            .map(|l| LigneRecap {
+                etat: etat_de(par_cf.get(&l.cf)),
+                gelee: l.gelee(aujourdhui),
+                retire_motif: l.retire.as_ref().map(|r| r.motif.clone()),
+                origine: match l.origine {
+                    crate::plan::Origine::Auto => "auto",
+                    crate::plan::Origine::Couverture => "couverture",
+                    crate::plan::Origine::Manuel => "manuel",
+                }
+                .into(),
+                mep_date: l.mep_date.to_string(),
+                run_date: l.run_date.to_string(),
+                cf: l.cf,
+                participant: l.participant,
+                raison_sociale: l.raison_sociale,
+                jj: l.jj,
+                pa: l.pa,
+                mep_id: l.mep_id,
+                run_num: l.run_num,
+            })
+            .collect())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+fn entrees_par_cf(
+    store: &Arc<Mutex<Store>>,
+    input: &Path,
+    cfg: &Config,
+) -> Result<HashMap<String, crate::plan::LigneEntree>, String> {
+    let now = chrono::Utc::now();
+    let s = store.lock().unwrap();
+    let entrees = plan_entrees_from_scan(&s, input, cfg, now)?;
+    Ok(entrees.into_iter().map(|e| (e.cf.clone(), e)).collect())
+}
+
+/// Comptes du fichier absents du plan. Un compte NON éligible est proposé
+/// quand même — l'ajouter est un choix assumé (forcer un pilote qu'on sait
+/// prêt côté PDP) —, mais il est signalé.
+#[tauri::command]
+pub async fn plan_candidats(state: State<'_, AppState>) -> Result<Vec<Candidat>, String> {
+    let cfg = state.current_config()?;
+    let input = state.input_path()?;
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || {
+        let deja: HashSet<String> = store
+            .lock()
+            .unwrap()
+            .charger_plan()?
+            .map(|(l, _)| l.into_iter().map(|l| l.cf).collect())
+            .unwrap_or_default();
+        let par_cf = entrees_par_cf(&store, &input, &cfg)?;
+        let mut out: Vec<Candidat> = par_cf
+            .values()
+            .filter(|e| !deja.contains(&e.cf))
+            .filter_map(|e| {
+                e.jj_brut.trim().parse::<u8>().ok().filter(|j| (1..=31).contains(j)).map(|jj| {
+                    Candidat {
+                        cf: e.cf.clone(),
+                        raison_sociale: e.raison_sociale.clone(),
+                        jj,
+                        pa: e.pa.clone(),
+                        eligible: e.ctc_ready && e.ppf_usable,
+                    }
+                })
+            })
+            .collect();
+        out.sort_by(|a, b| a.cf.cmp(&b.cf));
+        Ok(out)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Charge le plan pour retouche. Un plan absent est une erreur explicite :
+/// retoucher ce qui n'existe pas n'a pas de sens.
+fn charger_pour_retouche(
+    store: &Arc<Mutex<Store>>,
+) -> Result<(Vec<crate::plan::LignePlan>, crate::store::PlanMeta), String> {
+    store
+        .lock()
+        .unwrap()
+        .charger_plan()?
+        .ok_or_else(|| "aucun plan enregistré à retoucher".to_string())
+}
+
+/// Réécrit plan ET fichiers. Les deux vont ensemble : laisser les fichiers en
+/// arrière les ferait diverger de la base en silence.
+fn sauver_apres_retouche(
+    store: &Arc<Mutex<Store>>,
+    input: &Path,
+    cfg: &Config,
+    lignes: &[crate::plan::LignePlan],
+    meta: &crate::store::PlanMeta,
+) -> Result<(), String> {
+    store.lock().unwrap().ecrire_plan(lignes, meta)?;
+    ecrire_fichiers_mep(input, cfg, lignes)?;
+    Ok(())
+}
+
+/// Runs et MEP du plan enregistré, tels que la retouche doit les voir.
+fn calendrier_du_plan(
+    meta: &crate::store::PlanMeta,
+) -> Result<(Vec<crate::calendrier::RunFacturation>, Vec<chrono::NaiveDate>), String> {
+    let params = crate::plan::PlanParams::depuis_yaml(&meta.params_yaml)?;
+    let (runs, debut, fin, fournies) = params.calendrier()?;
+    let (meps, _) =
+        crate::calendrier::completer_meps(&runs, debut, fin, &fournies, params.mep_count);
+    let utilisables = crate::calendrier::runs_utilisables(&runs, debut, fin, &meps);
+    Ok((utilisables, meps))
+}
+
+#[tauri::command]
+pub async fn plan_ajouter(
+    state: State<'_, AppState>,
+    cfs: Vec<String>,
+    run_num: String,
+) -> Result<(), String> {
+    let cfg = state.current_config()?;
+    let input = state.input_path()?;
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || {
+        let (mut lignes, meta) = charger_pour_retouche(&store)?;
+        let (runs, meps) = calendrier_du_plan(&meta)?;
+        let run = runs
+            .iter()
+            .find(|r| r.num == run_num)
+            .ok_or_else(|| format!("Run de Facturation « {run_num} » inconnu"))?;
+        // Les candidats sont ceux du FICHIER, pas du pool : un compte non
+        // éligible reste ajoutable (décision assumée).
+        let par_cf = entrees_par_cf(&store, &input, &cfg)?;
+        let candidats: Vec<crate::plan::CfCandidat> = par_cf
+            .values()
+            .filter_map(|e| {
+                e.jj_brut.trim().parse::<u8>().ok().filter(|j| (1..=31).contains(j)).map(|jj| {
+                    crate::plan::CfCandidat {
+                        cf: e.cf.clone(),
+                        participant: e.participant.clone(),
+                        jj,
+                        raison_sociale: e.raison_sociale.clone(),
+                        pa: e.pa.clone(),
+                        in_directory: e.in_directory,
+                        resolved_at: e.resolved_at,
+                    }
+                })
+            })
+            .collect();
+        crate::plan::ajouter(
+            &mut lignes,
+            &candidats,
+            &cfs,
+            run,
+            &meps,
+            chrono::Utc::now().timestamp(),
+        )?;
+        sauver_apres_retouche(&store, &input, &cfg, &lignes, &meta)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn plan_deplacer(
+    state: State<'_, AppState>,
+    cfs: Vec<String>,
+    run_num: String,
+) -> Result<(), String> {
+    let cfg = state.current_config()?;
+    let input = state.input_path()?;
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || {
+        let (mut lignes, meta) = charger_pour_retouche(&store)?;
+        let (runs, meps) = calendrier_du_plan(&meta)?;
+        let run = runs
+            .iter()
+            .find(|r| r.num == run_num)
+            .ok_or_else(|| format!("Run de Facturation « {run_num} » inconnu"))?;
+        crate::plan::deplacer(&mut lignes, &cfs, run, &meps)?;
+        sauver_apres_retouche(&store, &input, &cfg, &lignes, &meta)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn plan_retirer(
+    state: State<'_, AppState>,
+    cfs: Vec<String>,
+    motif: String,
+) -> Result<(), String> {
+    let cfg = state.current_config()?;
+    let input = state.input_path()?;
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || {
+        let (mut lignes, meta) = charger_pour_retouche(&store)?;
+        crate::plan::retirer(&mut lignes, &cfs, &motif, chrono::Utc::now().timestamp())?;
+        sauver_apres_retouche(&store, &input, &cfg, &lignes, &meta)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn plan_annuler_retrait(
+    state: State<'_, AppState>,
+    cfs: Vec<String>,
+) -> Result<(), String> {
+    let cfg = state.current_config()?;
+    let input = state.input_path()?;
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || {
+        let (mut lignes, meta) = charger_pour_retouche(&store)?;
+        crate::plan::annuler_retrait(&mut lignes, &cfs)?;
+        sauver_apres_retouche(&store, &input, &cfg, &lignes, &meta)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Runs compatibles avec un jour de cycle — le sélecteur de l'IHM ne propose
+/// que ceux-là (la garde dure est dans le moteur).
+#[tauri::command]
+pub async fn plan_runs_compatibles(
+    state: State<'_, AppState>,
+    jj: u8,
+) -> Result<Vec<String>, String> {
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || {
+        let (_, meta) = charger_pour_retouche(&store)?;
+        let (runs, _) = calendrier_du_plan(&meta)?;
+        Ok(crate::plan::runs_compatibles(jj, &runs)
+            .into_iter()
+            .map(|r| r.num.clone())
+            .collect())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Progression émise pendant le chargement de l'annuaire.
 /// phase = "download" (done/total en octets) | "parse" (done = lignes, total = None).
 #[derive(Clone, Serialize)]
