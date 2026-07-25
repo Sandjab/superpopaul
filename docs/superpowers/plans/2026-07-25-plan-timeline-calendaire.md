@@ -979,8 +979,9 @@ cargo check --manifest-path client/src-tauri/Cargo.toml --bins
 cargo test  --manifest-path client/src-tauri/Cargo.toml
 ```
 
-Attendu : compilation sans erreur ; `test result: ok`, avec **438
-tests** (412 avant ce lot, + 26 sur les tâches 1 à 5). Si un test préexistant casse,
+Attendu : compilation sans erreur ; `test result: ok`, avec **446
+tests** (412 avant ce lot, + 34 sur les tâches 1 à 5). Le compte a monté au fil
+des revues : chaque tâche a laissé survivre des mutations, toutes comblées.. Si un test préexistant casse,
 s'arrêter et comprendre avant de continuer.
 
 - [ ] **Étape 4 : commit**
@@ -1275,7 +1276,7 @@ cargo check --manifest-path client/src-tauri/Cargo.toml --bins
 cargo clippy --manifest-path client/src-tauri/Cargo.toml --all-targets 2>&1 | grep -c warning
 ```
 
-Attendu : suite verte (438 tests), compilation propre, et **5 warnings
+Attendu : suite verte (446 tests), compilation propre, et **5 warnings
 clippy** — les préexistants, pas un de plus. Un sixième signifie que ce lot en
 a introduit un.
 
