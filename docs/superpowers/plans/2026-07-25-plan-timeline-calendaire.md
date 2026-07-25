@@ -608,8 +608,17 @@ git commit -m "feat(superpopaul): module timeline — jours civils, week-ends, f
 cargo test --manifest-path client/src-tauri/Cargo.toml timeline::
 ```
 
-Attendu : ÉCHEC — `index out of bounds: the len is 0` sur `j.runs[0]`, les sept
-nouveaux tests en échec.
+Attendu : ÉCHEC — `index out of bounds: the len is 0` sur `j.runs[0]`, les huit
+tests ci-dessus en échec.
+
+Note : trois tests supplémentaires ont été ajoutés après coup — la liste
+ci-dessus n'est donc pas celle du code final, qui en porte onze. Ils sont nés
+d'une passe de mutation
+qui a laissé cinq mutations survivre — bornes de fenêtre non posées, `detail`
+sur run écarté non vérifié, tri par numéro déjà trié dans l'échantillon,
+priorité `Exclu` > `MepNonPassee` non isolée, et un test de miroir dont
+l'échantillon ne touchait aucune borne. Un test de miroir ne vaut que par son
+échantillon.
 
 - [ ] **Étape 3 : écrire l'implémentation**
 
@@ -684,7 +693,7 @@ pub fn timeline(
 cargo test --manifest-path client/src-tauri/Cargo.toml timeline::
 ```
 
-Attendu : `test result: ok. 13 passed`.
+Attendu : `test result: ok. 17 passed`.
 
 - [ ] **Étape 5 : commit**
 
@@ -780,7 +789,7 @@ L'ordre d'insertion place les MEP avant les bornes le même jour, ce que fige
 cargo test --manifest-path client/src-tauri/Cargo.toml timeline::
 ```
 
-Attendu : `test result: ok. 16 passed`.
+Attendu : `test result: ok. 20 passed`.
 
 - [ ] **Étape 5 : commit**
 
@@ -950,8 +959,8 @@ cargo check --manifest-path client/src-tauri/Cargo.toml --bins
 cargo test  --manifest-path client/src-tauri/Cargo.toml
 ```
 
-Attendu : compilation sans erreur ; `test result: ok`, avec **434
-tests** (412 avant ce lot, + 22 sur les tâches 1 à 5). Si un test préexistant casse,
+Attendu : compilation sans erreur ; `test result: ok`, avec **438
+tests** (412 avant ce lot, + 26 sur les tâches 1 à 5). Si un test préexistant casse,
 s'arrêter et comprendre avant de continuer.
 
 - [ ] **Étape 4 : commit**
@@ -1229,7 +1238,7 @@ cargo check --manifest-path client/src-tauri/Cargo.toml --bins
 cargo clippy --manifest-path client/src-tauri/Cargo.toml --all-targets 2>&1 | grep -c warning
 ```
 
-Attendu : suite verte (434 tests), compilation propre, et **5 warnings
+Attendu : suite verte (438 tests), compilation propre, et **5 warnings
 clippy** — les préexistants, pas un de plus. Un sixième signifie que ce lot en
 a introduit un.
 
