@@ -19,6 +19,7 @@ pub mod report;
 pub mod securisation;
 pub mod store;
 pub mod telemetry;
+pub mod timeline;
 
 use tauri::Manager;
 
