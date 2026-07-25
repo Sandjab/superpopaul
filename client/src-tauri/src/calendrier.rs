@@ -162,12 +162,300 @@ fn parse_jjs(brut: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// Runs éligibles aux premières factures : non exclus, dans `[debut, fin]`, et
+/// **strictement** postérieurs à la première MEP. Le « strictement » n'est pas
+/// un détail : un run qui tombe le jour même d'une MEP ne peut pas facturer ce
+/// qu'elle vient de déclarer.
+///
+/// Sans aucune MEP, rien n'est utilisable (il n'y a rien à facturer).
+pub fn runs_utilisables(
+    runs: &[RunFacturation],
+    debut: NaiveDate,
+    fin: NaiveDate,
+    meps: &[NaiveDate],
+) -> Vec<RunFacturation> {
+    let Some(premiere) = meps.iter().min() else {
+        return Vec::new();
+    };
+    runs.iter()
+        .filter(|r| !r.exclu && r.date >= debut && r.date <= fin && r.date > *premiere)
+        .cloned()
+        .collect()
+}
+
+/// Complète les MEP fournies jusqu'à `voulu`, par équirépartition sur
+/// `[debut, fin)`. Les dates fournies sont toujours conservées.
+///
+/// Une MEP **calculée** qui n'aurait aucun run utilisable après elle est
+/// ramenée à la veille du dernier run candidat — sinon elle ne sert à rien.
+/// Une MEP **fournie** dans ce cas est conservée telle quelle : c'est un choix
+/// de l'utilisateur, on l'avertit sans le corriger.
+///
+/// Renvoie les MEP triées et dédoublonnées, plus les avertissements.
+pub fn completer_meps(
+    runs: &[RunFacturation],
+    debut: NaiveDate,
+    fin: NaiveDate,
+    fournies: &[NaiveDate],
+    voulu: usize,
+) -> (Vec<NaiveDate>, Vec<String>) {
+    let mut avertissements: Vec<String> = Vec::new();
+    let mut donnees: Vec<NaiveDate> = fournies.to_vec();
+    donnees.sort_unstable();
+    donnees.dedup();
+    let vise = voulu.max(donnees.len());
+
+    let candidats: Vec<&RunFacturation> = runs
+        .iter()
+        .filter(|r| !r.exclu && r.date >= debut && r.date <= fin)
+        .collect();
+    let dernier_run = candidats.iter().map(|r| r.date).max();
+
+    let mut out = donnees.clone();
+    if out.len() < vise && vise > 0 {
+        let etendue = (fin - debut).num_days().max(0);
+        for i in 0..vise {
+            if out.len() >= vise {
+                break;
+            }
+            // Arithmétique entière (arrondi au plus proche) : pas de flottant,
+            // donc pas de dépendance au mode d'arrondi de la plateforme.
+            let decalage = (i as i64 * etendue + vise as i64 / 2) / vise as i64;
+            let mut s = debut + chrono::Duration::days(decalage);
+            if let Some(dr) = dernier_run {
+                if s >= dr {
+                    // Aucune facture possible après cette date : on la ramène
+                    // au dernier jour utile.
+                    s = dr - chrono::Duration::days(1);
+                    if out.contains(&s) || s < debut {
+                        continue;
+                    }
+                }
+            }
+            if s >= fin {
+                continue; // invariant [debut, fin)
+            }
+            if !out.contains(&s) {
+                out.push(s);
+            }
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+
+    if out.len() < vise {
+        let manque = vise - out.len();
+        avertissements.push(format!(
+            "{manque} MEP(s) non planifiable(s) — fenêtre trop courte ou dernier \
+             Run de Facturation trop proche"
+        ));
+    }
+    // Les MEP FOURNIES sans run après elles sont conservées (choix de
+    // l'utilisateur) mais signalées une par une.
+    for m in &donnees {
+        if dernier_run.is_none_or(|dr| *m >= dr) {
+            avertissements.push(format!(
+                "MEP {m} : aucun Run de Facturation utilisable strictement après \
+                 cette date dans la fenêtre"
+            ));
+        }
+    }
+    if candidats.is_empty() {
+        avertissements.push("aucun Run de Facturation utilisable dans la fenêtre".into());
+    }
+    (out, avertissements)
+}
+
+/// MEP de rattachement d'un run : la dernière **strictement** antérieure.
+/// Renvoie `(numéro 1-basé, date)`, ou `None` si le run précède toute MEP.
+/// `meps` doit être trié croissant.
+pub fn mep_de(run: NaiveDate, meps: &[NaiveDate]) -> Option<(usize, NaiveDate)> {
+    meps.iter()
+        .enumerate()
+        .rfind(|(_, m)| **m < run)
+        .map(|(i, m)| (i + 1, *m))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn d(iso: &str) -> NaiveDate {
         NaiveDate::parse_from_str(iso, "%Y-%m-%d").expect("date de test valide")
+    }
+
+    /// Runs de facturation de test, aux dates données (num dérivé de l'index).
+    fn runs(dates: &[&str]) -> Vec<RunFacturation> {
+        dates
+            .iter()
+            .enumerate()
+            .map(|(i, s)| RunFacturation {
+                num: format!("R{}", i + 1),
+                date: d(s),
+                jjs: vec![1],
+                exclu: false,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn utilisables_ecarte_un_run_exclu() {
+        let mut rs = runs(&["2026-08-11", "2026-08-25"]);
+        rs[0].exclu = true;
+        let out = runs_utilisables(&rs, d("2026-06-01"), d("2026-12-31"), &[d("2026-06-15")]);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].num, "R2");
+    }
+
+    #[test]
+    fn utilisables_bornes_de_fenetre_incluses() {
+        let rs = runs(&["2026-05-31", "2026-06-01", "2026-12-31", "2027-01-01"]);
+        let out = runs_utilisables(&rs, d("2026-06-01"), d("2026-12-31"), &[d("2026-05-01")]);
+        let nums: Vec<&str> = out.iter().map(|r| r.num.as_str()).collect();
+        assert_eq!(nums, vec!["R2", "R3"], "les deux bornes sont incluses");
+    }
+
+    #[test]
+    fn utilisables_ecarte_un_run_le_jour_meme_de_la_premiere_mep() {
+        // Le « strictement postérieur » de la spec : un run le jour de la MEP
+        // ne peut pas facturer ce qu'elle vient de déclarer.
+        let rs = runs(&["2026-06-15", "2026-06-16"]);
+        let out = runs_utilisables(&rs, d("2026-06-01"), d("2026-12-31"), &[d("2026-06-15")]);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].date, d("2026-06-16"));
+    }
+
+    #[test]
+    fn utilisables_prend_la_premiere_mep_meme_non_triee() {
+        let rs = runs(&["2026-06-20"]);
+        // La plus ancienne MEP fait foi, quel que soit l'ordre reçu.
+        let out = runs_utilisables(
+            &rs,
+            d("2026-06-01"),
+            d("2026-12-31"),
+            &[d("2026-10-01"), d("2026-06-15")],
+        );
+        assert_eq!(out.len(), 1);
+    }
+
+    #[test]
+    fn utilisables_vide_sans_mep() {
+        let rs = runs(&["2026-08-11"]);
+        assert!(runs_utilisables(&rs, d("2026-06-01"), d("2026-12-31"), &[]).is_empty());
+    }
+
+    #[test]
+    fn meps_fournies_conservees_sans_completion() {
+        // voulu <= nombre de dates fournies : rien n'est ajouté.
+        let rs = runs(&["2026-08-11"]);
+        let (meps, warns) = completer_meps(
+            &rs,
+            d("2026-06-01"),
+            d("2026-12-31"),
+            &[d("2026-06-15"), d("2026-07-01")],
+            0,
+        );
+        assert_eq!(meps, vec![d("2026-06-15"), d("2026-07-01")]);
+        assert!(warns.is_empty(), "{warns:?}");
+    }
+
+    #[test]
+    fn meps_equireparties_sur_la_fenetre() {
+        // Fenêtre 01/06 → 31/12 (213 jours), 3 MEP, dernier run le 10/11 :
+        // décalages 0, 71 et 142 jours.
+        let rs = runs(&["2026-11-10"]);
+        let (meps, warns) = completer_meps(&rs, d("2026-06-01"), d("2026-12-31"), &[], 3);
+        assert_eq!(meps, vec![d("2026-06-01"), d("2026-08-11"), d("2026-10-21")]);
+        assert!(warns.is_empty(), "{warns:?}");
+    }
+
+    #[test]
+    fn meps_calculee_sans_run_apres_est_ramenee_a_la_veille_du_dernier_run() {
+        // Fenêtre 01/06 → 30/06, dernier run le 10/06 : les slots 11/06 et
+        // 20/06 n'ont aucun run après eux, ils sont ramenés au 09/06 — et le
+        // second devient un doublon, donc une MEP manque.
+        let rs = runs(&["2026-06-10"]);
+        let (meps, warns) = completer_meps(&rs, d("2026-06-01"), d("2026-06-30"), &[], 3);
+        assert_eq!(meps, vec![d("2026-06-01"), d("2026-06-09")]);
+        assert!(
+            warns.iter().any(|w| w.contains("1 MEP")),
+            "le manque doit être signalé : {warns:?}"
+        );
+    }
+
+    #[test]
+    fn mep_fournie_sans_run_apres_est_conservee_avec_avertissement() {
+        // Choix de l'utilisateur : on avertit, on ne corrige pas.
+        let rs = runs(&["2026-06-10"]);
+        let (meps, warns) = completer_meps(
+            &rs,
+            d("2026-06-01"),
+            d("2026-12-31"),
+            &[d("2026-08-01")],
+            0,
+        );
+        assert_eq!(meps, vec![d("2026-08-01")], "la date fournie est conservée");
+        assert!(
+            warns.iter().any(|w| w.contains("2026-08-01")),
+            "la MEP concernée doit être nommée : {warns:?}"
+        );
+    }
+
+    #[test]
+    fn meps_aucun_run_candidat_averti() {
+        let (_meps, warns) = completer_meps(&[], d("2026-06-01"), d("2026-12-31"), &[], 2);
+        assert!(
+            warns.iter().any(|w| w.contains("aucun Run de Facturation")),
+            "{warns:?}"
+        );
+    }
+
+    #[test]
+    fn meps_jamais_a_la_borne_de_fin() {
+        // Invariant [debut, fin) : une MEP le dernier jour n'aurait aucun run
+        // après elle par construction.
+        let rs = runs(&["2026-06-20"]);
+        let (meps, _) = completer_meps(&rs, d("2026-06-01"), d("2026-06-30"), &[], 5);
+        assert!(meps.iter().all(|m| *m < d("2026-06-30")), "{meps:?}");
+    }
+
+    #[test]
+    fn meps_triees_et_dedoublonnees() {
+        let rs = runs(&["2026-12-01"]);
+        let (meps, _) = completer_meps(
+            &rs,
+            d("2026-06-01"),
+            d("2026-12-31"),
+            &[d("2026-08-01"), d("2026-06-15"), d("2026-08-01")],
+            0,
+        );
+        assert_eq!(meps, vec![d("2026-06-15"), d("2026-08-01")]);
+    }
+
+    #[test]
+    fn mep_de_prend_la_derniere_anterieure_pas_la_premiere() {
+        let meps = vec![d("2026-06-15"), d("2026-08-01"), d("2026-10-01")];
+        assert_eq!(mep_de(d("2026-09-10"), &meps), Some((2, d("2026-08-01"))));
+    }
+
+    #[test]
+    fn mep_de_est_strictement_anterieure() {
+        let meps = vec![d("2026-06-15"), d("2026-08-01")];
+        // Run le jour même d'une MEP : rattaché à la précédente.
+        assert_eq!(mep_de(d("2026-08-01"), &meps), Some((1, d("2026-06-15"))));
+    }
+
+    #[test]
+    fn mep_de_none_avant_toute_mep() {
+        let meps = vec![d("2026-06-15")];
+        assert_eq!(mep_de(d("2026-06-15"), &meps), None);
+        assert_eq!(mep_de(d("2026-01-01"), &meps), None);
+    }
+
+    #[test]
+    fn mep_de_numerote_a_partir_de_un() {
+        let meps = vec![d("2026-06-15"), d("2026-08-01")];
+        assert_eq!(mep_de(d("2026-07-01"), &meps).map(|(i, _)| i), Some(1));
     }
 
     #[test]
