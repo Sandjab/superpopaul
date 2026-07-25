@@ -1030,9 +1030,18 @@ Facturation"));` jusqu'à `noeuds.push(tbl);` inclus) et écrire à la place :
       tbl.append(h("tr", { class: "tl-mois" },
         h("td", { colspan: "9" }, libelleMois(j.date))));
     }
-    for (const jl of j.jalons) tbl.append(ligneJalon(j, jl));
-    if (!j.runs.length) { tbl.append(ligneVide(j)); continue; }
-    for (const r of j.runs) tbl.append(ligneRun(j, r));
+    // Les bornes encadrent le contenu du jour, elles ne le précèdent pas
+    // toutes les deux : un run posé pile sur `fin` est RETENU, donc afficher
+    // « fin de fenêtre » au-dessus de lui le montrerait hors fenêtre alors
+    // qu'il compte. Symétriquement, « début de fenêtre » doit rester au-dessus.
+    // Une MEP reste au-dessus aussi : les runs de ce jour-là sont écartés par
+    // elle, le motif se lit alors juste sous sa cause.
+    for (const jl of j.jalons.filter((x) => x.sorte !== "fin_fenetre"))
+      tbl.append(ligneJalon(j, jl));
+    if (!j.runs.length) tbl.append(ligneVide(j));
+    else for (const r of j.runs) tbl.append(ligneRun(j, r));
+    for (const jl of j.jalons.filter((x) => x.sorte === "fin_fenetre"))
+      tbl.append(ligneJalon(j, jl));
   }
   noeuds.push(h("div", { class: "tl-scroll" }, tbl));
 ```

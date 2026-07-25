@@ -58,10 +58,18 @@ Y adjoindre la distribution du pool par jour de cycle, qui répond à la questio
    les décalages de fuseau.
 6. **La case « exclure » vit dans la timeline**, une par run, y compris sur un
    run déjà écarté (un run hors fenêtre peut y rentrer si la fenêtre s'élargit).
-7. **Étendue** : de `min(première date de run, début de fenêtre)` à
-   `max(dernière date de run, fin de fenêtre)`. Les runs hors fenêtre restent
-   donc visibles avec leur motif. Sans aucun run chargé, l'étendue se réduit à
-   la fenêtre.
+7. **Étendue** : de `min(début de fenêtre, dates de runs, dates de MEP)` à
+   `max(fin de fenêtre, dates de runs, dates de MEP)`. Les runs hors fenêtre
+   restent donc visibles avec leur motif. Les MEP y entrent au même titre :
+   une MEP hors fenêtre est un cas réel — `completer_meps` conserve telle
+   quelle une MEP fournie hors fenêtre, en avertissant sans corriger — et
+   comme la première MEP décide du motif `MepNonPassee`, la cacher rendrait ce
+   motif inexplicable. Sans run ni MEP, l'étendue se réduit à la fenêtre.
+
+   **Le rendu encadre plutôt qu'il ne précède** : `DebutFenetre` et les MEP
+   s'affichent au-dessus du contenu du jour, `FinFenetre` en dessous. Un run
+   posé pile sur `fin` est retenu ; afficher « fin de fenêtre » au-dessus de
+   lui le montrerait hors fenêtre alors qu'il compte.
 8. **Pas de plafond de lignes**, contrairement à l'onglet 2 : l'étendue est
    bornée par le calendrier importé, de l'ordre de 90 jours en pratique.
 
