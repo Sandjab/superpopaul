@@ -67,8 +67,8 @@ pub fn timeline(
     runs: &[RunFacturation],
     debut: NaiveDate,
     fin: NaiveDate,
-    _meps: &[NaiveDate],
-    _details: &[DetailRun],
+    meps: &[NaiveDate],
+    details: &[DetailRun],
 ) -> Vec<JourTimeline> {
     let lo = runs.iter().map(|r| r.date).fold(debut, NaiveDate::min);
     let hi = runs.iter().map(|r| r.date).fold(fin, NaiveDate::max);
@@ -76,6 +76,36 @@ pub fn timeline(
     let mut feries: HashMap<NaiveDate, &'static str> = HashMap::new();
     for annee in lo.year()..=hi.year() {
         feries.extend(crate::calendrier::feries(annee));
+    }
+
+    let premiere_mep = meps.iter().min().copied();
+    let mut par_date: HashMap<NaiveDate, Vec<RunJour>> = HashMap::new();
+    for r in runs {
+        // Ordre délibéré : l'exclusion prime, c'est le seul motif que
+        // l'utilisateur pilote depuis l'écran.
+        let ecart = if r.exclu {
+            Some(Ecart::Exclu)
+        } else if r.date < debut || r.date > fin {
+            Some(Ecart::HorsFenetre)
+        } else if premiere_mep.is_none_or(|p| r.date <= p) {
+            Some(Ecart::MepNonPassee)
+        } else {
+            None
+        };
+        let detail = match ecart {
+            None => details.iter().find(|d| d.run_num == r.num).cloned(),
+            Some(_) => None,
+        };
+        par_date.entry(r.date).or_default().push(RunJour {
+            num: r.num.clone(),
+            jjs: r.jjs.clone(),
+            exclu: r.exclu,
+            ecart,
+            detail,
+        });
+    }
+    for v in par_date.values_mut() {
+        v.sort_by(|a, b| a.num.cmp(&b.num));
     }
 
     let mut out = Vec::new();
@@ -87,7 +117,7 @@ pub fn timeline(
             weekend: matches!(jour.weekday(), Weekday::Sat | Weekday::Sun),
             ferie: feries.get(&jour).copied(),
             jalons: Vec::new(),
-            runs: Vec::new(),
+            runs: par_date.remove(&jour).unwrap_or_default(),
         });
         jour += chrono::Duration::days(1);
     }
@@ -183,5 +213,147 @@ mod tests {
         let t = timeline(&[], d("2026-07-13"), d("2026-07-15"), &[], &[]);
         assert_eq!(t[1].ferie, Some("Fête nationale"), "le 14 juillet");
         assert_eq!(t[0].ferie, None);
+    }
+
+    fn detail(num: &str, vise: usize, place: usize) -> DetailRun {
+        DetailRun {
+            run_num: num.into(),
+            run_date: "2026-07-09".into(),
+            jjs: vec![8],
+            mep_id: 1,
+            mep_date: "2026-07-08".into(),
+            vise,
+            report_entrant: 0,
+            stock: 240,
+            place,
+            reliquat: 0,
+        }
+    }
+
+    #[test]
+    fn run_hors_fenetre_reste_visible_avec_son_motif() {
+        // Sans motif affiché, une cible non atteinte reste inexplicable :
+        // c'est le défaut de la v1 que ce lot corrige.
+        let t = timeline(
+            &[run("3327", "2026-07-22", &[19])],
+            d("2026-07-10"),
+            d("2026-07-20"),
+            &[d("2026-07-11")],
+            &[],
+        );
+        let j = t.iter().find(|j| j.date == "2026-07-22").unwrap();
+        assert_eq!(j.runs[0].ecart, Some(Ecart::HorsFenetre));
+        assert_eq!(j.runs[0].detail, None, "un run écarté n'a pas de chiffres");
+    }
+
+    #[test]
+    fn run_le_jour_meme_de_la_premiere_mep_est_ecarte() {
+        // Le filtre de runs_utilisables est STRICT (`r.date > premiere`) : un
+        // run tombant le jour de la MEP est écarté lui aussi. C'est ce cas qui
+        // interdit le libellé « avant la première MEP ».
+        let t = timeline(
+            &[run("3319", "2026-07-08", &[6])],
+            d("2026-07-01"),
+            d("2026-07-20"),
+            &[d("2026-07-08")],
+            &[],
+        );
+        let j = t.iter().find(|j| j.date == "2026-07-08").unwrap();
+        assert_eq!(j.runs[0].ecart, Some(Ecart::MepNonPassee));
+    }
+
+    #[test]
+    fn exclusion_manuelle_prime_sur_les_autres_motifs() {
+        // L'exclusion est le seul motif que l'utilisateur pilote depuis
+        // l'écran : elle doit rester lisible même sur un run par ailleurs
+        // hors fenêtre, sinon décocher la case n'a aucun effet visible.
+        let mut r = run("3321", "2026-07-30", &[9]);
+        r.exclu = true;
+        let t = timeline(&[r], d("2026-07-01"), d("2026-07-20"), &[d("2026-07-05")], &[]);
+        let j = t.iter().find(|j| j.date == "2026-07-30").unwrap();
+        assert_eq!(j.runs[0].ecart, Some(Ecart::Exclu));
+        assert!(j.runs[0].exclu);
+    }
+
+    #[test]
+    fn run_retenu_porte_ses_chiffres() {
+        let t = timeline(
+            &[run("3320", "2026-07-09", &[8])],
+            d("2026-07-01"),
+            d("2026-07-20"),
+            &[d("2026-07-08")],
+            &[detail("3320", 143, 143)],
+        );
+        let j = t.iter().find(|j| j.date == "2026-07-09").unwrap();
+        assert_eq!(j.runs[0].ecart, None);
+        assert_eq!(j.runs[0].detail.as_ref().unwrap().vise, 143);
+    }
+
+    #[test]
+    fn deux_runs_le_meme_jour_sont_tous_deux_rendus() {
+        // `parse_runs_csv` refuse deux runs à la même date, mais
+        // `PlanParams::calendrier` ne le revérifie pas en reconstruisant les
+        // runs depuis les paramètres persistés — et c'est ce chemin-là qui
+        // alimente l'écran. En perdre un en silence serait la faute que ce
+        // lot corrige.
+        let t = timeline(
+            &[run("3320", "2026-07-09", &[8]), run("3321", "2026-07-09", &[9])],
+            d("2026-07-01"),
+            d("2026-07-20"),
+            &[d("2026-07-08")],
+            &[],
+        );
+        let j = t.iter().find(|j| j.date == "2026-07-09").unwrap();
+        assert_eq!(j.runs.len(), 2);
+        assert_eq!(j.runs[0].num, "3320");
+        assert_eq!(j.runs[1].num, "3321");
+    }
+
+    #[test]
+    fn sans_aucune_mep_tout_run_est_ecarte() {
+        // `runs_utilisables` ne rend rien sans MEP : il n'y a rien à facturer.
+        let t = timeline(
+            &[run("3320", "2026-07-09", &[8])],
+            d("2026-07-01"),
+            d("2026-07-20"),
+            &[],
+            &[],
+        );
+        let j = t.iter().find(|j| j.date == "2026-07-09").unwrap();
+        assert_eq!(j.runs[0].ecart, Some(Ecart::MepNonPassee));
+    }
+
+    #[test]
+    fn les_runs_sans_ecart_sont_exactement_ceux_que_retient_le_moteur() {
+        // `Ecart` rejoue à la main le filtre de `calendrier::runs_utilisables`
+        // au lieu de l'appeler — il faut bien un motif, que le filtre ne rend
+        // pas. Deux implémentations de la même règle vivent donc dans deux
+        // modules : sans ce test, déplacer une borne dans `calendrier` ferait
+        // afficher « retenu » des runs que le plan a écartés, sans un bruit.
+        let mut exclu = run("B", "2026-07-10", &[10]);
+        exclu.exclu = true;
+        let rs = vec![
+            run("A", "2026-07-03", &[3]),  // avant la première MEP
+            exclu,                          // exclu à la main
+            run("D", "2026-07-15", &[15]), // le seul retenu
+            run("C", "2026-07-25", &[25]), // hors fenêtre
+        ];
+        let (debut, fin) = (d("2026-07-01"), d("2026-07-20"));
+        let meps = vec![d("2026-07-05")];
+
+        let affiches: Vec<String> = timeline(&rs, debut, fin, &meps, &[])
+            .iter()
+            .flat_map(|j| &j.runs)
+            .filter(|r| r.ecart.is_none())
+            .map(|r| r.num.clone())
+            .collect();
+        let retenus: Vec<String> =
+            crate::calendrier::runs_utilisables(&rs, debut, fin, &meps)
+                .iter()
+                .map(|r| r.num.clone())
+                .collect();
+
+        assert_eq!(affiches, retenus, "l'écran et le moteur doivent retenir les mêmes runs");
+        assert_eq!(affiches, vec!["D"], "seul D passe les trois filtres");
     }
 }
