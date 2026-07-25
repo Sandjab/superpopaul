@@ -1159,6 +1159,13 @@ Juste après `noeuds.push(h("div", { class: "tl-scroll" }, tbl));` :
   const atteignables = a.stock_jj.reduce((n, s) => n + (s.couvert ? s.comptes : 0), 0);
   const maxJJ = Math.max(1, ...a.stock_jj.map((s) => s.comptes));
   noeuds.push(h("h2", {}, "Stock par jour de cycle"));
+  // Sans aucune MEP, `runs_utilisables` ne retient rien et les 31 jours
+  // ressortent non couverts : 31 barres rouges diraient « tout est perdu »
+  // alors que le message utile est qu'aucun run n'est encore utilisable.
+  if (!a.timeline.some((j) => j.runs.some((r) => !r.ecart))) {
+    noeuds.push(h("p", { class: "field-hint" },
+      "Aucun Run de Facturation n'est retenu : la couverture des jours de cycle ne veut encore rien dire."));
+  }
   noeuds.push(h("p", { class: "field-hint" },
     "Comptes du pool éligible, par jour de cycle de facturation. En rouge, les jours qu'aucun run retenu ne couvre : ces comptes sont hors d'atteinte tant que le calendrier ou la fenêtre ne change pas."));
   const barres = h("div", { class: "jj-bars" });
