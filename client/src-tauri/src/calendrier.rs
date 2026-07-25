@@ -276,6 +276,53 @@ pub fn mep_de(run: NaiveDate, meps: &[NaiveDate]) -> Option<(usize, NaiveDate)> 
         .map(|(i, m)| (i + 1, *m))
 }
 
+/// Dimanche de Pâques, computus de Meeus (forme grégorienne anonyme).
+fn paques(annee: i32) -> NaiveDate {
+    let a = annee % 19;
+    let b = annee / 100;
+    let c = annee % 100;
+    let d = b / 4;
+    let e = b % 4;
+    let f = (b + 8) / 25;
+    let g = (b - f + 1) / 3;
+    let h = (19 * a + b - d - g + 15) % 30;
+    let i = c / 4;
+    let k = c % 4;
+    let l = (32 + 2 * e + 2 * i - h - k) % 7;
+    let m = (a + 11 * h + 22 * l) / 451;
+    let n = h + l - 7 * m + 114;
+    NaiveDate::from_ymd_opt(annee, (n / 31) as u32, (n % 31 + 1) as u32)
+        .expect("le computus ne produit que des dates de mars ou d'avril")
+}
+
+fn fixe(annee: i32, mois: u32, jour: u32) -> NaiveDate {
+    NaiveDate::from_ymd_opt(annee, mois, jour).expect("date fixe valide toute année")
+}
+
+/// Les onze jours fériés nationaux français de l'année, triés par date, avec
+/// leur nom. Pas de particularisme d'Alsace-Moselle : parité avec peppolstat.
+///
+/// Purement décoratifs : aucun calcul du plan ne les lit. Ils servent à
+/// comprendre un calendrier de runs, pas à le corriger.
+pub fn feries(annee: i32) -> Vec<(NaiveDate, &'static str)> {
+    let p = paques(annee);
+    let mut out = vec![
+        (fixe(annee, 1, 1), "Jour de l'an"),
+        (fixe(annee, 5, 1), "Fête du Travail"),
+        (fixe(annee, 5, 8), "Victoire 1945"),
+        (fixe(annee, 7, 14), "Fête nationale"),
+        (fixe(annee, 8, 15), "Assomption"),
+        (fixe(annee, 11, 1), "Toussaint"),
+        (fixe(annee, 11, 11), "Armistice"),
+        (fixe(annee, 12, 25), "Noël"),
+        (p + chrono::Duration::days(1), "Lundi de Pâques"),
+        (p + chrono::Duration::days(39), "Ascension"),
+        (p + chrono::Duration::days(50), "Lundi de Pentecôte"),
+    ];
+    out.sort_by_key(|(d, _)| *d);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -600,5 +647,44 @@ mod tests {
         let (runs, _) = parse_runs_csv("DATE_RUN;NUM_RUN;JJS\n11/08/2026;R1;1-5\n");
         assert!(runs[0].couvre(5));
         assert!(!runs[0].couvre(12));
+    }
+
+    #[test]
+    fn feries_2026_les_onze_dates() {
+        let f = feries(2026);
+        let dates: Vec<NaiveDate> = f.iter().map(|(d, _)| *d).collect();
+        assert_eq!(dates.len(), 11, "onze fériés nationaux, pas un de plus");
+        assert_eq!(
+            dates,
+            vec![
+                d("2026-01-01"),
+                d("2026-04-06"), // lundi de Pâques (Pâques le 5 avril)
+                d("2026-05-01"),
+                d("2026-05-08"),
+                d("2026-05-14"), // Ascension
+                d("2026-05-25"), // lundi de Pentecôte
+                d("2026-07-14"),
+                d("2026-08-15"),
+                d("2026-11-01"),
+                d("2026-11-11"),
+                d("2026-12-25"),
+            ],
+            "les fériés sortent triés par date"
+        );
+        let noms: Vec<&str> = f.iter().map(|(_, n)| *n).collect();
+        assert!(
+            noms.contains(&"Ascension") && noms.contains(&"Lundi de Pentecôte"),
+            "les trois fériés mobiles sont nommés, pas laissés sous un « férié » générique"
+        );
+    }
+
+    #[test]
+    fn feries_annee_bissextile_propagent_le_decalage() {
+        // 2024 est bissextile : si le décalage de février n'était pas propagé,
+        // les fériés mobiles glisseraient d'un jour.
+        let dates: Vec<NaiveDate> = feries(2024).iter().map(|(d, _)| *d).collect();
+        assert!(dates.contains(&d("2024-04-01")), "lundi de Pâques (Pâques le 31 mars)");
+        assert!(dates.contains(&d("2024-05-09")), "Ascension");
+        assert!(dates.contains(&d("2024-05-20")), "lundi de Pentecôte");
     }
 }
