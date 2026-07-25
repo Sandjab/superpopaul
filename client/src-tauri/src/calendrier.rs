@@ -295,8 +295,9 @@ fn paques(annee: i32) -> NaiveDate {
         .expect("le computus ne produit que des dates de mars ou d'avril")
 }
 
-fn fixe(annee: i32, mois: u32, jour: u32) -> NaiveDate {
-    NaiveDate::from_ymd_opt(annee, mois, jour).expect("date fixe valide toute année")
+fn date_fixe(annee: i32, mois: u32, jour: u32) -> NaiveDate {
+    NaiveDate::from_ymd_opt(annee, mois, jour)
+        .expect("aucun férié fixe français ne tombe un 29 février")
 }
 
 /// Les onze jours fériés nationaux français de l'année, triés par date, avec
@@ -307,14 +308,14 @@ fn fixe(annee: i32, mois: u32, jour: u32) -> NaiveDate {
 pub fn feries(annee: i32) -> Vec<(NaiveDate, &'static str)> {
     let p = paques(annee);
     let mut out = vec![
-        (fixe(annee, 1, 1), "Jour de l'an"),
-        (fixe(annee, 5, 1), "Fête du Travail"),
-        (fixe(annee, 5, 8), "Victoire 1945"),
-        (fixe(annee, 7, 14), "Fête nationale"),
-        (fixe(annee, 8, 15), "Assomption"),
-        (fixe(annee, 11, 1), "Toussaint"),
-        (fixe(annee, 11, 11), "Armistice"),
-        (fixe(annee, 12, 25), "Noël"),
+        (date_fixe(annee, 1, 1), "Jour de l'an"),
+        (date_fixe(annee, 5, 1), "Fête du Travail"),
+        (date_fixe(annee, 5, 8), "Victoire 1945"),
+        (date_fixe(annee, 7, 14), "Fête nationale"),
+        (date_fixe(annee, 8, 15), "Assomption"),
+        (date_fixe(annee, 11, 1), "Toussaint"),
+        (date_fixe(annee, 11, 11), "Armistice"),
+        (date_fixe(annee, 12, 25), "Noël"),
         (p + chrono::Duration::days(1), "Lundi de Pâques"),
         (p + chrono::Duration::days(39), "Ascension"),
         (p + chrono::Duration::days(50), "Lundi de Pentecôte"),
@@ -692,12 +693,40 @@ mod tests {
     }
 
     #[test]
-    fn feries_annee_bissextile_propagent_le_decalage() {
-        // 2024 est bissextile : si le décalage de février n'était pas propagé,
-        // les fériés mobiles glisseraient d'un jour.
+    fn feries_2024_mobiles_ancres_sur_paques() {
+        // Deuxième année indépendante de 2026 : un décalage 1/39/50 mal
+        // transcrit, ou un computus juste par coïncidence sur la seule année
+        // 2026, se verrait ici (Pâques 2024 tombe le 31 mars).
         let dates: Vec<NaiveDate> = feries(2024).iter().map(|(d, _)| *d).collect();
-        assert!(dates.contains(&d("2024-04-01")), "lundi de Pâques (Pâques le 31 mars)");
-        assert!(dates.contains(&d("2024-05-09")), "Ascension");
-        assert!(dates.contains(&d("2024-05-20")), "lundi de Pentecôte");
+        assert_eq!(
+            dates,
+            vec![
+                d("2024-01-01"),
+                d("2024-04-01"), // lundi de Pâques (Pâques le 31 mars)
+                d("2024-05-01"),
+                d("2024-05-08"),
+                d("2024-05-09"), // Ascension
+                d("2024-05-20"), // lundi de Pentecôte
+                d("2024-07-14"),
+                d("2024-08-15"),
+                d("2024-11-01"),
+                d("2024-11-11"),
+                d("2024-12-25"),
+            ]
+        );
+    }
+
+    #[test]
+    fn feries_2049_couvre_la_correction_m_du_computus() {
+        // Le terme m = (a + 11h + 22l) / 451 du computus de Meeus vaut 0 en
+        // 2024 comme en 2026 : aucun des deux tests précédents ne l'exerce.
+        // Sur 2000-2100 il ne vaut 1 qu'en 2049 et 2076. Référence établie à
+        // la main par l'algorithme de Gauss (indépendant du computus testé
+        // ici), qui donne Pâques 2049 le 18 avril — si m était resté à 0 par
+        // erreur de transcription, le calcul donnerait le 25 avril.
+        let dates: Vec<NaiveDate> = feries(2049).iter().map(|(d, _)| *d).collect();
+        assert!(dates.contains(&d("2049-04-19")), "lundi de Pâques (Pâques le 18 avril)");
+        assert!(dates.contains(&d("2049-05-27")), "Ascension");
+        assert!(dates.contains(&d("2049-06-07")), "lundi de Pentecôte");
     }
 }
