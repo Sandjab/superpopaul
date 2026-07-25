@@ -17,7 +17,11 @@ use std::collections::HashMap;
 pub enum Jalon {
     DebutFenetre,
     FinFenetre,
-    /// 1-basé, comme `DetailRun.mep_id`.
+    /// 1-basé, comme `DetailRun.mep_id` — mais seulement si l'appelant fournit
+    /// ses dates de MEP déjà triées : `timeline` numérote sur sa propre copie
+    /// triée, `calendrier::mep_de` sur le slice brut reçu. Sans effet en
+    /// production (`PlanParams::calendrier` trie déjà `meps`), mais `timeline`
+    /// reste appelable directement sans cette garantie.
     Mep { rang: usize },
 }
 
@@ -111,8 +115,8 @@ pub fn timeline(
     meps: &[NaiveDate],
     details: &[DetailRun],
 ) -> Vec<JourTimeline> {
-    let lo = runs.iter().map(|r| r.date).fold(debut, NaiveDate::min);
-    let hi = runs.iter().map(|r| r.date).fold(fin, NaiveDate::max);
+    let lo = runs.iter().map(|r| r.date).chain(meps.iter().copied()).fold(debut, NaiveDate::min);
+    let hi = runs.iter().map(|r| r.date).chain(meps.iter().copied()).fold(fin, NaiveDate::max);
 
     let mut feries: HashMap<NaiveDate, &'static str> = HashMap::new();
     for annee in lo.year()..=hi.year() {
@@ -562,6 +566,10 @@ mod tests {
 
     #[test]
     fn bornes_de_fenetre_posees_sur_leurs_jours() {
+        // Sans run ni MEP, `debut == lo` et `fin == hi` : ce montage ne
+        // distingue donc pas borne de fenêtre et bord de l'étendue, ce rôle
+        // revenant aux deux tests dédiés (`la_borne_de_debut_...` et son
+        // symétrique côté fin).
         let t = timeline(&[], d("2026-07-10"), d("2026-07-12"), &[], &[]);
         assert_eq!(t[0].jalons, vec![Jalon::DebutFenetre]);
         assert_eq!(t[1].jalons, vec![]);
@@ -589,6 +597,40 @@ mod tests {
     }
 
     #[test]
+    fn la_borne_de_fin_ne_suit_pas_la_derniere_ligne_affichee() {
+        // Symétrique du test ci-dessus, côté fin. `hi` vaut max(fin, dates de
+        // runs) : dès qu'un run suit la fenêtre, le jalon de fin tombe au
+        // milieu du tableau et non en queue. Un rendu qui supposerait
+        // « dernière ligne = fin de fenêtre » afficherait à tort le run hors
+        // fenêtre comme s'il comptait encore.
+        let t = timeline(
+            &[run("3300", "2026-07-15", &[5])],
+            d("2026-07-10"),
+            d("2026-07-12"),
+            &[],
+            &[],
+        );
+        assert_eq!(t.last().unwrap().date, "2026-07-15", "l'étendue va jusqu'au run, pas à la fenêtre");
+        assert_eq!(t.last().unwrap().jalons, vec![], "et cette dernière ligne ne porte aucun jalon");
+        let fin = t.iter().find(|j| j.date == "2026-07-12").unwrap();
+        assert_eq!(fin.jalons, vec![Jalon::FinFenetre]);
+    }
+
+    #[test]
+    fn une_mep_hors_fenetre_etend_l_etendue_et_porte_son_jalon() {
+        // Une MEP hors fenêtre est un cas réel : `completer_meps` conserve
+        // telle quelle une MEP fournie hors fenêtre, en avertissant sans la
+        // corriger. Si elle n'étendait pas l'étendue comme le font les dates
+        // de runs, elle serait construite dans la table `jalons` puis jamais
+        // lue : l'écran retiendrait des runs grâce à une première MEP qu'il
+        // ne montrerait nulle part — l'opacité que ce lot supprime, cette
+        // fois sur la MEP plutôt que sur le run.
+        let t = timeline(&[], d("2026-07-10"), d("2026-07-15"), &[d("2026-07-01")], &[]);
+        assert_eq!(t[0].date, "2026-07-01", "l'étendue commence à la MEP, pas à la fenêtre");
+        assert_eq!(t[0].jalons, vec![Jalon::Mep { rang: 1 }]);
+    }
+
+    #[test]
     fn meps_numerotees_dans_l_ordre_chronologique() {
         // Le rang affiché doit suivre les dates, pas l'ordre de saisie :
         // « MEP 2 » avant « MEP 1 » sur le calendrier serait un contresens.
@@ -608,7 +650,9 @@ mod tests {
     #[test]
     fn plusieurs_jalons_le_meme_jour_sont_tous_rendus() {
         // Une MEP posée le dernier jour de la fenêtre : en perdre un des deux
-        // rendrait le calendrier faux.
+        // rendrait le calendrier faux. L'assertion verrouille aussi l'ORDRE —
+        // MEP avant la borne, volontairement (voir `timeline`) : ce n'est pas
+        // un détail insignifiant à « corriger » si ce test devient rouge un jour.
         let t = timeline(&[], d("2026-07-01"), d("2026-07-10"), &[d("2026-07-10")], &[]);
         let dernier = t.last().unwrap();
         assert_eq!(dernier.jalons, vec![Jalon::Mep { rang: 1 }, Jalon::FinFenetre]);
@@ -633,5 +677,36 @@ mod tests {
         );
         let j5 = t.iter().find(|j| j.date == "2026-07-05").unwrap();
         assert_eq!(j5.jalons, vec![Jalon::Mep { rang: 1 }]);
+    }
+
+    // L'UI (le rendu de la timeline en JS) se fie à cette forme JSON exacte :
+    // tag interne `sorte` en snake_case, `rang` à plat sur le variant `mep`.
+    #[test]
+    fn jalon_serialise_avec_tag_sorte() {
+        let debut = serde_json::to_value(Jalon::DebutFenetre).unwrap();
+        assert_eq!(debut, serde_json::json!({"sorte": "debut_fenetre"}));
+        let fin = serde_json::to_value(Jalon::FinFenetre).unwrap();
+        assert_eq!(fin, serde_json::json!({"sorte": "fin_fenetre"}));
+        let mep = serde_json::to_value(Jalon::Mep { rang: 3 }).unwrap();
+        assert_eq!(mep, serde_json::json!({"sorte": "mep", "rang": 3}));
+    }
+
+    // L'UI se fie à cette forme JSON exacte : une chaîne nue en snake_case,
+    // sans tag — à la différence de `Jalon` — pour chacun des quatre motifs.
+    #[test]
+    fn ecart_serialise_en_chaine_nue() {
+        assert_eq!(serde_json::to_value(Ecart::Exclu).unwrap(), serde_json::json!("exclu"));
+        assert_eq!(
+            serde_json::to_value(Ecart::HorsFenetre).unwrap(),
+            serde_json::json!("hors_fenetre")
+        );
+        assert_eq!(
+            serde_json::to_value(Ecart::MepNonPassee).unwrap(),
+            serde_json::json!("mep_non_passee")
+        );
+        assert_eq!(
+            serde_json::to_value(Ecart::AucuneMep).unwrap(),
+            serde_json::json!("aucune_mep")
+        );
     }
 }
