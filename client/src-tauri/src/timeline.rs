@@ -263,6 +263,31 @@ mod tests {
     }
 
     #[test]
+    fn runs_sur_les_bornes_de_fenetre_sont_retenus() {
+        // Les deux comparaisons de `timeline.rs:88` sont strictes (`<` / `>`) :
+        // les bornes elles-mêmes appartiennent à la fenêtre. Muter l'une en
+        // `<=`/`>=` ferait basculer à tort en `HorsFenetre` un run posé pile
+        // sur `debut` ou `fin`, alors que le moteur le retient.
+        let t = timeline(
+            &[run("3330", "2026-07-01", &[1]), run("3331", "2026-07-20", &[20])],
+            d("2026-07-01"),
+            d("2026-07-20"),
+            &[d("2026-06-20")],
+            &[],
+        );
+        assert_eq!(
+            t.iter().find(|j| j.date == "2026-07-01").unwrap().runs[0].ecart,
+            None,
+            "le premier jour de la fenêtre est retenu"
+        );
+        assert_eq!(
+            t.iter().find(|j| j.date == "2026-07-20").unwrap().runs[0].ecart,
+            None,
+            "le dernier jour de la fenêtre est retenu"
+        );
+    }
+
+    #[test]
     fn run_hors_fenetre_et_avant_la_premiere_mep_affiche_hors_fenetre() {
         // Le motif affiché est un conseil d'action déguisé. Un run du 15 juin,
         // avec une fenêtre qui commence en juillet et une première MEP le
@@ -310,14 +335,36 @@ mod tests {
     }
 
     #[test]
+    fn run_ecarte_ignore_le_detail_fourni_pour_lui() {
+        // Les tests de runs écartés passent tous `details: &[]` : l'assertion
+        // `detail == None` y est vacante puisqu'aucun détail n'existe pour
+        // personne. Ici un détail EXISTE bel et bien pour le run écarté — il
+        // ne doit quand même pas lui être attaché.
+        let t = timeline(
+            &[run("3327", "2026-07-22", &[19])],
+            d("2026-07-10"),
+            d("2026-07-20"),
+            &[d("2026-07-11")],
+            &[detail("3327", 50, 50)],
+        );
+        let j = t.iter().find(|j| j.date == "2026-07-22").unwrap();
+        assert_eq!(j.runs[0].ecart, Some(Ecart::HorsFenetre));
+        assert_eq!(
+            j.runs[0].detail, None,
+            "un détail existant ne doit pas être attaché à un run écarté"
+        );
+    }
+
+    #[test]
     fn deux_runs_le_meme_jour_sont_tous_deux_rendus() {
         // `parse_runs_csv` refuse deux runs à la même date, mais
         // `PlanParams::calendrier` ne le revérifie pas en reconstruisant les
         // runs depuis les paramètres persistés — et c'est ce chemin-là qui
         // alimente l'écran. En perdre un en silence serait la faute que ce
-        // lot corrige.
+        // lot corrige. Insérés en ordre inverse (3321 avant 3320) : sans le
+        // tri par numéro, l'ordre resterait celui d'insertion.
         let t = timeline(
-            &[run("3320", "2026-07-09", &[8]), run("3321", "2026-07-09", &[9])],
+            &[run("3321", "2026-07-09", &[9]), run("3320", "2026-07-09", &[8])],
             d("2026-07-01"),
             d("2026-07-20"),
             &[d("2026-07-08")],
@@ -350,16 +397,72 @@ mod tests {
         // pas. Deux implémentations de la même règle vivent donc dans deux
         // modules : sans ce test, déplacer une borne dans `calendrier` ferait
         // afficher « retenu » des runs que le plan a écartés, sans un bruit.
-        let mut exclu = run("B", "2026-07-10", &[10]);
+        // L'échantillon pose un run pile sur `fin` (F) et un pile sur la
+        // première MEP elle-même (G) : ce sont deux des bornes exactes que
+        // `runs_utilisables` compare, et un glissement de l'une resterait
+        // invisible sans un run posé dessus. Le run exclu (B) est lui-même
+        // DANS la fenêtre et avant la MEP : sans l'exclusion, seul le filtre
+        // MEP le bloquerait, ce qui isole aussi la priorité
+        // Exclu > MepNonPassee. La borne `debut` ne peut pas rejoindre cet
+        // échantillon : elle exigerait une première MEP antérieure à `debut`,
+        // incompatible avec G qui doit rester dans la fenêtre — elle est
+        // couverte séparément par `le_run_du_debut_de_fenetre_suit_le_moteur`.
+        let mut exclu = run("B", "2026-07-04", &[4]);
         exclu.exclu = true;
         let rs = vec![
             run("A", "2026-07-03", &[3]),  // avant la première MEP
-            exclu,                          // exclu à la main
-            run("D", "2026-07-15", &[15]), // le seul retenu
+            exclu,                          // exclu, dans la fenêtre, avant la MEP
+            run("D", "2026-07-15", &[15]), // retenu, au milieu de la fenêtre
             run("C", "2026-07-25", &[25]), // hors fenêtre
+            run("F", "2026-07-20", &[20]), // retenu, pile sur la fin de fenêtre
+            run("G", "2026-07-05", &[5]),  // écarté, pile sur la première MEP
         ];
         let (debut, fin) = (d("2026-07-01"), d("2026-07-20"));
         let meps = vec![d("2026-07-05")];
+
+        let t = timeline(&rs, debut, fin, &meps, &[]);
+
+        assert_eq!(
+            t.iter().find(|j| j.date == "2026-07-04").unwrap().runs[0].ecart,
+            Some(Ecart::Exclu),
+            "un run exclu dans la fenêtre et avant la MEP reste Exclu, pas MepNonPassee"
+        );
+
+        let mut affiches: Vec<String> = t
+            .iter()
+            .flat_map(|j| &j.runs)
+            .filter(|r| r.ecart.is_none())
+            .map(|r| r.num.clone())
+            .collect();
+        let mut retenus: Vec<String> =
+            crate::calendrier::runs_utilisables(&rs, debut, fin, &meps)
+                .iter()
+                .map(|r| r.num.clone())
+                .collect();
+        // `runs_utilisables` préserve l'ordre d'entrée, `timeline` sort en
+        // ordre chronologique puis par numéro : les deux ordres coïncident en
+        // production (`PlanParams::calendrier` trie déjà ainsi), mais ici on
+        // veut comparer l'ENSEMBLE retenu, pas son ordre.
+        affiches.sort();
+        retenus.sort();
+
+        assert_eq!(affiches, retenus, "l'écran et le moteur doivent retenir le même ensemble de runs");
+        assert_eq!(affiches, vec!["D", "F"], "D et F sont les deux seuls à passer les trois filtres");
+    }
+
+    #[test]
+    fn le_run_du_debut_de_fenetre_suit_le_moteur() {
+        // Séparé du test miroir principal : y ajouter un run pile sur `debut`
+        // exigerait une première MEP antérieure à `debut`, incompatible avec
+        // le run G posé sur la MEP elle-même là-bas (qui doit, lui, rester
+        // dans la fenêtre) — les deux bornes ne peuvent pas être observées
+        // avec la même première MEP. Referme la borne manquante : si
+        // `runs_utilisables` mutait `r.date >= debut` en `r.date > debut`,
+        // ce run pile sur `debut` serait exclu par le moteur réel tout en
+        // restant retenu par la copie de `timeline` — divergence détectée.
+        let rs = vec![run("H", "2026-07-01", &[1])];
+        let (debut, fin) = (d("2026-07-01"), d("2026-07-20"));
+        let meps = vec![d("2026-06-20")];
 
         let affiches: Vec<String> = timeline(&rs, debut, fin, &meps, &[])
             .iter()
@@ -367,13 +470,12 @@ mod tests {
             .filter(|r| r.ecart.is_none())
             .map(|r| r.num.clone())
             .collect();
-        let retenus: Vec<String> =
-            crate::calendrier::runs_utilisables(&rs, debut, fin, &meps)
-                .iter()
-                .map(|r| r.num.clone())
-                .collect();
+        let retenus: Vec<String> = crate::calendrier::runs_utilisables(&rs, debut, fin, &meps)
+            .iter()
+            .map(|r| r.num.clone())
+            .collect();
 
-        assert_eq!(affiches, retenus, "l'écran et le moteur doivent retenir les mêmes runs");
-        assert_eq!(affiches, vec!["D"], "seul D passe les trois filtres");
+        assert_eq!(affiches, retenus, "l'écran et le moteur doivent retenir le même ensemble de runs");
+        assert_eq!(affiches, vec!["H"], "le run pile sur le début de fenêtre est retenu");
     }
 }
