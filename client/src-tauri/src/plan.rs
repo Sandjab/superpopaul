@@ -404,6 +404,38 @@ pub struct LignePlan {
     pub origine: Origine,
     pub in_directory: bool,
     pub resolved_at: i64,
+    /// Horodatage d'affectation (rempli à l'écriture, 0 avant).
+    pub planned_at: i64,
+    /// Retrait manuel. La ligne n'est jamais supprimée : elle est conservée
+    /// avec son motif, exclue des fichiers, des comptages et du re-tirage —
+    /// sinon impossible d'expliquer plus tard pourquoi un fichier a changé.
+    pub retire: Option<Retrait>,
+}
+
+/// Trace d'un retrait manuel. Le motif est **obligatoire** : un retrait sans
+/// motif est ingérable six mois plus tard.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Retrait {
+    pub le: i64,
+    pub motif: String,
+}
+
+impl LignePlan {
+    /// Gelée = rattachée à une MEP déjà passée. **Calculé, jamais stocké** :
+    /// une ligne bascule seule le jour venu, comme le statut CTC.
+    pub fn gelee(&self, aujourdhui: chrono::NaiveDate) -> bool {
+        self.mep_date < aujourdhui
+    }
+
+    /// Épinglée = issue d'une retouche manuelle, donc préservée à la
+    /// régénération.
+    pub fn epinglee(&self) -> bool {
+        self.origine == Origine::Manuel
+    }
+
+    pub fn retiree(&self) -> bool {
+        self.retire.is_some()
+    }
 }
 
 /// Hash FNV-1a 64 bits d'un compte, salé par le seed. Remplace le
@@ -614,6 +646,8 @@ fn ligne_de(
         origine,
         in_directory: c.in_directory,
         resolved_at: c.resolved_at,
+        planned_at: 0,
+        retire: None,
     }
 }
 

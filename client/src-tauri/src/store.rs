@@ -1,3 +1,4 @@
+use crate::plan::{LignePlan, Origine, Retrait};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -59,6 +60,22 @@ pub struct PpfFlags {
     pub usable: bool,      // ppf_usable   — ≥1 même ligne (C|P) ET pdp_fictive=0
 }
 
+/// Métadonnées du plan enregistré (table 1-ligne). Le fichier source et son
+/// empreinte permettent d'avertir quand on régénère depuis une autre entrée
+/// que celle qui a produit les lignes gelées.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct PlanMeta {
+    pub fichier: String,
+    /// SHA-256 du contenu du CSV source.
+    pub hash: String,
+    pub genere_le: i64,
+    /// Paramètres du plan (fenêtre, MEP, rampe, seed, exclusions, calendrier),
+    /// sérialisés en YAML comme le reste de la configuration du projet. Écrits
+    /// dans la MÊME transaction que les lignes : deux artefacts séparés
+    /// divergeraient en silence.
+    pub params_yaml: String,
+}
+
 pub struct Store {
     conn: Connection,
 }
@@ -99,6 +116,31 @@ CREATE TABLE IF NOT EXISTS ppf_files (
   is_duplicate  INTEGER NOT NULL,
   loaded_at     INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS plan_cf (
+  cf              TEXT PRIMARY KEY,
+  participant     TEXT NOT NULL,
+  jj              INTEGER NOT NULL,
+  raison_sociale  TEXT,
+  pa              TEXT,
+  mep_id          INTEGER NOT NULL,
+  mep_date        TEXT NOT NULL,
+  run_num         TEXT NOT NULL,
+  run_date        TEXT NOT NULL,
+  origine         TEXT NOT NULL,
+  in_directory    INTEGER,
+  resolved_at     INTEGER,
+  planned_at      INTEGER NOT NULL,
+  retire_le       INTEGER,
+  retire_motif    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_plan_cf_mep ON plan_cf(mep_id);
+CREATE TABLE IF NOT EXISTS plan_meta (
+  id           INTEGER PRIMARY KEY CHECK (id = 1),
+  fichier      TEXT NOT NULL,
+  hash         TEXT NOT NULL,
+  genere_le    INTEGER NOT NULL,
+  params_yaml  TEXT NOT NULL
+);
 ";
 
 const UPSERT_SQL: &str = "INSERT INTO resolutions
@@ -131,6 +173,34 @@ fn to_stored(participant: &str) -> String {
 /// Inverse de `to_stored`.
 fn from_stored(stored: &str) -> String {
     crate::pid::canonical(stored)
+}
+
+/// Valeur stockée de `plan_cf.origine`. Écrite en clair pour qu'une requête
+/// SQL ad-hoc reste lisible.
+fn origine_texte(o: Origine) -> &'static str {
+    match o {
+        Origine::Auto => "auto",
+        Origine::Couverture => "couverture",
+        Origine::Manuel => "manuel",
+    }
+}
+
+/// Une valeur inconnue retombe sur `Auto` : une ligne au libellé abîmé reste
+/// une ligne allouée, elle ne doit pas devenir épinglée par accident (ce qui
+/// la ferait survivre à toutes les régénérations).
+fn origine_de(texte: &str) -> Origine {
+    match texte {
+        "couverture" => Origine::Couverture,
+        "manuel" => Origine::Manuel,
+        _ => Origine::Auto,
+    }
+}
+
+/// Date stockée en ISO. Une valeur illisible retombe sur l'époque : le plan
+/// reste consultable, et la date aberrante saute aux yeux.
+fn parse_jour(iso: &str) -> chrono::NaiveDate {
+    chrono::NaiveDate::parse_from_str(iso, "%Y-%m-%d")
+        .unwrap_or_else(|_| chrono::NaiveDate::from_ymd_opt(1970, 1, 1).expect("date valide"))
 }
 
 impl Store {
@@ -515,6 +585,119 @@ impl Store {
         tx.execute_batch("DELETE FROM ppf_directory; DELETE FROM ppf_files;")
             .map_err(|e| e.to_string())?;
         tx.commit().map_err(|e| e.to_string())
+    }
+
+    /// Remplace intégralement le plan et ses paramètres dans UNE transaction —
+    /// même discipline que `replace_peppol_directory` : les paramètres ne
+    /// peuvent pas diverger des lignes qu'ils ont produites. Un seul plan
+    /// actif à la fois.
+    ///
+    /// `participant` est écrit en forme STOCKÉE (0225 nu), pour rester
+    /// joignable directement à `ppf_directory` sans `substr`.
+    pub fn ecrire_plan(&self, lignes: &[LignePlan], meta: &PlanMeta) -> Result<(), String> {
+        let tx = self.conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        tx.execute_batch("DELETE FROM plan_cf; DELETE FROM plan_meta;")
+            .map_err(|e| e.to_string())?;
+        {
+            let mut stmt = tx
+                .prepare_cached(
+                    "INSERT INTO plan_cf (cf, participant, jj, raison_sociale, pa, mep_id,
+                        mep_date, run_num, run_date, origine, in_directory, resolved_at,
+                        planned_at, retire_le, retire_motif)
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
+                )
+                .map_err(|e| e.to_string())?;
+            for l in lignes {
+                stmt.execute(params![
+                    l.cf,
+                    to_stored(&l.participant),
+                    l.jj,
+                    l.raison_sociale,
+                    l.pa,
+                    l.mep_id as i64,
+                    l.mep_date.to_string(),
+                    l.run_num,
+                    l.run_date.to_string(),
+                    origine_texte(l.origine),
+                    l.in_directory,
+                    l.resolved_at,
+                    l.planned_at,
+                    l.retire.as_ref().map(|r| r.le),
+                    l.retire.as_ref().map(|r| r.motif.clone()),
+                ])
+                .map_err(|e| e.to_string())?;
+            }
+        }
+        tx.execute(
+            "INSERT INTO plan_meta (id, fichier, hash, genere_le, params_yaml)
+             VALUES (1, ?1, ?2, ?3, ?4)",
+            params![meta.fichier, meta.hash, meta.genere_le, meta.params_yaml],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())
+    }
+
+    /// Relit le plan enregistré, `None` s'il n'y en a aucun. Les adressages
+    /// sont rendus en forme longue (`from_stored`).
+    pub fn charger_plan(&self) -> Result<Option<(Vec<LignePlan>, PlanMeta)>, String> {
+        let meta = self
+            .conn
+            .query_row(
+                "SELECT fichier, hash, genere_le, params_yaml FROM plan_meta WHERE id = 1",
+                [],
+                |r| {
+                    Ok(PlanMeta {
+                        fichier: r.get(0)?,
+                        hash: r.get(1)?,
+                        genere_le: r.get(2)?,
+                        params_yaml: r.get(3)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        let Some(meta) = meta else {
+            return Ok(None);
+        };
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT cf, participant, jj, raison_sociale, pa, mep_id, mep_date,
+                        run_num, run_date, origine, in_directory, resolved_at,
+                        planned_at, retire_le, retire_motif
+                 FROM plan_cf ORDER BY mep_id, run_date, cf",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |r| {
+                let retire_le: Option<i64> = r.get(13)?;
+                let retire_motif: Option<String> = r.get(14)?;
+                Ok(LignePlan {
+                    cf: r.get(0)?,
+                    participant: from_stored(&r.get::<_, String>(1)?),
+                    jj: r.get(2)?,
+                    raison_sociale: r.get::<_, Option<String>>(3)?.unwrap_or_default(),
+                    pa: r.get::<_, Option<String>>(4)?.unwrap_or_default(),
+                    mep_id: r.get::<_, i64>(5)? as usize,
+                    mep_date: parse_jour(&r.get::<_, String>(6)?),
+                    run_num: r.get(7)?,
+                    run_date: parse_jour(&r.get::<_, String>(8)?),
+                    origine: origine_de(&r.get::<_, String>(9)?),
+                    in_directory: r.get::<_, Option<bool>>(10)?.unwrap_or(false),
+                    resolved_at: r.get::<_, Option<i64>>(11)?.unwrap_or(0),
+                    planned_at: r.get(12)?,
+                    retire: retire_le.map(|le| Retrait {
+                        le,
+                        motif: retire_motif.unwrap_or_default(),
+                    }),
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        let mut lignes = Vec::new();
+        for l in rows {
+            lignes.push(l.map_err(|e| e.to_string())?);
+        }
+        Ok(Some((lignes, meta)))
     }
 }
 
@@ -1135,5 +1318,123 @@ mod tests {
             .unwrap();
         assert_eq!(intact, "iso6523-actorid-upis::0009:1", "le non-0225 est intact");
         assert!(s.get(PID_LONG).unwrap().is_some(), "joignable par la forme longue");
+    }
+
+    // ------------------------------------------------------------ plan
+
+    fn jour(iso: &str) -> chrono::NaiveDate {
+        chrono::NaiveDate::parse_from_str(iso, "%Y-%m-%d").unwrap()
+    }
+
+    fn ligne(cf: &str, participant: &str) -> LignePlan {
+        LignePlan {
+            cf: cf.into(),
+            participant: participant.into(),
+            jj: 5,
+            raison_sociale: "ACME".into(),
+            pa: "Cegedim".into(),
+            mep_id: 1,
+            mep_date: jour("2026-06-15"),
+            run_num: "R1".into(),
+            run_date: jour("2026-08-11"),
+            origine: Origine::Auto,
+            in_directory: true,
+            resolved_at: 1_700_000_000,
+            planned_at: 1_800_000_000,
+            retire: None,
+        }
+    }
+
+    fn meta() -> PlanMeta {
+        PlanMeta {
+            fichier: "clients.csv".into(),
+            hash: "abc123".into(),
+            genere_le: 1_800_000_000,
+            params_yaml: "seed: 42\n".into(),
+        }
+    }
+
+    #[test]
+    fn plan_absent_au_depart() {
+        let s = Store::open_in_memory().unwrap();
+        assert!(s.charger_plan().unwrap().is_none());
+    }
+
+    #[test]
+    fn plan_aller_retour_fidele() {
+        let s = Store::open_in_memory().unwrap();
+        let mut l2 = ligne("CF2", "iso6523-actorid-upis::0009:1");
+        l2.origine = Origine::Manuel;
+        l2.retire = Some(Retrait { le: 1_900_000_000, motif: "migration repoussée".into() });
+        l2.jj = 20;
+        l2.mep_id = 2;
+        let lignes = vec![ligne("CF1", PID_LONG), l2.clone()];
+        s.ecrire_plan(&lignes, &meta()).unwrap();
+
+        let (relues, m) = s.charger_plan().unwrap().expect("plan présent");
+        assert_eq!(m, meta());
+        assert_eq!(relues.len(), 2);
+        let r2 = relues.iter().find(|l| l.cf == "CF2").unwrap();
+        assert_eq!(r2.origine, Origine::Manuel);
+        assert_eq!(r2.retire, l2.retire);
+        assert_eq!(r2.jj, 20);
+        assert_eq!(r2.mep_date, jour("2026-06-15"));
+    }
+
+    #[test]
+    fn plan_stocke_l_adressage_0225_en_forme_nue_et_le_relit_en_forme_longue() {
+        // Même discipline que `resolutions` : la base indexe le 0225 nu pour
+        // joindre ppf_directory sans substr.
+        let s = Store::open_in_memory().unwrap();
+        s.ecrire_plan(&[ligne("CF1", PID_LONG)], &meta()).unwrap();
+        let nu: String = s
+            .conn
+            .query_row("SELECT participant FROM plan_cf", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(nu, PID_NU, "stocké nu");
+        let (relues, _) = s.charger_plan().unwrap().unwrap();
+        assert_eq!(relues[0].participant, PID_LONG, "relu en forme longue");
+    }
+
+    #[test]
+    fn plan_remplace_integralement_l_ancien() {
+        let s = Store::open_in_memory().unwrap();
+        s.ecrire_plan(&[ligne("CF1", PID_LONG), ligne("CF2", PID_LONG)], &meta())
+            .unwrap();
+        let mut m2 = meta();
+        m2.fichier = "autre.csv".into();
+        s.ecrire_plan(&[ligne("CF3", PID_LONG)], &m2).unwrap();
+        let (relues, m) = s.charger_plan().unwrap().unwrap();
+        assert_eq!(relues.len(), 1, "l'ancien plan a disparu");
+        assert_eq!(relues[0].cf, "CF3");
+        assert_eq!(m.fichier, "autre.csv", "une seule ligne de méta");
+    }
+
+    #[test]
+    fn plan_echec_en_cours_ne_laisse_ni_lignes_ni_meta_divergentes() {
+        // Deux lignes de même CF : la PK rejette la seconde. La transaction
+        // doit tout annuler — sinon on garderait des lignes partielles avec
+        // une méta décrivant un plan qui n'existe pas.
+        let s = Store::open_in_memory().unwrap();
+        s.ecrire_plan(&[ligne("CF1", PID_LONG)], &meta()).unwrap();
+
+        let doublon = vec![ligne("CFX", PID_LONG), ligne("CFX", PID_LONG)];
+        let mut m2 = meta();
+        m2.fichier = "casse.csv".into();
+        assert!(s.ecrire_plan(&doublon, &m2).is_err());
+
+        let (relues, m) = s.charger_plan().unwrap().expect("le plan précédent survit");
+        assert_eq!(relues.len(), 1);
+        assert_eq!(relues[0].cf, "CF1");
+        assert_eq!(m.fichier, "clients.csv", "la méta n'a pas bougé");
+    }
+
+    #[test]
+    fn plan_vide_est_ecrit_sans_lignes_mais_avec_meta() {
+        let s = Store::open_in_memory().unwrap();
+        s.ecrire_plan(&[], &meta()).unwrap();
+        let (relues, m) = s.charger_plan().unwrap().expect("méta présente");
+        assert!(relues.is_empty());
+        assert_eq!(m, meta());
     }
 }
