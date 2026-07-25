@@ -461,3 +461,132 @@ table.ppf-files { border-collapse: collapse; width: 100%; margin: 6px 0 0; font-
 .ppf-files td.added.pos b { color: var(--green); }
 .ppf-files td.added.zero { color: var(--muted); }
 .ppf-files td.when { color: var(--muted); white-space: nowrap; }
+
+/* ===== Plan de charge (écran de plein niveau, 2 onglets) ==================
+   Maquette validée le 2026-07-25. Marquage des états : ni or (accent
+   d'action) ni orange (avertissement) pour gelé/manuel/couverture/retiré —
+   ces deux rôles sont déjà pris. */
+#plan-screen {
+  position: fixed; inset: 0; z-index: 60; background: var(--bg);
+  display: flex; flex-direction: column;
+}
+#plan-head, #plan-foot {
+  flex: none; display: flex; align-items: center; gap: 16px; padding: 10px 16px;
+}
+#plan-head { border-bottom: 1px solid var(--border); }
+#plan-foot { border-top: 1px solid var(--border); font-size: 12.5px; }
+#plan-foot .spacer { flex: 1; }
+#plan-title { flex: 1; text-align: center; font-weight: 600; }
+#plan-sub { font-weight: 400; font-size: 12.5px; }
+#plan-tabs { flex: none; display: flex; gap: 6px; padding: 8px 16px 0; }
+.plan-tab { border-radius: 14px 14px 0 0; border-bottom-color: transparent; }
+.plan-tab.active {
+  background: var(--card); color: var(--fg); border-color: var(--border);
+  border-bottom-color: var(--card); font-weight: 600;
+}
+#plan-layout {
+  flex: 1; min-height: 0; display: flex;
+  border-top: 1px solid var(--border); margin-top: -1px;
+}
+#plan-aside {
+  width: 360px; flex: none; overflow-y: auto; padding: 14px 16px;
+  border-right: 1px solid var(--border); background: var(--card);
+}
+#plan-aside h3 {
+  font-size: 12px; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--muted); margin: 18px 0 6px; font-weight: 600;
+}
+#plan-aside h3:first-child { margin-top: 0; }
+#plan-aside label { display: block; font-size: 12.5px; color: var(--muted); margin: 8px 0 2px; }
+#plan-aside select, #plan-aside input[type=date] { width: 100%; }
+#plan-aside .row { display: flex; gap: 8px; align-items: center; }
+#plan-aside .row label { margin: 0; }
+#plan-main { flex: 1; min-height: 0; overflow-y: auto; padding: 18px 22px 40px; }
+#plan-main h2 { font-size: 15px; margin: 22px 0 2px; }
+#plan-main h2:first-child { margin-top: 0; }
+#plan-banner { border-radius: 8px; padding: 10px 16px; margin-bottom: 16px; font-weight: 600; }
+#plan-banner.warn { background: #2e2010; color: var(--amber); }
+#plan-banner.error { background: #331518; color: var(--red); }
+#plan-banner.info { background: var(--card); color: var(--fg); font-weight: 400; }
+/* Mapping des colonnes : mis en évidence quand il manque (c'est lui qui
+   débloque l'écran, sans aller-retour vers l'étape Format). */
+#plan-cols.need { border: 1px solid var(--amber); border-radius: 8px; padding: 10px 12px; background: var(--bg); }
+
+/* Entonnoir : effectif ET perte par marche — une marche muette ne sert à rien. */
+.fstep {
+  display: grid; grid-template-columns: 200px 1fr 84px 90px;
+  align-items: center; gap: 10px; padding: 3px 0;
+  font-variant-numeric: tabular-nums; font-size: 13px;
+}
+.fstep .lbl { color: var(--muted); }
+.fstep .bar { background: var(--track); border-radius: 3px; height: 12px; }
+.fstep .bar span { display: block; height: 100%; border-radius: 3px; background: #3d4d72; }
+.fstep .val { text-align: right; font-weight: 600; }
+.fstep .loss { text-align: right; color: var(--muted); font-size: 12px; }
+.fstep.final .lbl { color: var(--fg); font-weight: 600; }
+.fstep.final .bar span { background: var(--gold); }
+.fstep.final .val { color: var(--gold); font-size: 15px; }
+
+table.plan-data { font-variant-numeric: tabular-nums; font-size: 13px; }
+table.plan-data th { font-size: 12px; color: var(--muted); font-weight: 600; }
+table.plan-data td.n, table.plan-data th.n { text-align: right; }
+table.plan-data td.jj { color: var(--muted); font-size: 12px; }
+table.plan-data tr.sel { background: rgba(217, 168, 63, .09); }
+table.plan-data th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+table.plan-data th.sorted { color: var(--gold); }
+table.plan-data td.addr { color: var(--pid); }
+table.plan-data tr.removed { opacity: .55; }
+table.plan-data tr.removed td.cf { text-decoration: line-through; }
+.carry { color: var(--amber); font-weight: 600; }
+.zero { color: var(--muted); }
+
+/* Les 4 états + « devenu inéligible » (celui-là EST un avertissement). */
+.tag {
+  font-size: 10.5px; font-weight: 600; letter-spacing: .3px; text-transform: uppercase;
+  border-radius: 20px; padding: 1px 8px; border: 1px solid var(--border);
+  color: var(--muted); white-space: nowrap;
+}
+.tag.frozen  { color: var(--green-later); border-color: var(--green-later); }
+.tag.fill    { color: var(--ppf-l3);      border-color: var(--ppf-l3); }
+.tag.pinned  { color: var(--pid);         border-color: var(--pid); }
+.tag.removed { color: var(--red);         border-color: var(--red); }
+.tag.stale   { color: var(--amber);       border-color: var(--amber); }
+
+.pa-line {
+  display: grid; grid-template-columns: 22px 1fr 120px 64px 64px;
+  align-items: center; gap: 8px; font-size: 13px; padding: 3px 0;
+  font-variant-numeric: tabular-nums;
+}
+.pa-line.off { opacity: .45; }
+.pa-line .bar { background: var(--track); border-radius: 3px; height: 10px; }
+.pa-line .bar span { display: block; height: 100%; border-radius: 3px; background: var(--gold); opacity: .75; }
+.pa-line .n { text-align: right; }
+.pa-head { color: var(--muted); font-size: 11.5px; text-transform: uppercase; letter-spacing: .04em; }
+
+.plan-warns {
+  border: 1px solid var(--border); border-left: 3px solid var(--amber);
+  border-radius: 8px; padding: 10px 14px; margin: 14px 0;
+}
+.plan-warns p { margin: 4px 0; font-size: 13px; }
+.plan-warns .ico { color: var(--amber); }
+.plan-result {
+  border: 1px solid var(--border); border-left: 3px solid var(--green);
+  border-radius: 8px; padding: 12px 16px; margin-top: 14px;
+}
+.plan-result h3 { margin: 0 0 6px; font-size: 14px; }
+.plan-result ul { margin: 6px 0 0; padding-left: 18px; font-size: 13px; }
+.plan-result code { color: var(--gold); }
+.plan-kv { display: flex; gap: 6px 22px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); margin-bottom: 10px; }
+.plan-kv b { color: var(--fg); font-size: 14px; margin-right: 4px; }
+.plan-toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+.plan-toolbar select, .plan-toolbar input { font-size: 12.5px; padding: 4px 7px; }
+.plan-toolbar .grow { flex: 1; }
+.plan-selbar {
+  display: flex; gap: 8px; align-items: center; background: var(--card);
+  border: 1px solid var(--border); border-radius: 8px; padding: 7px 12px;
+  margin-bottom: 10px; font-size: 13px;
+}
+.plan-selbar b { color: var(--gold); }
+.plan-selbar .spacer { flex: 1; }
+.motif { color: var(--muted); font-style: italic; font-size: 11.5px; }
+.danger-note { background: #331518; color: var(--red); border-radius: 8px; padding: 9px 12px; font-size: 12.5px; margin: 10px 0; }

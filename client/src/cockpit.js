@@ -695,7 +695,11 @@ async function writeOutput() {
       h("button", { onclick: () => window.__TAURI__.opener?.revealItemInDir(path) },
         "Afficher dans le dossier"),
       h("button", { onclick: (ev) => copyReport(ev.currentTarget) }, "Copier le bilan"),
-      h("button", { onclick: (ev) => exportReport(ev.currentTarget) }, "Rapport HTML"));
+      h("button", { onclick: (ev) => exportReport(ev.currentTarget) }, "Rapport HTML"),
+      // Point d'entrée du plan de charge : il apparaît au moment exact où sa
+      // précondition (une résolution complète) vient d'être remplie.
+      h("button", { title: "Définir un plan de charge sur la base d'un calendrier de Runs de Facturation.",
+                    onclick: () => ouvrirPlan() }, "Établir un plan de charge →"));
 
     const hasDir = state.config.output.columns.some(
       (c) => c.source === "peppol" && c.field === "in_directory");

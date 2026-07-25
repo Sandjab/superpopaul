@@ -33,7 +33,8 @@ const state = {
     api: { url: "https://peppol.gavini.org", key: "", mode: "api", resolver: "8.8.8.8",
            resolver_fallback: "1.1.1.1", dns_concurrency: 32,
            batch_size: 50, concurrency: 8, proxy: null, refresh_days: 30 },
-    input: { path: "", delimiter: ";", encoding: "utf-8", pid_column: "", record_label: "cf" },
+    input: { path: "", delimiter: ";", encoding: "utf-8", pid_column: "", record_label: "cf",
+             cf_column: "", jj_column: "", raison_sociale_column: "" },
     output: { dir: "", suffix: "_enrichi", timestamp_suffix: true,
               encoding: "utf-8-bom", separator: ";", columns: [] },
     ppf: { active_motifs: "CP" },
@@ -129,12 +130,21 @@ async function pickInput(path) {
     // Le libellé « type d'enregistrement » est une préférence indépendante du
     // fichier : on la conserve quand on (re)choisit un fichier.
     const prevLabel = state.config.input.record_label;
+    // Le mapping du plan (CF/JJ/raison sociale) dépend de la STRUCTURE du
+    // fichier : conservé tel quel ici, et remis à zéro plus bas si les entêtes
+    // ont changé (les noms de colonnes n'y existeraient plus).
+    const prevPlanCols = {
+      cf_column: state.config.input.cf_column ?? "",
+      jj_column: state.config.input.jj_column ?? "",
+      raison_sociale_column: state.config.input.raison_sociale_column ?? "",
+    };
     state.inputPath = path;
     state.preview = p;
     state.config.input = {
       path, delimiter: p.delimiter, encoding: p.encoding,
       pid_column: p.suggested_pid_column != null ? p.headers[p.suggested_pid_column] : "",
       record_label: prevLabel,
+      ...prevPlanCols,
     };
     // Mapping par défaut : toutes les colonnes d'entrée + nom PA / PPF
     // utilisable / statut CTC ; les autres champs Peppol démarrent dans la
@@ -148,6 +158,12 @@ async function pickInput(path) {
     // Signature identique : la désignation existante prime sur la suggestion —
     // symétrique de la conservation du mapping (et du contexte profil).
     if (!headersChanged && prevPid) state.config.input.pid_column = prevPid;
+    // Entêtes différentes : les colonnes du plan ne désignent plus rien.
+    if (headersChanged) {
+      state.config.input.cf_column = "";
+      state.config.input.jj_column = "";
+      state.config.input.raison_sociale_column = "";
+    }
     if (state.config.output.columns.length === 0 || headersChanged) {
       state.config.output.columns = [
         ...p.headers.map((name) => ({ source: "input", name })),
@@ -1143,3 +1159,599 @@ pdz.addEventListener("dragleave", () => pdz.classList.remove("over"));
 
 // État initial au démarrage.
 renderPpf();
+
+// ===== Plan de charge (Runs de Facturation) ==================================
+// L'UI n'a AUCUNE logique métier : elle invoque des commandes et affiche des
+// résultats. Tous les calculs (entonnoir, rampe, allocation, compatibilité des
+// jours de cycle) vivent dans plan.rs / calendrier.rs.
+// Aucun innerHTML : tout passe par h() ou textContent — un CSV et un SMP sont
+// des entrées non fiables.
+const plan = {
+  tab: "param",
+  runs: [],            // RunParam[] du calendrier importé
+  meps: [],            // dates ISO fournies
+  paExclues: new Set(),
+  apercu: null,        // dernier PlanApercu
+  lignes: [],          // récapitulatif (onglet 2)
+  sel: new Set(),      // CF sélectionnés
+  tri: { col: "mep_id", asc: true },
+  filtres: { mep: "", run: "", pa: "", origine: "", etat: "", q: "" },
+  genere: false,
+};
+
+const PLAN_ETATS = {
+  eligible: ["", "éligible"],
+  ctc_non_pret: ["stale", "CTC non prêt"],
+  ppf_non_utilisable: ["stale", "PPF non utilisable"],
+  absent_du_fichier: ["stale", "absent du fichier"],
+};
+
+function planBanner(kind, texte) {
+  const el = $("plan-banner");
+  if (!kind) { el.className = "hidden"; el.replaceChildren(); return; }
+  el.className = kind;
+  el.replaceChildren(texte);
+}
+
+function fmtN(n) { return (n ?? 0).toLocaleString("fr-FR"); }
+
+/** Paramètres envoyés au moteur. Forme exacte de PlanParams (plan.rs). */
+function planParams() {
+  const forme = $("plan-forme")?.value ?? "plate";
+  const pilote = $("plan-pilote")?.checked
+    ? { runs: +$("plan-pilote-runs").value || 0, cf_par_run: +$("plan-pilote-cf").value || 0 }
+    : null;
+  const rampe = { forme, pilote };
+  if (forme === "geometrique") rampe.raison = +$("plan-raison").value || 2;
+  if (forme === "manuelle") rampe.volumes = {};
+  const cibleBrute = $("plan-cible")?.value ?? "";
+  return {
+    runs: plan.runs,
+    debut: $("plan-debut")?.value ?? "",
+    fin: $("plan-fin")?.value ?? "",
+    meps: plan.meps,
+    mep_count: +$("plan-mepcount")?.value || 0,
+    cible: cibleBrute === "" ? null : Math.max(0, +cibleBrute | 0),
+    seed: +$("plan-seed")?.value || 0,
+    pa_exclues: [...plan.paExclues],
+    rampe,
+  };
+}
+
+// --- Panneau latéral ---------------------------------------------------------
+function renderPlanAside() {
+  const cfg = state.config.input;
+  const entetes = state.preview?.headers ?? [];
+  const manque = !cfg.cf_column || !cfg.jj_column;
+
+  const selCol = (id, val, avecVide) => h("select", {
+    id, onchange: (e) => {
+      state.config.input[id.replace("plan-col-", "") === "rs"
+        ? "raison_sociale_column"
+        : id.replace("plan-col-", "") + "_column"] = e.target.value;
+      renderPlanAside(); planRecalc();
+    },
+  },
+    ...(avecVide ? [h("option", { value: "" }, "(aucune)")] : [h("option", { value: "" }, "— choisir —")]),
+    ...entetes.map((x) => {
+      const o = h("option", { value: x }, x);
+      if (x === val) o.selected = true;
+      return o;
+    }));
+
+  const bloc = h("div", { id: "plan-cols", class: manque ? "need" : "" },
+    h("label", {}, "Compte de facturation (CF)"), selCol("plan-col-cf", cfg.cf_column, false),
+    h("label", {}, "Jour de cycle (JJ)"), selCol("plan-col-jj", cfg.jj_column, false),
+    h("label", {}, "Raison sociale ", h("span", { class: "muted" }, "— information")),
+    selCol("plan-col-rs", cfg.raison_sociale_column, true),
+    h("p", { class: "field-hint" }, "Modifiable ici comme à l'étape Format : c'est le même réglage."));
+
+  const chips = h("div", { class: "chips" },
+    ...plan.meps.map((m) => h("span", { class: "chip" }, m,
+      h("button", { class: "btn-ghost", title: "Retirer cette MEP",
+        onclick: () => { plan.meps = plan.meps.filter((x) => x !== m); renderPlanAside(); planRecalc(); } }, "✕"))));
+
+  const forme = $("plan-forme")?.value ?? "lineaire";
+  const pilOn = $("plan-pilote")?.checked ?? false;
+
+  $("plan-aside").replaceChildren(
+    h("h3", { id: "plan-cols-title", class: manque ? "need" : "" }, "Colonnes"), bloc,
+
+    h("h3", {}, "Calendrier de facturation"),
+    h("button", { onclick: importerRuns }, "Charger runs.csv…"),
+    h("p", { class: "field-hint" }, plan.runs.length
+      ? `✓ ${plan.runs.length} Runs de Facturation chargés.`
+      : "En-tête attendu DATE_RUN;NUM_RUN;JJS — date en JJ/MM/AAAA, jours séparés par des tirets."),
+
+    h("h3", {}, "Fenêtre FUT"),
+    h("div", { class: "row" },
+      h("label", {}, "Début", h("input", { type: "date", id: "plan-debut", oninput: planRecalc })),
+      h("label", {}, "Fin", h("input", { type: "date", id: "plan-fin", oninput: planRecalc }))),
+
+    h("h3", {}, "Mises en production"),
+    chips,
+    h("label", {}, "Ajouter une MEP"),
+    h("input", { type: "date", id: "plan-mepadd", onchange: (e) => {
+      const v = e.target.value;
+      if (v && !plan.meps.includes(v)) { plan.meps.push(v); plan.meps.sort(); }
+      e.target.value = ""; renderPlanAside(); planRecalc();
+    } }),
+    h("label", {}, "Nombre total visé"),
+    h("input", { type: "number", id: "plan-mepcount", min: "0", value: "0", style: "width:80px", oninput: planRecalc }),
+
+    h("h3", {}, "Cible"),
+    h("label", {}, "Comptes distincts à traiter"),
+    h("input", { type: "number", id: "plan-cible", min: "1", placeholder: "auto", style: "width:120px", oninput: planRecalc }),
+    h("p", { class: "field-hint" }, "Vide = tout le pool éligible atteignable."),
+
+    h("h3", {}, "Rampe de montée en charge"),
+    h("label", {}, "Forme"),
+    h("select", { id: "plan-forme", onchange: () => { renderPlanAside(); planRecalc(); } },
+      ...[["plate", "Plate (équirépartie)"], ["lineaire", "Linéaire (croissance douce)"],
+          ["geometrique", "Géométrique (raison réglable)"]].map(([v, t]) => {
+        const o = h("option", { value: v }, t);
+        if (v === forme) o.selected = true;
+        return o;
+      })),
+    ...(forme === "geometrique"
+      ? [h("label", {}, "Raison"), h("input", { type: "number", id: "plan-raison", min: "1.1", step: "0.05", value: "1.55", style: "width:90px", oninput: planRecalc })]
+      : []),
+    h("label", {}, h("input", { type: "checkbox", id: "plan-pilote", onchange: () => { renderPlanAside(); planRecalc(); } }), " Pilote prudent au démarrage"),
+    ...(pilOn
+      ? [h("label", {}, "Durée du pilote (runs)"), h("input", { type: "number", id: "plan-pilote-runs", min: "0", value: "0", style: "width:80px", oninput: planRecalc }),
+         h("label", {}, "Comptes par run de pilote"), h("input", { type: "number", id: "plan-pilote-cf", min: "0", value: "0", style: "width:80px", oninput: planRecalc }),
+         h("p", { class: "field-hint" }, "Le niveau du pilote sert de socle : la rampe ne redescend jamais en dessous.")]
+      : []),
+
+    h("h3", {}, "Options"),
+    h("label", {}, "Seed"),
+    h("input", { type: "number", id: "plan-seed", value: "42", style: "width:100px", oninput: planRecalc }),
+    h("p", { class: "field-hint" }, "Départage déterministe à priorité égale. Même seed, même plan."),
+
+    h("button", { id: "btn-plan-gen", class: "btn-primary", style: "width:100%;margin-top:16px", onclick: genererPlan },
+      plan.genere ? "Régénérer le plan" : "Générer le plan"),
+    h("p", { class: "field-hint" }, "Conservés à l'identique : MEP gelées, retouches manuelles et comptes retirés."),
+  );
+}
+
+async function importerRuns() {
+  const chemin = await open({ multiple: false, filters: [{ name: "CSV", extensions: ["csv", "txt"] }] });
+  if (!chemin) return;
+  try {
+    const r = await invoke("plan_import_runs", { path: chemin });
+    plan.runs = r.runs;
+    planBanner(r.erreurs.length ? "warn" : null,
+      r.erreurs.length ? `${r.erreurs.length} ligne(s) en erreur : ${r.erreurs.slice(0, 3).join(" · ")}` : "");
+    renderPlanAside();
+    planRecalc();
+  } catch (e) { planBanner("error", String(e)); }
+}
+
+// --- Onglet 1 : paramétrage --------------------------------------------------
+function marche(lbl, val, base, precedent, final) {
+  const pct = base > 0 ? Math.max(0, Math.min(100, (val / base) * 100)) : 0;
+  const perte = precedent == null ? "" : `−${fmtN(precedent - val)}`;
+  return h("div", { class: final ? "fstep final" : "fstep" },
+    h("span", { class: "lbl" }, lbl),
+    h("span", { class: "bar" }, h("span", { style: `width:${pct.toFixed(1)}%` })),
+    h("span", { class: "val" }, fmtN(val)),
+    h("span", { class: "loss" }, perte));
+}
+
+function renderPlanParam() {
+  const box = $("plan-param");
+  const a = plan.apercu;
+  if (!a) {
+    box.replaceChildren(h("p", { class: "muted" },
+      plan.runs.length
+        ? "Renseigne la fenêtre FUT et au moins une MEP pour calculer le plan."
+        : "Charge le calendrier des Runs de Facturation pour commencer."));
+    return;
+  }
+  const f = a.funnel;
+  const b = f.lignes || 1;
+  const noeuds = [];
+
+  noeuds.push(h("h2", {}, "Éligibilité"));
+  noeuds.push(h("p", { class: "field-hint" },
+    "Un compte est éligible si son statut CTC est prêt et qu'il est PPF utilisable (motif actif ET PDP réelle sur la même ligne)."));
+  noeuds.push(h("div", {},
+    marche("Lignes du fichier", f.lignes, b, null),
+    marche("Comptes distincts", f.cf_distincts, b, f.lignes),
+    marche("Jour de cycle valide", f.jj_valide, b, f.cf_distincts),
+    marche("Adressage résolu", f.resolus, b, f.jj_valide),
+    marche("Statut CTC « prêt »", f.ctc_ready, b, f.resolus),
+    marche("PPF utilisable", f.ppf_usable, b, f.ctc_ready),
+    marche("COMPTES ÉLIGIBLES", f.eligibles, b, f.ppf_usable, true)));
+
+  noeuds.push(h("h2", {}, "Runs de Facturation"));
+  noeuds.push(h("p", { class: "field-hint" },
+    `${a.details.length} run(s) retenu(s) · rattachement à la dernière MEP strictement antérieure.`));
+  const tbl = h("table", { class: "plan-data" },
+    h("tr", {}, ...["Run", "Date", "JJ facturés", "MEP", "Visé", "Report", "Stock JJ", "Placé", "Reliquat"]
+      .map((t, i) => h("th", { class: i >= 4 ? "n" : "" }, t))));
+  for (const d of a.details) {
+    tbl.append(h("tr", {},
+      h("td", {}, d.run_num),
+      h("td", {}, d.run_date),
+      h("td", { class: "jj" }, d.jjs.join(", ")),
+      h("td", {}, `${d.mep_id} (${d.mep_date})`),
+      h("td", { class: "n" }, fmtN(d.vise)),
+      h("td", { class: d.report_entrant ? "n carry" : "n zero" }, d.report_entrant ? `+${fmtN(d.report_entrant)}` : "—"),
+      h("td", { class: "n" }, fmtN(d.stock)),
+      h("td", { class: "n" }, fmtN(d.place)),
+      h("td", { class: d.reliquat ? "n carry" : "n zero" }, d.reliquat ? `+${fmtN(d.reliquat)}` : "0")));
+  }
+  noeuds.push(tbl);
+
+  if (a.avertissements.length) {
+    const w = h("div", { class: "plan-warns" });
+    for (const t of a.avertissements) w.append(h("p", {}, h("span", { class: "ico" }, "⚠ "), t));
+    noeuds.push(w);
+  }
+
+  noeuds.push(h("h2", {}, "Plateformes"));
+  noeuds.push(h("p", { class: "field-hint" },
+    "Décocher une plateforme retire ses comptes du pool. Le quota est une cible souple : quand le volume d'un run dépasse les quotas restants des plateformes présentes, le volume prime."));
+  noeuds.push(h("div", { class: "pa-line pa-head" },
+    h("span", {}), h("span", {}, "Plateforme"), h("span", {}),
+    h("span", { class: "n" }, "Éligibles"), h("span", { class: "n" }, "Quota")));
+  const maxPa = Math.max(1, ...a.plateformes.map((p) => p.eligibles));
+  for (const p of a.plateformes) {
+    const off = plan.paExclues.has(p.nom);
+    const cb = h("input", { type: "checkbox", onchange: () => {
+      if (plan.paExclues.has(p.nom)) plan.paExclues.delete(p.nom); else plan.paExclues.add(p.nom);
+      planRecalc();
+    } });
+    cb.checked = !off;
+    noeuds.push(h("div", { class: off ? "pa-line off" : "pa-line" },
+      cb, h("span", {}, p.nom),
+      h("span", { class: "bar" }, h("span", { style: `width:${((p.eligibles / maxPa) * 100).toFixed(1)}%` })),
+      h("span", { class: "n" }, fmtN(p.eligibles)),
+      h("span", { class: "n" }, off ? "—" : fmtN(p.quota))));
+  }
+  // Les plateformes exclues sortent du pool : elles n'apparaissent plus dans
+  // l'aperçu. On les rappelle pour pouvoir les réintégrer.
+  for (const nom of plan.paExclues) {
+    if (a.plateformes.some((p) => p.nom === nom)) continue;
+    const cb = h("input", { type: "checkbox", onchange: () => { plan.paExclues.delete(nom); planRecalc(); } });
+    noeuds.push(h("div", { class: "pa-line off" }, cb, h("span", {}, nom),
+      h("span", {}), h("span", { class: "n" }, "—"), h("span", { class: "n" }, "—")));
+  }
+
+  if (plan.genere && plan.fichiers) {
+    const r = h("div", { class: "plan-result" },
+      h("h3", {}, `Plan enregistré — ${fmtN(a.total)} comptes sur ${a.meps.length} MEP`),
+      h("div", { class: "plan-kv" },
+        h("span", {}, h("b", {}, fmtN(a.geles)), "gelés"),
+        h("span", {}, h("b", {}, fmtN(a.epingles)), "manuels"),
+        h("span", {}, h("b", {}, fmtN(a.retires)), "retirés")));
+    const ul = h("ul", {});
+    for (const fi of plan.fichiers)
+      ul.append(h("li", {}, h("code", {}, fi.chemin), ` — ${fmtN(fi.comptes)} comptes`));
+    r.append(ul);
+    noeuds.push(r);
+  }
+  box.replaceChildren(...noeuds);
+}
+
+// --- Onglet 2 : comptes de facturation ---------------------------------------
+function lignesFiltrees() {
+  const f = plan.filtres;
+  const q = f.q.trim().toLowerCase();
+  let out = plan.lignes.filter((l) =>
+    (!f.mep || String(l.mep_id) === f.mep)
+    && (!f.run || l.run_num === f.run)
+    && (!f.pa || l.pa === f.pa)
+    && (!f.origine || l.origine === f.origine)
+    && (!f.etat || (f.etat === "retire" ? l.retire_motif != null : l.etat === f.etat))
+    && (!q || [l.cf, l.participant, l.raison_sociale].some((x) => (x ?? "").toLowerCase().includes(q))));
+  const { col, asc } = plan.tri;
+  out = out.slice().sort((a, b) => {
+    const va = a[col], vb = b[col];
+    const c = typeof va === "number" ? va - vb : String(va).localeCompare(String(vb), "fr");
+    return asc ? c : -c;
+  });
+  return out;
+}
+
+function renderPlanRecap() {
+  const box = $("plan-recap");
+  if (!plan.lignes.length) {
+    box.replaceChildren(h("p", { class: "muted" }, "Aucun plan enregistré. Génère-le depuis l'onglet Paramétrage."));
+    return;
+  }
+  const uniques = (k) => [...new Set(plan.lignes.map((l) => l[k]))].sort();
+  const selectFiltre = (cle, libelle, valeurs) => h("select", {
+    onchange: (e) => { plan.filtres[cle] = e.target.value; renderPlanRecap(); },
+  }, h("option", { value: "" }, libelle),
+     ...valeurs.map((v) => { const o = h("option", { value: String(v) }, String(v));
+       if (String(v) === plan.filtres[cle]) o.selected = true; return o; }));
+
+  const barre = h("div", { class: "plan-toolbar" },
+    selectFiltre("mep", "Toutes les MEP", uniques("mep_id")),
+    selectFiltre("run", "Tous les runs", uniques("run_num")),
+    selectFiltre("pa", "Toutes les plateformes", uniques("pa")),
+    selectFiltre("origine", "Toutes origines", ["auto", "couverture", "manuel"]),
+    selectFiltre("etat", "Tous états", ["eligible", "ctc_non_pret", "ppf_non_utilisable", "absent_du_fichier", "retire"]),
+    h("input", { class: "grow", type: "search", placeholder: "Rechercher un compte, un adressage, une raison sociale…",
+      oninput: (e) => { plan.filtres.q = e.target.value; renderPlanRecap(); } }));
+
+  const visibles = lignesFiltrees();
+  const actives = plan.lignes.filter((l) => l.retire_motif == null).length;
+  const noeuds = [barre];
+
+  if (plan.sel.size) {
+    noeuds.push(h("div", { class: "plan-selbar" },
+      h("span", {}, h("b", {}, String(plan.sel.size)), " compte(s) sélectionné(s)"),
+      h("span", { class: "spacer" }),
+      h("button", { onclick: ouvrirDeplacer }, "Déplacer vers un run…"),
+      h("button", { class: "btn-danger", onclick: ouvrirRetrait }, "Retirer…"),
+      h("button", { class: "btn-ghost", onclick: () => { plan.sel.clear(); renderPlanRecap(); } }, "Tout désélectionner")));
+  }
+  noeuds.push(h("div", { class: "plan-toolbar" },
+    h("button", { class: "btn-primary", onclick: ouvrirAjout }, "+ Ajouter des comptes…"),
+    h("span", { class: "grow" }),
+    h("span", { class: "muted", style: "font-size:12.5px" },
+      `${fmtN(actives)} ligne(s) active(s) · ${fmtN(plan.lignes.length - actives)} retirée(s) · ${fmtN(visibles.length)} affichée(s)`)));
+
+  const entete = h("tr", {}, h("th", {}, ""));
+  for (const [cle, lbl] of [["cf", "Compte"], ["participant", "Adressage"], ["raison_sociale", "Raison sociale"],
+                            ["jj", "JJ"], ["pa", "Plateforme"], ["mep_id", "MEP"], ["run_num", "Run"],
+                            ["origine", "Origine"], ["etat", "État"]]) {
+    const th = h("th", { class: plan.tri.col === cle ? "sortable sorted" : "sortable",
+      onclick: () => {
+        if (plan.tri.col === cle) plan.tri.asc = !plan.tri.asc;
+        else plan.tri = { col: cle, asc: true };
+        renderPlanRecap();
+      } }, lbl + (plan.tri.col === cle ? (plan.tri.asc ? " ▲" : " ▼") : ""));
+    entete.append(th);
+  }
+  const tbl = h("table", { class: "plan-data" }, entete);
+  // Plafond d'affichage : au-delà, le DOM devient le goulot. Le nombre
+  // masqué est dit explicitement — jamais de troncature muette.
+  const PLAFOND = 500;
+  for (const l of visibles.slice(0, PLAFOND)) {
+    const cb = h("input", { type: "checkbox", onchange: () => {
+      if (plan.sel.has(l.cf)) plan.sel.delete(l.cf); else plan.sel.add(l.cf);
+      renderPlanRecap();
+    } });
+    cb.checked = plan.sel.has(l.cf);
+    const retire = l.retire_motif != null;
+    const [cls, txt] = PLAN_ETATS[l.etat] ?? ["", l.etat];
+    const etatNode = retire
+      ? h("span", {}, h("span", { class: "tag removed" }, "retiré"),
+          h("div", { class: "motif" }, l.retire_motif))
+      : (cls ? h("span", { class: `tag ${cls}` }, txt) : h("span", { class: "muted" }, txt));
+    const orig = l.origine === "manuel" ? h("span", { class: "tag pinned" }, "📌 manuelle")
+      : l.origine === "couverture" ? h("span", { class: "tag fill" }, "couverture")
+      : h("span", { class: "tag" }, "allouée");
+    tbl.append(h("tr", { class: [retire ? "removed" : "", plan.sel.has(l.cf) ? "sel" : ""].join(" ").trim() },
+      h("td", {}, cb),
+      h("td", { class: "cf" }, l.cf),
+      h("td", { class: "addr" }, l.participant),
+      h("td", {}, l.raison_sociale),
+      h("td", { class: "n" }, String(l.jj)),
+      h("td", {}, l.pa),
+      h("td", {}, `${l.mep_id}`, l.gelee ? " " : "", l.gelee ? h("span", { class: "tag frozen" }, "❄ gelé") : ""),
+      h("td", {}, l.run_num),
+      h("td", {}, orig),
+      h("td", {}, etatNode)));
+  }
+  noeuds.push(tbl);
+  if (visibles.length > PLAFOND)
+    noeuds.push(h("p", { class: "muted", style: "text-align:center;font-size:12.5px" },
+      `… ${fmtN(visibles.length - PLAFOND)} ligne(s) supplémentaire(s) non affichée(s) — affine les filtres.`));
+  box.replaceChildren(...noeuds);
+}
+
+// --- Modales de retouche -----------------------------------------------------
+async function ouvrirDeplacer() {
+  const cfs = [...plan.sel];
+  // Un compte ne peut aller que sur un run couvrant SON jour de cycle. On ne
+  // propose donc que l'intersection des runs compatibles de la sélection —
+  // proposer l'impossible pour le refuser ensuite serait hostile.
+  let communs = null;
+  try {
+    for (const cf of cfs) {
+      const l = plan.lignes.find((x) => x.cf === cf);
+      const rs = await invoke("plan_runs_compatibles", { jj: l.jj });
+      communs = communs === null ? new Set(rs) : new Set(rs.filter((r) => communs.has(r)));
+    }
+  } catch (e) { return planBanner("error", String(e)); }
+  if (!communs || communs.size === 0) {
+    return planBanner("warn",
+      "Aucun Run de Facturation ne couvre à la fois tous les jours de cycle sélectionnés.");
+  }
+  const sel = h("select", {}, ...[...communs].sort().map((r) => h("option", { value: r }, r)));
+  modal(
+    h("h3", {}, `Déplacer ${cfs.length} compte(s)`),
+    h("p", { class: "field-hint" }, "Seuls les runs couvrant les jours de cycle sélectionnés sont proposés."),
+    h("p", {}, h("label", {}, "Run de Facturation "), sel),
+    h("div", { class: "actions" },
+      h("button", { class: "btn-ghost", onclick: closeModal }, "Annuler"),
+      h("button", { class: "btn-primary", onclick: async () => {
+        try {
+          await invoke("plan_deplacer", { cfs, runNum: sel.value });
+          closeModal(); plan.sel.clear(); await rechargerRecap();
+        } catch (e) { planBanner("error", String(e)); closeModal(); }
+      } }, "Déplacer")));
+}
+
+function ouvrirRetrait() {
+  const cfs = [...plan.sel];
+  const geles = plan.lignes.filter((l) => cfs.includes(l.cf) && l.gelee);
+  const zone = h("textarea", { rows: "3", style: "width:100%",
+    placeholder: "Ex. : migration PDP repoussée par le client, compte clôturé, incident connu…" });
+  const btn = h("button", { class: "btn-danger", onclick: async () => {
+    try {
+      await invoke("plan_retirer", { cfs, motif: zone.value });
+      closeModal(); plan.sel.clear(); await rechargerRecap();
+    } catch (e) { planBanner("error", String(e)); closeModal(); }
+  } }, `Retirer ${cfs.length} compte(s)`);
+  btn.disabled = true;
+  zone.addEventListener("input", () => { btn.disabled = zone.value.trim() === ""; });
+
+  const noeuds = [
+    h("h3", {}, `Retirer ${cfs.length} compte(s) du plan`),
+    h("p", { class: "field-hint" },
+      "Les lignes restent consultables via le filtre « retiré » et ne seront pas replacées par une régénération. Le retrait est annulable."),
+  ];
+  if (geles.length) {
+    // Les fichiers sont cumulatifs : retirer d'une MEP livrée change un
+    // fichier déjà transmis. C'est assumé, mais ça se dit au moment de l'acte.
+    noeuds.push(h("div", { class: "danger-note" },
+      `⚠ ${geles.length} compte(s) appartiennent à une MEP gelée (${[...new Set(geles.map((l) => l.mep_date))].join(", ")}). `
+      + "Son fichier a déjà été transmis : il changera au prochain tirage."));
+  }
+  noeuds.push(h("label", { class: "field-hint" }, "Motif du retrait (obligatoire)"), zone,
+    h("div", { class: "actions" }, h("button", { class: "btn-ghost", onclick: closeModal }, "Annuler"), btn));
+  modal(...noeuds);
+}
+
+async function ouvrirAjout() {
+  let candidats;
+  try { candidats = await invoke("plan_candidats"); }
+  catch (e) { return planBanner("error", String(e)); }
+  if (!candidats.length) return planBanner("info", "Tous les comptes du fichier sont déjà au plan.");
+
+  const choisis = new Set();
+  const recherche = h("input", { type: "search", style: "width:100%",
+    placeholder: "Filtrer par compte ou raison sociale…" });
+  const liste = h("div", { style: "max-height:260px;overflow:auto;margin:8px 0" });
+  const selRun = h("select", {});
+  const dessiner = () => {
+    const q = recherche.value.trim().toLowerCase();
+    liste.replaceChildren(...candidats
+      .filter((c) => !q || c.cf.toLowerCase().includes(q) || (c.raison_sociale ?? "").toLowerCase().includes(q))
+      .slice(0, 200)
+      .map((c) => {
+        const cb = h("input", { type: "checkbox", onchange: () => {
+          if (choisis.has(c.cf)) choisis.delete(c.cf); else choisis.add(c.cf);
+          majRuns();
+        } });
+        cb.checked = choisis.has(c.cf);
+        return h("label", { style: "display:block;font-size:12.5px" }, cb, ` ${c.cf} — ${c.raison_sociale} `,
+          h("span", { class: "muted" }, `(JJ ${c.jj}, ${c.pa || "sans plateforme"})`),
+          c.eligible ? "" : h("span", { class: "tag stale" }, "non éligible"));
+      }));
+  };
+  const majRuns = async () => {
+    selRun.replaceChildren();
+    if (!choisis.size) return;
+    let communs = null;
+    for (const cf of choisis) {
+      const c = candidats.find((x) => x.cf === cf);
+      const rs = await invoke("plan_runs_compatibles", { jj: c.jj });
+      communs = communs === null ? new Set(rs) : new Set(rs.filter((r) => communs.has(r)));
+    }
+    selRun.replaceChildren(...[...(communs ?? [])].sort().map((r) => h("option", { value: r }, r)));
+  };
+  recherche.addEventListener("input", dessiner);
+  dessiner();
+
+  modal(
+    h("h3", {}, "Ajouter des comptes au plan"),
+    h("p", { class: "field-hint" },
+      "Les comptes non éligibles sont proposés et signalés : les ajouter est un choix assumé. Seuls les runs couvrant les jours de cycle retenus sont ensuite proposés."),
+    recherche, liste,
+    h("p", {}, h("label", {}, "Run de Facturation "), selRun),
+    h("div", { class: "actions" },
+      h("button", { class: "btn-ghost", onclick: closeModal }, "Annuler"),
+      h("button", { class: "btn-primary", onclick: async () => {
+        if (!choisis.size || !selRun.value) return;
+        try {
+          await invoke("plan_ajouter", { cfs: [...choisis], runNum: selRun.value });
+          closeModal(); await rechargerRecap();
+        } catch (e) { planBanner("error", String(e)); closeModal(); }
+      } }, "Ajouter")));
+}
+
+// --- Cycle de vie de l'écran -------------------------------------------------
+let planRecalcTimer = null;
+/** Recalcul débounce : chaque frappe déclencherait sinon un scan complet. */
+function planRecalc() {
+  clearTimeout(planRecalcTimer);
+  planRecalcTimer = setTimeout(async () => {
+    const p = planParams();
+    if (!p.runs.length || !p.debut || !p.fin) { plan.apercu = null; renderPlanParam(); return; }
+    try {
+      plan.apercu = await invoke("plan_preview", { params: p });
+      planBanner(null);
+    } catch (e) {
+      plan.apercu = null;
+      planBanner("warn", String(e));
+    }
+    renderPlanParam();
+  }, 250);
+}
+
+async function genererPlan() {
+  try {
+    const r = await invoke("plan_generate", { params: planParams() });
+    plan.apercu = r.apercu;
+    plan.fichiers = r.fichiers;
+    plan.genere = true;
+    planBanner(null);
+    renderPlanAside();
+    renderPlanParam();
+    await rechargerRecap();
+  } catch (e) { planBanner("error", String(e)); }
+}
+
+async function rechargerRecap() {
+  try {
+    plan.lignes = await invoke("plan_lignes");
+    $("plan-tab-count").textContent = plan.lignes.length ? fmtN(plan.lignes.length) : "";
+    renderPlanRecap();
+  } catch (e) { planBanner("error", String(e)); }
+}
+
+function planShowTab(t) {
+  plan.tab = t;
+  document.querySelectorAll(".plan-tab").forEach((b) => b.classList.toggle("active", b.dataset.ptab === t));
+  $("plan-param").classList.toggle("hidden", t !== "param");
+  $("plan-recap").classList.toggle("hidden", t !== "recap");
+}
+
+async function ouvrirPlan() {
+  $("plan-screen").classList.remove("hidden");
+  $("plan-sub").textContent = state.inputPath
+    ? state.inputPath.split(/[\\/]/).pop() : "";
+  // État persisté : paramètres et calendrier du plan enregistré.
+  try {
+    const enr = await invoke("plan_load");
+    if (enr) {
+      plan.runs = enr.params.runs ?? [];
+      plan.meps = enr.params.meps ?? [];
+      plan.paExclues = new Set(enr.params.pa_exclues ?? []);
+      plan.genere = true;
+      renderPlanAside();
+      if ($("plan-debut")) $("plan-debut").value = enr.params.debut ?? "";
+      if ($("plan-fin")) $("plan-fin").value = enr.params.fin ?? "";
+      if ($("plan-mepcount")) $("plan-mepcount").value = enr.params.mep_count ?? 0;
+      if ($("plan-cible")) $("plan-cible").value = enr.params.cible ?? "";
+      if ($("plan-seed")) $("plan-seed").value = enr.params.seed ?? 42;
+      $("plan-foot-info").textContent =
+        `Plan enregistré depuis ${enr.fichier}` + (enr.autre_fichier ? " — ⚠ le fichier ouvert est différent" : "");
+      if (enr.autre_fichier)
+        planBanner("warn",
+          `Le plan enregistré a été produit depuis « ${enr.fichier} », différent du fichier ouvert : les lignes gelées peuvent ne plus correspondre.`);
+    } else {
+      renderPlanAside();
+    }
+  } catch (e) {
+    renderPlanAside();
+    planBanner("warn", String(e));
+  }
+  planShowTab("param");
+  await rechargerRecap();
+  planRecalc();
+}
+
+function fermerPlan() { $("plan-screen").classList.add("hidden"); }
+
+$("btn-plan-close").addEventListener("click", fermerPlan);
+$("btn-plan-back").addEventListener("click", fermerPlan);
+document.querySelectorAll(".plan-tab").forEach((b) =>
+  b.addEventListener("click", () => planShowTab(b.dataset.ptab)));

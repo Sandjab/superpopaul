@@ -208,6 +208,35 @@
     <button id="btn-next" class="btn-primary">Suivant →</button>
   </footer>
 
+  <!-- Plan de charge : écran de PLEIN NIVEAU (pas une 4e étape du stepper —
+       c'est un atelier itératif, pas un tunnel, et il lui faut deux colonnes).
+       Ouvert depuis la fin de l'étape 3. -->
+  <div id="plan-screen" class="hidden">
+    <header id="plan-head">
+      <span class="logo"><img src="logo.png" alt=""> Super Popaul</span>
+      <div id="plan-title">Plan de charge<div id="plan-sub" class="muted"></div></div>
+      <button id="btn-plan-close" class="btn-ghost" title="Fermer — retour à l'étape Run.">✕</button>
+    </header>
+    <nav id="plan-tabs">
+      <button class="plan-tab active" data-ptab="param">Paramétrage</button>
+      <button class="plan-tab" data-ptab="recap">Comptes de facturation
+        <span id="plan-tab-count" class="muted"></span></button>
+    </nav>
+    <div id="plan-layout">
+      <aside id="plan-aside"></aside>
+      <main id="plan-main">
+        <div id="plan-banner" class="hidden"></div>
+        <div id="plan-param"></div>
+        <div id="plan-recap" class="hidden"></div>
+      </main>
+    </div>
+    <footer id="plan-foot">
+      <button id="btn-plan-back">← Retour au Run</button>
+      <span class="spacer"></span>
+      <span id="plan-foot-info" class="muted"></span>
+    </footer>
+  </div>
+
   <!-- Réglages : overlay dédié (pas #modal — la modale proxy déclenchée par
        « Tester » doit pouvoir s'empiler au-dessus). Ouvert par ⚙, appliqué
        à la fermeture. -->
