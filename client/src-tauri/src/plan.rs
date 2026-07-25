@@ -1581,12 +1581,38 @@ mod tests {
     }
 
     #[test]
-    fn stock_par_jj_ne_compte_pas_les_runs_ecartes() {
-        // On passe ici les runs RETENUS : un run exclu ne doit pas faire
-        // croire que son jour de cycle est servi, sinon l'exclusion se ferait
-        // à l'aveugle.
+    fn stock_par_jj_sans_run_retenu_ne_couvre_aucun_jour() {
+        // Sans run retenu, aucun jour de cycle ne doit ressortir couvert —
+        // c'est le cas où `all` (vrai par vacuité sur un itérateur vide)
+        // passerait pour `any` et peindrait en vert des jours que rien ne
+        // sert. Le filtrage de `exclu` lui-même vit en amont, dans
+        // `calendrier::runs_utilisables` : cette fonction ne reçoit que des
+        // runs déjà retenus, elle n'a pas à le refaire.
         let s = stock_par_jj(&[cand("A", 9, "PA1")], &[]);
         assert!(!s[8].couvert);
+    }
+
+    #[test]
+    fn stock_par_jj_borne_le_jj_sans_paniquer() {
+        // `comptes` est un tableau fixe de 32 cases : un `jj` ≥ 32 (le type
+        // est un `u8`, donc jusqu'à 255) indexerait hors bornes et ferait
+        // paniquer sans ce filtre — ce n'est pas qu'une histoire de comptage
+        // silencieux, c'est un accès mémoire à garder valide.
+        let s = stock_par_jj(&[cand("A", 31, "PA1")], &[]);
+        assert_eq!(s[30].comptes, 1, "jj=31 est une borne haute valide");
+
+        let mut hors_bornes = cand("Z", 1, "PA1");
+        hors_bornes.jj = 0;
+        let s0 = stock_par_jj(&[hors_bornes.clone()], &[]);
+        assert_eq!(s0.iter().map(|x| x.comptes).sum::<usize>(), 0, "jj=0 est ignoré");
+
+        hors_bornes.jj = 32;
+        let s32 = stock_par_jj(&[hors_bornes], &[]);
+        assert_eq!(
+            s32.iter().map(|x| x.comptes).sum::<usize>(),
+            0,
+            "jj=32 est ignoré, pas de panic hors bornes"
+        );
     }
 
     // ----------------------------------------------------------- allocation
