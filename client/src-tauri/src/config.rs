@@ -127,6 +127,17 @@ pub struct InputConfig {
     /// bilan/rapport). Rétro-compat : absent des vieux YAML → `Record`.
     #[serde(default)]
     pub record_label: RecordLabel,
+    /// Colonnes du plan de charge (Runs de Facturation). Toutes OPTIONNELLES :
+    /// l'app reste pleinement utilisable sans plan, et un YAML d'avant se lit
+    /// avec un mapping vide. Non écrites à vide (discipline `suffix`).
+    /// `cf_column` et `jj_column` conditionnent l'accès à l'écran de plan ;
+    /// `raison_sociale_column` est purement informative.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub cf_column: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub jj_column: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub raison_sociale_column: String,
 }
 
 /// Ce que représente une ligne du fichier d'entrée — libellé d'affichage
@@ -576,6 +587,9 @@ mod tests {
                 encoding: "utf-8".into(),
                 pid_column: "siren".into(),
                 record_label: RecordLabel::Record,
+                cf_column: String::new(),
+                jj_column: String::new(),
+                raison_sociale_column: String::new(),
             },
             output: OutputConfig {
                 dir: "./sorties".into(),
@@ -874,6 +888,45 @@ mod tests {
         assert_eq!(RecordLabel::Utilisateur.plural(), "utilisateurs");
         assert_eq!(RecordLabel::Ligne.plural(), "lignes");
         assert_eq!(RecordLabel::Record.plural(), "records");
+    }
+
+    #[test]
+    fn input_config_sans_colonnes_de_plan_defaut_vide() {
+        // Rétro-compat : un YAML d'avant le plan de charge reste lisible, avec
+        // un mapping vide (l'app est pleinement utilisable sans plan).
+        let ic: InputConfig =
+            serde_yaml::from_str("path: ./a.csv\npid_column: siren\n").unwrap();
+        assert_eq!(ic.cf_column, "");
+        assert_eq!(ic.jj_column, "");
+        assert_eq!(ic.raison_sociale_column, "");
+    }
+
+    #[test]
+    fn input_config_sans_mapping_de_plan_n_ecrit_pas_les_champs() {
+        // Miroir de la discipline `suffix` / `dns_concurrency` : un défaut ne
+        // s'écrit pas, pour ne pas polluer les YAML des configs sans plan.
+        let ic: InputConfig =
+            serde_yaml::from_str("path: ./a.csv\npid_column: siren\n").unwrap();
+        let y = serde_yaml::to_string(&ic).unwrap();
+        assert!(!y.contains("cf_column"), "YAML: {y}");
+        assert!(!y.contains("jj_column"), "YAML: {y}");
+        assert!(!y.contains("raison_sociale_column"), "YAML: {y}");
+    }
+
+    #[test]
+    fn input_config_mapping_de_plan_aller_retour() {
+        let ic: InputConfig = serde_yaml::from_str(
+            "path: ./a.csv\npid_column: siren\ncf_column: CF_ID\n\
+             jj_column: ACTG_CYCLE_DOM\nraison_sociale_column: RAISON_SOCIALE\n",
+        )
+        .unwrap();
+        assert_eq!(ic.cf_column, "CF_ID");
+        assert_eq!(ic.jj_column, "ACTG_CYCLE_DOM");
+        assert_eq!(ic.raison_sociale_column, "RAISON_SOCIALE");
+        let back: InputConfig = serde_yaml::from_str(&serde_yaml::to_string(&ic).unwrap()).unwrap();
+        assert_eq!(back.cf_column, "CF_ID");
+        assert_eq!(back.jj_column, "ACTG_CYCLE_DOM");
+        assert_eq!(back.raison_sociale_column, "RAISON_SOCIALE");
     }
 
     #[test]

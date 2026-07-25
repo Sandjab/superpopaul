@@ -141,6 +141,37 @@ pub fn read_column(path: &Path, meta: &CsvMeta, column: &str) -> Result<Vec<Stri
     Ok(out)
 }
 
+/// Valeurs de PLUSIEURS colonnes en UN seul passage, dans l'ordre demandé.
+/// Le plan de charge a besoin de CF + JJ + raison sociale en plus de
+/// l'adressage : les lire un par un multiplierait les traversées du fichier.
+/// Chaque vecteur rendu a une entrée par ligne du fichier (`""` si la ligne
+/// est plus courte que l'en-tête — `flexible(true)`).
+pub fn read_columns(
+    path: &Path,
+    meta: &CsvMeta,
+    columns: &[&str],
+) -> Result<Vec<Vec<String>>, String> {
+    let mut rdr = reader(path, meta)?;
+    let headers = rdr.headers().map_err(|e| e.to_string())?.clone();
+    let idx: Vec<usize> = columns
+        .iter()
+        .map(|c| {
+            headers
+                .iter()
+                .position(|h| h == *c)
+                .ok_or_else(|| format!("Colonne '{c}' absente de l'entête : {headers:?}"))
+        })
+        .collect::<Result<_, _>>()?;
+    let mut out = vec![Vec::new(); idx.len()];
+    for rec in rdr.records() {
+        let rec = rec.map_err(|e| e.to_string())?;
+        for (col, &i) in out.iter_mut().zip(&idx) {
+            col.push(rec.get(i).unwrap_or("").to_string());
+        }
+    }
+    Ok(out)
+}
+
 /// Ressemble à un adressage Peppol : forme longue "scheme::valeur",
 /// "xxxx:yyyy" (préfixe numérique à 4 chiffres), ou SIREN (9 chiffres).
 fn looks_like_pid(v: &str) -> bool {
@@ -269,6 +300,57 @@ mod tests {
         let m = sniff(f.path()).unwrap();
         let err = read_column(f.path(), &m, "zz").unwrap_err();
         assert!(err.contains("zz"), "message: {err}");
+    }
+
+    #[test]
+    fn read_columns_lit_plusieurs_colonnes_dans_l_ordre_demande() {
+        // L'ordre du résultat suit celui de `columns`, pas celui du fichier :
+        // l'appelant nomme ses colonnes, il ne devrait pas avoir à connaître
+        // leur position dans le CSV.
+        let f = tmp_csv("cf;siren;jj\nCF1;0009:1;5\nCF2;0009:2;12\n".as_bytes());
+        let m = sniff(f.path()).unwrap();
+        let cols = read_columns(f.path(), &m, &["jj", "cf"]).unwrap();
+        assert_eq!(cols.len(), 2);
+        assert_eq!(cols[0], vec!["5", "12"]);
+        assert_eq!(cols[1], vec!["CF1", "CF2"]);
+    }
+
+    #[test]
+    fn read_columns_colonne_inconnue_erreur_claire() {
+        let f = tmp_csv("cf;jj\nCF1;5\n".as_bytes());
+        let m = sniff(f.path()).unwrap();
+        let err = read_columns(f.path(), &m, &["cf", "raison_sociale"]).unwrap_err();
+        assert!(err.contains("raison_sociale"), "message: {err}");
+    }
+
+    #[test]
+    fn read_columns_meme_colonne_deux_fois() {
+        // Cas légitime : deux réglages peuvent pointer la même colonne (p. ex.
+        // CF et adressage confondus). Chacun reçoit ses valeurs.
+        let f = tmp_csv("cf;jj\nCF1;5\nCF2;12\n".as_bytes());
+        let m = sniff(f.path()).unwrap();
+        let cols = read_columns(f.path(), &m, &["cf", "cf"]).unwrap();
+        assert_eq!(cols[0], cols[1]);
+        assert_eq!(cols[0], vec!["CF1", "CF2"]);
+    }
+
+    #[test]
+    fn read_columns_ligne_courte_donne_une_valeur_vide() {
+        // `flexible(true)` accepte les lignes tronquées ; chaque colonne doit
+        // garder une entrée par ligne, sinon les vecteurs se désalignent et un
+        // CF se retrouverait apparié au JJ de la ligne suivante.
+        let f = tmp_csv("cf;jj\nCF1;5\nCF2\n".as_bytes());
+        let m = sniff(f.path()).unwrap();
+        let cols = read_columns(f.path(), &m, &["cf", "jj"]).unwrap();
+        assert_eq!(cols[0], vec!["CF1", "CF2"]);
+        assert_eq!(cols[1], vec!["5", ""]);
+    }
+
+    #[test]
+    fn read_columns_sans_colonne_demandee() {
+        let f = tmp_csv("cf;jj\nCF1;5\n".as_bytes());
+        let m = sniff(f.path()).unwrap();
+        assert_eq!(read_columns(f.path(), &m, &[]).unwrap(), Vec::<Vec<String>>::new());
     }
 
     #[test]
