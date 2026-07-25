@@ -613,4 +613,25 @@ mod tests {
         let dernier = t.last().unwrap();
         assert_eq!(dernier.jalons, vec![Jalon::Mep { rang: 1 }, Jalon::FinFenetre]);
     }
+
+    #[test]
+    fn deux_dates_de_mep_identiques_ne_produisent_qu_un_seul_jalon() {
+        // Sans dédoublonnage, deux entrées à la même date deviendraient
+        // « MEP 1 » et « MEP 2 » posées le même jour : le calendrier
+        // afficherait une mise en production qui n'existe pas. La garde vit
+        // ici plutôt que de se reposer sur l'appelant : `PlanParams::calendrier`
+        // dédoublonne déjà `meps` en amont (voir
+        // `params_calendrier_trie_dedoublonne_et_conserve_les_exclusions` dans
+        // `plan.rs`), mais `timeline` est publique et directement appelable
+        // sans passer par lui — comme le fait ce test.
+        let t = timeline(
+            &[],
+            d("2026-07-01"),
+            d("2026-07-20"),
+            &[d("2026-07-05"), d("2026-07-05")],
+            &[],
+        );
+        let j5 = t.iter().find(|j| j.date == "2026-07-05").unwrap();
+        assert_eq!(j5.jalons, vec![Jalon::Mep { rang: 1 }]);
+    }
 }
