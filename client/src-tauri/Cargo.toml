@@ -39,6 +39,9 @@ x509-parser = "0.16"          # identification de la PA via le certificat AS4
 hickory-resolver = "0.24"     # NAPTR via le DNS système
 hickory-proto = "0.24"        # encodage des requêtes DNS pour le DoH (RFC 8484)
 percent-encoding = "2"        # encodage du PID dans les URL SMP (parité quote(safe=''))
+# Classeur XLSX du périmètre du plan : en-tête figé et filtres automatiques,
+# qu'un CSV ne peut pas porter. Crate Rust pure, sans dépendance C.
+rust_xlsxwriter = "0.93"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"                  # setrlimit : relever le soft 256 fd des apps GUI macOS
