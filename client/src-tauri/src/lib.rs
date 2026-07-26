@@ -72,6 +72,7 @@ pub fn run() {
             commands::set_config,
             commands::load_settings,
             commands::save_settings,
+            commands::remember_columns,
             commands::portable_dir,
             commands::load_profile,
             commands::save_profile,

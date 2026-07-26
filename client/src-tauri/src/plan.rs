@@ -160,6 +160,28 @@ fn parse_jj(brut: &str) -> Option<u8> {
     (1..=31).contains(&jj).then_some(jj)
 }
 
+/// Diagnostic de mapping : des comptes lus, mais **aucun** jour de cycle
+/// valide.
+///
+/// Ce n'est pas un problème de données — un fichier réel a toujours quelques
+/// jours lisibles — c'est une colonne mal désignée. Le funnel le montre déjà
+/// (`jj_valide` à 0), mais en silence : l'écran n'affiche alors que des stocks
+/// vides, sans dire pourquoi. Nommer la colonne fautive change un écran muet
+/// en diagnostic.
+///
+/// `None` dès qu'un seul jour est lisible (la colonne est la bonne, le reste
+/// relève des données), et `None` sans aucun compte (il n'y a rien à lire :
+/// accuser le mapping enverrait corriger ce qui va).
+pub fn alerte_colonne_jj(f: &Funnel, colonne: &str) -> Option<String> {
+    (f.cf_distincts > 0 && f.jj_valide == 0).then(|| {
+        format!(
+            "la colonne « {colonne} » ne contient aucun jour de cycle valide (1 à 31) \
+             sur {} comptes — colonne mal désignée ?",
+            f.cf_distincts
+        )
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Répartition, quotas, rampe
 // ---------------------------------------------------------------------------
@@ -1462,6 +1484,34 @@ mod tests {
         assert!(rampe_pilote_infaisable(25, 5, &r));
         let v = construire_rampe(25, &rs, &r);
         assert_eq!(v.values().sum::<usize>(), 25);
+    }
+
+    #[test]
+    fn colonne_jj_sans_aucun_jour_valide_est_signalee() {
+        // Vécu en application : la colonne d'adressage désignée comme jour de
+        // cycle. Le funnel tombait à zéro dès la deuxième marche, et l'écran
+        // n'affichait que des stocks vides — muet sur la cause.
+        let f = Funnel { lignes: 125_712, cf_distincts: 40_000, jj_valide: 0, ..Funnel::default() };
+        let a = alerte_colonne_jj(&f, "ADRESSAGE_ID").expect("le mapping fautif doit être nommé");
+        assert!(a.contains("ADRESSAGE_ID"), "la colonne en cause doit être nommée : {a}");
+        assert!(a.contains("40 000") || a.contains("40000"), "l'ampleur doit être dite : {a}");
+    }
+
+    #[test]
+    fn colonne_jj_partiellement_valide_n_est_pas_signalee() {
+        // Un seul jour de cycle lisible suffit à prouver que la colonne est la
+        // bonne : le reste est un problème de données, pas de mapping, et le
+        // funnel le montre déjà marche par marche.
+        let f = Funnel { lignes: 100, cf_distincts: 100, jj_valide: 1, ..Funnel::default() };
+        assert_eq!(alerte_colonne_jj(&f, "ACTG_CYCLE_DOM"), None);
+    }
+
+    #[test]
+    fn fichier_sans_aucun_compte_n_accuse_pas_la_colonne_jj() {
+        // `jj_valide` vaut 0 parce qu'il n'y a rien à lire, pas parce que la
+        // colonne est fausse. Accuser le mapping enverrait corriger ce qui va.
+        let f = Funnel { lignes: 3, cf_distincts: 0, jj_valide: 0, ..Funnel::default() };
+        assert_eq!(alerte_colonne_jj(&f, "ACTG_CYCLE_DOM"), None);
     }
 
     #[test]

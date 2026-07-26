@@ -22,6 +22,9 @@ function h(tag, attrs = {}, ...children) {
 // --- État global -------------------------------------------------------------
 const state = {
   inputPath: null,
+  // Mappings de colonnes mémorisés (réglages persistés), retrouvés par
+  // signature d'en-têtes — pas par chemin de fichier, qui bouge.
+  mappings: [],
   preview: null, // {headers, rows, delimiter, encoding, columns_hash, size_bytes, suggested_pid_column}
   // Profil courant (session seulement) : chemin/nom du YAML et instantané de
   // référence (profileSnapshot) — null tant qu'aucun profil chargé/enregistré.
@@ -163,6 +166,17 @@ async function pickInput(path) {
       state.config.input.cf_column = "";
       state.config.input.jj_column = "";
       state.config.input.raison_sociale_column = "";
+      // …sauf si cette STRUCTURE a déjà été mappée : la signature des en-têtes
+      // retrouve la désignation par-delà les relances, sans dépendre du chemin
+      // du fichier. Sans cela, tout redémarrage impose de re-désigner de
+      // mémoire — et une erreur de désignation vide l'écran de plan en silence.
+      const memo = state.mappings.find((m) => m.columns_hash === p.columns_hash);
+      if (memo) {
+        state.config.input.cf_column = memo.cf_column ?? "";
+        state.config.input.jj_column = memo.jj_column ?? "";
+        state.config.input.raison_sociale_column = memo.raison_sociale_column ?? "";
+        if (memo.pid_column) state.config.input.pid_column = memo.pid_column;
+      }
     }
     if (state.config.output.columns.length === 0 || headersChanged) {
       state.config.output.columns = [
@@ -242,6 +256,9 @@ function designatePid(name) {
   renderOutPreview();
   highlightPidColumn();
   syncStepperGating();
+  // Mémorisation en arrière-plan : elle ne conditionne rien à l'écran, et une
+  // désignation qui attendrait une écriture disque se sentirait.
+  return memoriserColonnes();
 }
 
 /** Surligne dans l'aperçu la colonne des adressages choisie (couleur d'accent,
@@ -547,11 +564,41 @@ function currentSettings() {
   const { dir, suffix, timestamp_suffix } = c.output;
   return { version: 1, api: c.api,
            output: { dir, suffix, timestamp_suffix },
-           ppf: { active_motifs: c.ppf.active_motifs } };
+           ppf: { active_motifs: c.ppf.active_motifs },
+           mappings: state.mappings };
+}
+
+/** Mémorise les colonnes désignées pour la structure du fichier ouvert.
+ *
+ *  Sans fichier, il n'y a pas de signature : mémoriser attacherait le mapping
+ *  à n'importe quelle structure. Le tri (entrée vide, doublon de signature,
+ *  liste bornée) appartient au backend — l'UI ne fait que transmettre. */
+async function memoriserColonnes() {
+  const p = state.preview;
+  if (!p?.columns_hash) return;
+  const i = state.config.input;
+  try {
+    const s = await invoke("remember_columns", {
+      settings: currentSettings(),
+      mapping: {
+        columns_hash: p.columns_hash,
+        pid_column: i.pid_column ?? "",
+        cf_column: i.cf_column ?? "",
+        jj_column: i.jj_column ?? "",
+        raison_sociale_column: i.raison_sociale_column ?? "",
+      },
+    });
+    state.mappings = s.mappings ?? [];
+  } catch (e) {
+    // Un mapping non mémorisé se re-désigne ; interrompre l'utilisateur pour
+    // ça serait disproportionné.
+    console.warn("mapping non mémorisé :", e);
+  }
 }
 /** Fusion sur les défauts de l'état : les champs à leur valeur par défaut sont
  *  absents du YAML (serde skip_serializing_if), un remplacement les perdrait. */
 function applySettings(s) {
+  state.mappings = s.mappings ?? [];
   Object.assign(state.config.api, s.api);
   Object.assign(state.config.output, s.output);
   Object.assign(state.config.ppf, s.ppf);
@@ -1331,6 +1378,7 @@ function renderPlanAside() {
     id, onchange: async (e) => {
       state.config.input[champ] = e.target.value;
       await pousserConfig();
+      await memoriserColonnes();
       renderPlanAside(); planRecalc();
     },
   },

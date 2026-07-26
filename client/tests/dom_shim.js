@@ -14,9 +14,16 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 
-const CHEMIN_APP = path.join(__dirname, "..", "src", "app.js");
+// Les scripts de `index.html`, dans son ordre, hors vendor (Sortable, stubé
+// plus bas) : ils partagent une seule portée globale dans la page, et une
+// fonction d'un fichier en appelle une autre sans cérémonie — n'en charger
+// qu'un donnerait des ReferenceError que la vraie application n'a pas.
+const SCRIPTS = ["app.js", "columns.js", "cockpit.js"]
+  .map((f) => path.join(__dirname, "..", "src", f));
 
 function creerDocument() {
+  // `document` est nommé ici pour que `focus()` puisse y poser activeElement.
+  let document;
   // `getElementById` rend le DERNIER élément créé sous cet id, comme le vrai
   // DOM rend celui qui est attaché après un remplacement de sous-arbre.
   const parId = new Map();
@@ -42,7 +49,13 @@ function creerDocument() {
       append(...kids) { for (const k of kids) if (k != null) this.children.push(k); },
       replaceChildren(...kids) { this.children = []; this.append(...kids); },
       querySelectorAll: () => [],
-      focus() {}, click() {}, remove() {},
+      /** Vrai pour l'élément lui-même et toute sa descendance, comme le DOM. */
+      contains(autre) {
+        if (autre === this) return true;
+        return this.children.some((c) => typeof c === "object" && c !== null && c.contains?.(autre));
+      },
+      focus() { document.activeElement = this; },
+      click() {}, remove() {},
     };
     Object.defineProperty(el, "value", {
       get() {
@@ -77,13 +90,21 @@ function creerDocument() {
     return parId.get(id);
   }
 
-  return {
+  document = {
     createElement,
     getElementById,
+    /** Élément ayant le focus, comme dans un navigateur : null par défaut. */
+    activeElement: null,
+    // Les sélecteurs CSS ne sont pas modélisés : un test qui en dépendrait
+    // porterait sur le rendu réel, hors de portée de ce shim. `querySelector`
+    // rend quand même un élément jetable — comme `getElementById` — pour que le
+    // code qui pose une propriété sur son résultat traverse sans exploser.
     querySelectorAll: () => [],
+    querySelector: () => createElement("div"),
     addEventListener() {},
     body: createElement("body"),
   };
+  return document;
 }
 
 /** Charge `src/app.js` dans un contexte NEUF (aucun état partagé entre tests).
@@ -112,6 +133,16 @@ function chargerApp() {
       core: { invoke },
       event: { listen: () => Promise.resolve(() => {}) },
       dialog: { open: async () => null, save: async () => null },
+      // `cockpit.js` s'abonne à la fermeture de fenêtre dès le chargement, et
+      // enchaîne un `.catch` sur la promesse rendue par `onCloseRequested`.
+      window: {
+        getCurrentWindow: () => ({
+          onCloseRequested: () => Promise.resolve(() => {}),
+          destroy() {},
+        }),
+      },
+      app: { getVersion: () => Promise.resolve("test") },
+      opener: { openUrl: async () => {} },
     },
     addEventListener() {},
     document,
@@ -121,20 +152,38 @@ function chargerApp() {
   // le process de test : `unref` les laisse fonctionner sans le maintenir en vie.
   const minuterie = (pose) => (fn, ms) => { const t = pose(fn, ms); t.unref?.(); return t; };
 
+  // Console captée : un `catch` qui se contente d'un `console.warn` rend une
+  // garde manquante indiscernable d'une erreur avalée. Les tests peuvent donc
+  // exiger une sortie propre, pas seulement une absence d'effet.
+  const plaintes = [];
+  const console_ = {
+    ...console,
+    warn: (...a) => plaintes.push(["warn", a.join(" ")]),
+    error: (...a) => plaintes.push(["error", a.join(" ")]),
+  };
+
   const ctx = vm.createContext({
-    document, window, console,
+    document, window, console: console_,
     setTimeout: minuterie(setTimeout), clearTimeout,
     setInterval: minuterie(setInterval), clearInterval,
     Promise, JSON, Math, Date, Intl, Number, String, Array, Object, Set, Map, Error,
     TextEncoder, TextDecoder, structuredClone,
   });
   ctx.globalThis = ctx;
-  vm.runInContext(fs.readFileSync(CHEMIN_APP, "utf8"), ctx, { filename: "app.js" });
+  // Seule dépendance vendorisée du front (drag des colonnes) : stubée, aucun
+  // test ne porte sur le drag, qui ne se rejoue pas sans pointeur.
+  ctx.Sortable = function Sortable() { return { destroy() {} }; };
+  ctx.Sortable.create = () => ({ destroy() {} });
+  for (const s of SCRIPTS) {
+    vm.runInContext(fs.readFileSync(s, "utf8"), ctx, { filename: path.basename(s) });
+  }
 
   return {
     app: ctx,
     $: document.getElementById,
     invocations,
+    /** `["warn"|"error", message]` émis par le code testé. */
+    plaintes,
     evaluer: (expr) => vm.runInContext(expr, ctx),
     /** Installe la réponse du backend : `(commande, args) => valeur`. */
     repondreAux: (fn) => { repondre = fn; },

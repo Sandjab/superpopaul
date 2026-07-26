@@ -371,8 +371,10 @@ impl Config {
 }
 
 // --- Réglages persistants (superpopaul.yaml, dossier données de l'app) --------
-// Lus au démarrage, écrits à la fermeture du panneau ⚙ : tout ce qui ne dépend
-// pas du fichier traité (API, proxy, forme de la sortie). Jamais les
+// Lus au démarrage, écrits à la fermeture du panneau ⚙ **et** à chaque
+// désignation de colonne (`remember_columns`) : tout ce qui ne dépend pas du
+// fichier traité (API, proxy, forme de la sortie), plus les mappings de
+// colonnes — indexés par signature d'en-têtes, donc pas par fichier. Jamais les
 // identifiants proxy (ProxyConfig les skippe déjà).
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -383,6 +385,56 @@ pub struct Settings {
     pub output: OutputSettings,
     #[serde(default, skip_serializing_if = "PpfConfig::is_default")]
     pub ppf: PpfConfig,
+    /// Mappings de colonnes mémorisés, le plus récent en tête.
+    ///
+    /// Exception assumée à la règle « les réglages ne dépendent pas du fichier
+    /// traité » : la clé n'est pas un chemin (il bouge, il se duplique) mais la
+    /// **signature des en-têtes**. Deux fichiers de même structure partagent
+    /// donc leur mapping, et un fichier renommé garde le sien. Sans cela, une
+    /// relance de l'application efface la désignation des colonnes en silence,
+    /// et un mapping refait de mémoire peut désigner la mauvaise colonne — vécu
+    /// en application, l'écran de plan tombait alors à zéro sans un mot.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mappings: Vec<ColumnMapping>,
+}
+
+/// Colonnes désignées pour une signature d'en-têtes donnée.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ColumnMapping {
+    /// `csv_io::columns_hash` des en-têtes du fichier.
+    pub columns_hash: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub pid_column: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub cf_column: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub jj_column: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub raison_sociale_column: String,
+}
+
+/// Au-delà, les plus anciens sont oubliés : le fichier de réglages ne doit pas
+/// croître sans fin au fil des fichiers traités.
+const MAX_MAPPINGS: usize = 20;
+
+/// Mémorise `m` en tête, en remplaçant l'entrée de même signature s'il y en a
+/// une : corriger une colonne mal désignée doit écraser l'ancienne, pas empiler
+/// un doublon que la relecture retrouverait en premier.
+///
+/// Un mapping entièrement vide n'est pas mémorisé — il n'apprendrait rien et
+/// chasserait une entrée utile de la liste bornée.
+pub fn memoriser_mapping(mappings: &mut Vec<ColumnMapping>, m: ColumnMapping) {
+    if m.pid_column.is_empty()
+        && m.cf_column.is_empty()
+        && m.jj_column.is_empty()
+        && m.raison_sociale_column.is_empty()
+    {
+        return;
+    }
+    mappings.retain(|x| x.columns_hash != m.columns_hash);
+    mappings.insert(0, m);
+    mappings.truncate(MAX_MAPPINGS);
 }
 
 /// La partie « forme » d'OutputConfig, sans les colonnes (qui appartiennent
@@ -757,7 +809,85 @@ mod tests {
                 timestamp_suffix: cfg.output.timestamp_suffix,
             },
             ppf: PpfConfig::default(),
+            mappings: Vec::new(),
         }
+    }
+
+
+    fn mapping(hash: &str, jj: &str) -> ColumnMapping {
+        ColumnMapping {
+            columns_hash: hash.into(),
+            pid_column: "ADRESSAGE_ID".into(),
+            cf_column: "CF_ID".into(),
+            jj_column: jj.into(),
+            raison_sociale_column: String::new(),
+        }
+    }
+
+    #[test]
+    fn mapping_memorise_le_plus_recent_en_tete() {
+        let mut m = Vec::new();
+        memoriser_mapping(&mut m, mapping("aaa", "ACTG_CYCLE_DOM"));
+        memoriser_mapping(&mut m, mapping("bbb", "JOUR"));
+        assert_eq!(m.iter().map(|x| x.columns_hash.as_str()).collect::<Vec<_>>(), ["bbb", "aaa"]);
+    }
+
+    #[test]
+    fn mapping_remplace_l_entree_de_meme_signature() {
+        // Corriger une colonne mal désignée doit écraser l'ancienne, pas
+        // empiler un doublon que la relecture trouverait en premier.
+        let mut m = Vec::new();
+        memoriser_mapping(&mut m, mapping("aaa", "ADRESSAGE_ID"));
+        memoriser_mapping(&mut m, mapping("aaa", "ACTG_CYCLE_DOM"));
+        assert_eq!(m.len(), 1);
+        assert_eq!(m[0].jj_column, "ACTG_CYCLE_DOM");
+    }
+
+    #[test]
+    fn mapping_vide_n_est_pas_memorise() {
+        // Ouvrir l'écran sans avoir rien désigné ne doit pas chasser une
+        // entrée utile au profit d'une entrée qui n'apprend rien.
+        let mut m = vec![mapping("aaa", "ACTG_CYCLE_DOM")];
+        memoriser_mapping(&mut m, ColumnMapping {
+            columns_hash: "bbb".into(),
+            pid_column: String::new(),
+            cf_column: String::new(),
+            jj_column: String::new(),
+            raison_sociale_column: String::new(),
+        });
+        assert_eq!(m.len(), 1);
+        assert_eq!(m[0].columns_hash, "aaa");
+    }
+
+    #[test]
+    fn mappings_bornes_les_plus_anciens_sont_oublies() {
+        // Le fichier de réglages ne doit pas croître au fil des fichiers.
+        let mut m = Vec::new();
+        for i in 0..MAX_MAPPINGS + 5 {
+            memoriser_mapping(&mut m, mapping(&format!("h{i}"), "ACTG_CYCLE_DOM"));
+        }
+        assert_eq!(m.len(), MAX_MAPPINGS);
+        assert_eq!(m[0].columns_hash, format!("h{}", MAX_MAPPINGS + 4), "le plus récent est en tête");
+        assert!(!m.iter().any(|x| x.columns_hash == "h0"), "le plus ancien est oublié");
+    }
+
+    #[test]
+    fn settings_sans_mappings_se_lisent_et_ne_reecrivent_rien() {
+        // Rétro-compat : tous les YAML existants sont dans ce cas.
+        let yaml = "version: 1\n\
+                    api:\n  url: \"x\"\n  key: \"\"\n  batch_size: 50\n  concurrency: 8\n  refresh_days: 30\n\
+                    output:\n  timestamp_suffix: false\n";
+        let s: Settings = serde_yaml::from_str(yaml).unwrap();
+        assert!(s.mappings.is_empty());
+        assert!(!serde_yaml::to_string(&s).unwrap().contains("mappings"));
+    }
+
+    #[test]
+    fn settings_mappings_font_l_aller_retour_yaml() {
+        let mut s = settings_exemple();
+        memoriser_mapping(&mut s.mappings, mapping("deadbeef", "ACTG_CYCLE_DOM"));
+        let back: Settings = serde_yaml::from_str(&serde_yaml::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back.mappings, s.mappings);
     }
 
     #[test]

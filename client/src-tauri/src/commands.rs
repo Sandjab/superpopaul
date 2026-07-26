@@ -234,6 +234,24 @@ pub fn save_settings(state: State<'_, AppState>, settings: config::Settings) -> 
     config::save_settings_file(&state.settings_path, &settings)
 }
 
+/// Mémorise les colonnes désignées pour une signature d'en-têtes, et rend les
+/// réglages à jour (l'appelant remplace les siens).
+///
+/// Prend les réglages courants plutôt que de relire le fichier : au premier
+/// lancement il n'existe pas encore, et `Settings` n'a pas de défaut sensé —
+/// l'UI, elle, en tient toujours un valide.
+#[tauri::command]
+pub fn remember_columns(
+    state: State<'_, AppState>,
+    settings: config::Settings,
+    mapping: config::ColumnMapping,
+) -> Result<config::Settings, String> {
+    let mut s = settings;
+    config::memoriser_mapping(&mut s.mappings, mapping);
+    config::save_settings_file(&state.settings_path, &s)?;
+    Ok(s)
+}
+
 /// Some(répertoire) si le mode portable est actif — sert de defaultPath aux
 /// dialogues de profils ; None en mode installé (comportement OS inchangé).
 #[tauri::command]
@@ -923,6 +941,11 @@ fn calculer_plan(
 
     let (meps, mut avertissements) =
         crate::calendrier::completer_meps(&runs, debut, fin, &meps_fournies, params.mep_count);
+    // Un mapping fautif vidait l'écran en silence : le funnel tombait à zéro
+    // dès la marche des jours de cycle, sans dire que la colonne était en
+    // cause. C'est le seul endroit qui connaisse à la fois le funnel et le nom
+    // de la colonne désignée.
+    avertissements.extend(crate::plan::alerte_colonne_jj(&funnel, &cfg.input.jj_column));
     let utilisables = crate::calendrier::runs_utilisables(&runs, debut, fin, &meps);
 
     // Plan existant : ce qui doit survivre au re-tirage.
