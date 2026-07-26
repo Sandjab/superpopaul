@@ -1274,12 +1274,12 @@ function planParams() {
     : null;
   const rampe = { forme, pilote };
   if (forme === "geometrique") rampe.raison = +$("plan-raison").value || 2;
-  // Les runs absents de la map valent 0 côté moteur : on n'envoie que les runs
-  // retenus, ce que le panneau affiche exactement.
-  if (forme === "manuelle") {
-    rampe.volumes = Object.fromEntries(
-      runsRetenus().map((r) => [r.num, plan.volumes[r.num] ?? 0]));
-  }
+  // Les volumes partent tels qu'ils sont tenus, SANS passer par l'aperçu : au
+  // tout premier recalcul — ouverture d'un plan enregistré — il n'existe pas
+  // encore, et les filtrer dessus enverrait une map vide. Le moteur donne 0 à
+  // tout run absent de la map, et ignore les clés qui ne désignent plus un run
+  // retenu : transmettre l'état brut est exact dans les deux sens.
+  if (forme === "manuelle") rampe.volumes = { ...plan.volumes };
   const cibleBrute = $("plan-cible")?.value ?? "";
   return {
     runs: plan.runs,
@@ -2039,7 +2039,22 @@ function planRecalc() {
       planBanner("warn", String(e));
     }
     renderPlanParam();
+    suivreApercuDansLePanneau();
   }, 250);
+}
+
+/** Le panneau latéral porte lui aussi des chiffres venus de l'aperçu — un champ
+ *  par run retenu, l'alerte de dépassement — donc il doit suivre les aperçus.
+ *  Sans cela, un plan enregistré en rampe manuelle rouvre avec la bonne forme
+ *  mais SANS ses champs : le panneau est rendu avant que le premier aperçu
+ *  existe, et il fallait changer de forme puis revenir pour les voir.
+ *
+ *  Sauf pendant une saisie : c'est la frappe qui déclenche le recalcul, et
+ *  reconstruire le panneau ferait perdre le focus au champ en cours. */
+function suivreApercuDansLePanneau() {
+  const actif = document.activeElement;
+  if (actif && $("plan-aside").contains(actif)) return;
+  renderPlanAside();
 }
 
 async function genererPlan() {

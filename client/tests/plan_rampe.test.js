@@ -291,12 +291,102 @@ test("la note sur la cible n'apparaît qu'en manuel", () => {
   assert.match(texteDe(note()), /quotas par plateforme/);
 });
 
+// ------------------------------------------- le panneau suit les aperçus
+
+/** Laisse passer l'anti-rebond de `planRecalc` (250 ms) et l'aperçu qui suit. */
+const attendreApercu = () => new Promise((r) => setTimeout(r, 320));
+
+test("les champs de volumes apparaissent dès l'arrivée du premier aperçu", async () => {
+  // Vécu en application : un plan enregistré en manuel rouvrait avec la bonne
+  // forme mais SANS ses champs — le panneau est rendu avant que l'aperçu
+  // existe, et rien ne le rerendait ensuite. Il fallait changer de forme puis
+  // revenir pour les voir.
+  const ctx = chargerApp();
+  const params = {
+    runs: [{ num: "3320", date: "2026-08-11", jjs: [1], exclu: false }],
+    debut: "2026-08-01", fin: "2026-11-30", meps: ["2026-08-03"], mep_count: 0,
+    cible: 900, seed: 7, pa_exclues: [],
+    rampe: { forme: "manuelle", pilote: null, volumes: { 3320: 40, 3327: 80, 3331: 120 } },
+  };
+  ctx.repondreAux((cmd) => {
+    if (cmd === "plan_load") return { params, fichier: "brm2607.csv", autre_fichier: false };
+    if (cmd === "plan_preview") return ctx.evaluer(`(${JSON.stringify(apercu(TROIS_RUNS))})`);
+    return null;
+  });
+
+  await ctx.app.ouvrirPlan();
+  assert.equal(ctx.$("plan-forme").value, "manuelle");
+
+  await attendreApercu();
+
+  assert.equal(ctx.$("plan-vol-3327").value, "80",
+    "les champs doivent être là sans qu'on ait à changer de forme");
+});
+
+test("le premier aperçu part avec les volumes restaurés", async () => {
+  // Vécu en application : les champs du panneau étaient bons, mais la timeline
+  // et les barres affichaient zéro partout jusqu'à ce qu'on change de forme.
+  // `planParams` lisait les volumes dans l'aperçu — qui n'existe pas encore au
+  // premier recalcul, donc le moteur recevait une map vide et rendait un plan
+  // vide, cohérent avec ce qu'on lui avait demandé.
+  const ctx = chargerApp();
+  const params = {
+    runs: [{ num: "3320", date: "2026-08-11", jjs: [1], exclu: false }],
+    debut: "2026-08-01", fin: "2026-11-30", meps: ["2026-08-03"], mep_count: 0,
+    cible: 900, seed: 7, pa_exclues: [],
+    rampe: { forme: "manuelle", pilote: null, volumes: { 3320: 40, 3327: 80, 3331: 120 } },
+  };
+  ctx.repondreAux((cmd) => {
+    if (cmd === "plan_load") return { params, fichier: "brm2607.csv", autre_fichier: false };
+    if (cmd === "plan_preview") return ctx.evaluer(`(${JSON.stringify(apercu(TROIS_RUNS))})`);
+    return null;
+  });
+
+  await ctx.app.ouvrirPlan();
+  await attendreApercu();
+
+  const appel = ctx.invocations.find(([c]) => c === "plan_preview");
+  assert.notEqual(appel, undefined, "un aperçu doit être demandé à l'ouverture");
+  assert.deepEqual(copie(appel[1].params.rampe.volumes),
+    { 3320: 40, 3327: 80, 3331: 120 },
+    "le tout premier aperçu doit déjà porter les volumes du plan enregistré");
+});
+
+test("une saisie en cours n'est pas interrompue par un aperçu", async () => {
+  // Le panneau suit les aperçus, mais le reconstruire pendant une frappe ferait
+  // perdre le focus au champ — et c'est la frappe elle-même qui déclenche le
+  // recalcul.
+  const ctx = ecran();
+  // `planRecalc` sort par son retour anticipé sans calendrier chargé : sans
+  // ces runs, le test n'atteindrait jamais le code qu'il prétend couvrir.
+  ctx.evaluer("plan").runs = ctx.evaluer(`(${JSON.stringify(
+    TROIS_RUNS.map((r) => ({ num: r.num, date: r.date, jjs: r.jjs, exclu: false })))})`);
+  ctx.repondreAux(() => ctx.evaluer(`(${JSON.stringify(apercu(TROIS_RUNS))})`));
+  choisirForme(ctx.$, "manuelle");
+
+  const champ = ctx.$("plan-vol-3327");
+  champ.focus();
+  champ.value = "175";
+  champ.listeners.input({ target: champ });
+
+  await attendreApercu();
+
+  assert.equal(ctx.$("plan-vol-3327"), champ, "le champ ne doit pas avoir été remplacé");
+  assert.equal(ctx.$("plan-vol-3327").value, "175");
+});
+
 test("« Tout à 0 » remet chaque run à zéro", () => {
   const { app, $ } = ecran();
   choisirForme($, "manuelle");
+  assert.equal($("plan-vol-3320").value, "40", "on part bien de volumes non nuls");
+
   trouver($("plan-aside"), (n) => n.attrs.id === "plan-vol-zero").listeners.click();
 
-  assert.deepEqual(copie(app.planParams().rampe.volumes),
-    { 3320: 0, 3327: 0, 3331: 0 },
-    "les runs restent listés — un run absent de la map vaudrait 0 en silence");
+  // Une map vide et une map de zéros sont équivalentes pour le moteur — un run
+  // absent vaut 0 (`rampe_manuelle_rend_les_volumes_verbatim`). Ce qui doit
+  // être vrai, c'est qu'aucun volume ne subsiste et que les runs restent
+  // listés, à zéro, prêts à être resaisis.
+  assert.deepEqual(copie(app.planParams().rampe.volumes), {});
+  assert.equal($("plan-vol-3320").value, "0");
+  assert.equal($("plan-vol-3331").value, "0");
 });
