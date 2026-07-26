@@ -74,10 +74,17 @@ lesquels sont au plan, sur quel run, et pourquoi les autres n'y sont pas.
    vaut `oui` / `retiré` / `non`, et le n° de run reste renseigné pour un
    retiré. Sans cela un retrait est indiscernable d'un compte jamais placé,
    alors que ce sont deux décisions opposées.
-8. **Adressage sous forme nue** (`0225:12345678900012`). C'est la forme stockée
-   depuis le 24/07 et celle qui se recoupe avec l'annuaire PPF. Un adressage
-   dont le schéma n'est pas 0225 sort sous sa forme canonique complète, faute de
-   valeur nue à extraire.
+8. **Adressage sous forme stockée, sans ICD** (`552100554`) — exactement ce que
+   rend `directory::parse_0225_value`. Un adressage dont le schéma n'est pas
+   0225 sort sous sa forme canonique complète, faute de valeur nue à extraire.
+
+   *Amendé le 26/07 après implémentation.* La rédaction initiale disait « forme
+   nue » mais l'illustrait par `0225:12345678900012`, ce qui n'est pas la même
+   chose : `parse_0225_value` retire l'ICD. L'implémenteur a signalé la
+   contradiction plutôt que de choisir seul. L'utilisateur a tranché pour la
+   forme réellement stockée, au motif que le CSV de sortie et la base l'écrivent
+   ainsi depuis le 24/07 — le classeur se recoupe donc avec les autres exports
+   et avec l'annuaire PPF sans retraitement.
 9. **Statuts CTC en valeurs brutes** (`ready`, `later`, `expired`, vide), dans le
    fichier **et** dans la fenêtre d'ajout. **Écart assumé** à la règle du projet
    « texte UI en français » (`CLAUDE.md`) : tranché explicitement par
@@ -273,6 +280,12 @@ la famille PPF. Jamais l'or (réservé à l'action) ni l'orange (avertissement).
 14. `un_adressage_non_0225_sort_sous_forme_canonique` — le repli de la
     décision 8.
 15. `le_statut_ctc_nest_pas_aplati` — `later` sort `later`, pas vide.
+16. `le_classeur_porte_ses_filtres_et_son_volet_fige` — **ajouté le 26/07**.
+    L'en-tête figé et les filtres automatiques sont ce qui justifie un vrai
+    `.xlsx` plutôt qu'un CSV ; sans ce test, les retirer ne cassait rien jusqu'à
+    ce que quelqu'un ouvre le fichier. Vérifié en décompressant
+    `xl/worksheets/sheet1.xml`, via `zip` en `[dev-dependencies]` — crate déjà
+    tiré en transitif par `rust_xlsxwriter`, donc aucun téléchargement neuf.
 
 ### Passe de mutation
 
