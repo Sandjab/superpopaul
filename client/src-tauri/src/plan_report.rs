@@ -11,6 +11,7 @@
 
 use crate::plan::{LignePlan, Origine};
 use crate::report::{esc, fmt_int, CSS};
+use chrono::Datelike;
 use std::collections::BTreeMap;
 
 pub struct PlanReportData<'a> {
@@ -128,11 +129,25 @@ pub fn render(d: &PlanReportData) -> String {
         pourcent(total, pool_total as u64)
     ));
     if let Some(c) = fin {
+        // Mois civils depuis la MEP 1, bornes incluses. Sans MEP connue (cas
+        // dégénéré), pas de ligne plutôt qu'une durée fausse.
+        let mep1 = meps
+            .first()
+            .and_then(|(_, date)| chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").ok());
+        let abs = match mep1 {
+            Some(debut) => {
+                let mois = (c.date.year() - debut.year()) * 12 + c.date.month() as i32
+                    - debut.month() as i32
+                    + 1;
+                format!("<div class=\"abs\">soit <b>{mois} mois</b> depuis la MEP 1</div>")
+            }
+            None => String::new(),
+        };
         html.push_str(&format!(
             "<div class=\"kpi\"><div class=\"v\">{}</div>\
-             <div class=\"l\">fin de montée en charge</div>\
-             <div class=\"abs\">dernier run portant un démarrage</div></div>\n",
-            c.date.format("%d/%m/%Y")
+             <div class=\"l\">fin de montée en charge</div>{}</div>\n",
+            c.date.format("%d/%m/%Y"),
+            abs
         ));
     }
     if let Some(p) = pic {
@@ -145,11 +160,24 @@ pub fn render(d: &PlanReportData) -> String {
             p.date.format("%d/%m/%Y")
         ));
     }
+    let jamais_servies = d
+        .pool_par_pa
+        .iter()
+        .filter(|(pa, n)| **n > 0 && !servies.contains(pa.as_str()))
+        .count();
+    let abs_couvertes = if jamais_servies > 0 {
+        format!(
+            "<div class=\"abs\"><b>{jamais_servies}</b> sans aucun compte planifié</div>"
+        )
+    } else {
+        String::new()
+    };
     html.push_str(&format!(
         "<div class=\"kpi\"><div class=\"v\">{} <span class=\"unit\">/ {}</span></div>\
-         <div class=\"l\">plateformes couvertes</div></div>\n",
+         <div class=\"l\">plateformes couvertes</div>{}</div>\n",
         servies.len(),
-        pa_du_pool
+        pa_du_pool,
+        abs_couvertes
     ));
     html.push_str("</section>\n");
 
@@ -299,6 +327,9 @@ pub fn render(d: &PlanReportData) -> String {
         let part_plan = part(p, total);
         let part_pool = part(e, pool_total as u64);
         let ecart = part_plan - part_pool;
+        // Aucun compte planifié n'est pas une part mesurée à zéro : « — »,
+        // pas « 0,0 % ». Ne concerne que la colonne du plan.
+        let part_plan_txt = if p == 0 { "—".to_string() } else { pourcent(p, total) };
         html.push_str(&format!(
             "<div class=\"dist-row{}\"><div class=\"dist-name\">{}</div>\
              <div class=\"dist-bars\">\
@@ -309,7 +340,7 @@ pub fn render(d: &PlanReportData) -> String {
             if p == 0 { " absent" } else { "" },
             esc(nom),
             fmt_int(p),
-            pourcent(p, total),
+            part_plan_txt,
             fmt_int(e),
             pourcent(e, pool_total as u64),
             if ecart >= 0.0 { "over" } else { "under" },
@@ -325,16 +356,18 @@ pub fn render(d: &PlanReportData) -> String {
          main. Les comptes retirés sont exclus de tous les chiffres ci-dessus.</p>\n\
          <section class=\"kpis sub\">\n",
     );
-    for (valeur, libelle) in [
-        (geles, "gelés (MEP passée)"),
-        (manuels, "retouches manuelles"),
-        (couverture, "placés pour couverture"),
-        (retires, "retirés"),
+    // « retirés » reste toujours éteint : contrairement aux trois autres, un
+    // retrait est une décision déjà prise et assumée, pas un état à considérer.
+    for (valeur, libelle, peut_sallumer) in [
+        (geles, "gelés (MEP passée)", true),
+        (manuels, "retouches manuelles", true),
+        (couverture, "placés pour couverture", true),
+        (retires, "retirés", false),
     ] {
         html.push_str(&format!(
             "<div class=\"kpi{}\"><div class=\"v\">{}</div>\
              <div class=\"l\">{libelle}</div></div>\n",
-            if valeur > 0 { " on" } else { "" },
+            if peut_sallumer && valeur > 0 { " on" } else { "" },
             fmt_int(valeur)
         ));
     }
@@ -612,5 +645,88 @@ mod tests {
         assert_eq!(fmt_ecart(4.4), "+4,4 pt");
         assert_eq!(fmt_ecart(-1.6), "−1,6 pt");
         assert_eq!(part(0, 0), 0.0, "aucune largeur de barre ne doit valoir NaN");
+    }
+
+    #[test]
+    fn le_kpi_plateformes_couvertes_signale_celles_jamais_servies() {
+        // Cegedim servie, Freedz jamais servie malgré 4 comptes du pool.
+        let lignes = vec![ligne("CF1", "Cegedim", "2026-08-01", Origine::Auto)];
+        let pool = BTreeMap::from([("Cegedim".to_string(), 10usize), ("Freedz".to_string(), 4)]);
+        let jj = BTreeMap::from([(5u8, 14usize)]);
+        let html = render(&data(&lignes, &pool, &jj, &runs_test()));
+        let c = corps(&html);
+        assert!(
+            c.contains("<b>1</b> sans aucun compte planifié"),
+            "la ligne .abs doit compter les plateformes du pool jamais servies : {c}"
+        );
+
+        // Pool entièrement servi : la ligne ne doit rien afficher (pas de bruit).
+        let pool_complet = BTreeMap::from([("Cegedim".to_string(), 10usize)]);
+        let html2 = render(&data(&lignes, &pool_complet, &jj, &runs_test()));
+        assert!(
+            !corps(&html2).contains("sans aucun compte planifié"),
+            "zéro plateforme jamais servie ne doit rien afficher"
+        );
+    }
+
+    #[test]
+    fn une_plateforme_du_plan_absente_affiche_un_tiret_pas_zero_virgule_zero() {
+        let lignes = vec![ligne("CF1", "Cegedim", "2026-08-01", Origine::Auto)];
+        let pool = BTreeMap::from([("Cegedim".to_string(), 10usize), ("Freedz".to_string(), 4)]);
+        let html = render(&data(&lignes, &pool, &BTreeMap::new(), &runs_test()));
+        let c = corps(&html);
+        assert!(
+            c.contains("<b>0</b> · —<br>4 · 28,6 %"),
+            "aucun compte planifié n'est pas une part mesurée à zéro : {c}"
+        );
+    }
+
+    #[test]
+    fn le_compteur_retires_reste_toujours_eteint() {
+        let mut r = ligne("CF2", "Cegedim", "2026-08-01", Origine::Auto);
+        r.retire = Some(crate::plan::Retrait { le: 1, motif: "clôturé".into() });
+        let lignes = vec![ligne("CF1", "Cegedim", "2026-08-01", Origine::Auto), r];
+        let pool = BTreeMap::from([("Cegedim".to_string(), 10usize)]);
+        let html = render(&data(&lignes, &pool, &BTreeMap::new(), &runs_test()));
+        let c = corps(&html);
+        // Comparaison exacte de la balise : `class="kpi"` sans `on`, quand un
+        // compteur générique non nul recevrait `class="kpi on"`.
+        assert!(
+            c.contains("<div class=\"kpi\"><div class=\"v\">1</div><div class=\"l\">retirés</div></div>"),
+            "« retirés » doit rester éteint même non nul, c'est une décision déjà assumée : {c}"
+        );
+    }
+
+    #[test]
+    fn la_fin_de_montee_en_charge_affiche_la_duree_depuis_la_mep_1() {
+        // MEP 1 le 01/08, dernier démarrage le 24/11 : août, septembre, octobre,
+        // novembre — 4 mois civils, bornes incluses.
+        let l1 = ligne("CF1", "Cegedim", "2026-08-01", Origine::Auto);
+        let mut l2 = ligne("CF2", "Cegedim", "2026-11-01", Origine::Auto);
+        l2.mep_id = 2;
+        l2.run_num = "R2".into();
+        l2.jj = 15;
+        let lignes = vec![l1, l2];
+        let runs = vec![
+            crate::calendrier::RunFacturation {
+                num: "R1".into(),
+                date: jour("2026-08-11"),
+                jjs: vec![5],
+                exclu: false,
+            },
+            crate::calendrier::RunFacturation {
+                num: "R2".into(),
+                date: jour("2026-11-24"),
+                jjs: vec![15],
+                exclu: false,
+            },
+        ];
+        let pool = BTreeMap::from([("Cegedim".to_string(), 2usize)]);
+        let html = render(&data(&lignes, &pool, &BTreeMap::new(), &runs));
+        let c = corps(&html);
+        assert!(
+            c.contains("soit <b>4 mois</b> depuis la MEP 1"),
+            "durée en mois civils pleins depuis la MEP 1, bornes incluses : {c}"
+        );
     }
 }
