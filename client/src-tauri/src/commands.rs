@@ -1450,6 +1450,13 @@ pub async fn plan_rapport(state: State<'_, AppState>) -> Result<String, String> 
         for c in &pool {
             *pool_par_pa.entry(c.pa.clone()).or_insert(0) += 1;
         }
+        let mut pool_par_jj: std::collections::BTreeMap<u8, usize> = Default::default();
+        for c in &pool {
+            *pool_par_jj.entry(c.jj).or_insert(0) += 1;
+        }
+        // Runs RETENUS : `calendrier_du_plan` applique déjà les trois filtres
+        // (exclusion, fenêtre, MEP passée), comme pour `plan_ajouter`.
+        let (runs, _meps) = calendrier_du_plan(&meta)?;
         let maintenant = chrono::Local::now();
         let html = crate::plan_report::render(&crate::plan_report::PlanReportData {
             fichier: &meta.fichier,
@@ -1458,7 +1465,8 @@ pub async fn plan_rapport(state: State<'_, AppState>) -> Result<String, String> 
             lignes: &lignes,
             aujourdhui: maintenant.date_naive(),
             pool_par_pa: &pool_par_pa,
-            avertissements: &[],
+            pool_par_jj: &pool_par_jj,
+            runs: &runs,
         });
         let out = resolved_out_dir(&input, &cfg.output.dir).join(format!(
             "{}_plan.html",

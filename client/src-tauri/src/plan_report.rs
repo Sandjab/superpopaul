@@ -20,12 +20,52 @@ pub struct PlanReportData<'a> {
     pub aujourdhui: chrono::NaiveDate,
     /// Pool éligible par plateforme, pour la comparaison plan vs pool.
     pub pool_par_pa: &'a BTreeMap<String, usize>,
-    pub avertissements: &'a [String],
+    /// Pool éligible par jour de cycle, pour détecter les comptes hors d'atteinte.
+    pub pool_par_jj: &'a BTreeMap<u8, usize>,
+    /// Runs **retenus** du calendrier.
+    pub runs: &'a [crate::calendrier::RunFacturation],
 }
 
 /// Comptes actifs (les retirés sont exclus partout : ils ne sont pas à livrer).
 fn actives(lignes: &[LignePlan]) -> Vec<&LignePlan> {
     lignes.iter().filter(|l| !l.retiree()).collect()
+}
+
+/// Avertissements que le rapport déduit de son propre contenu.
+///
+/// Les avertissements de l'allocation ne sont pas persistés dans `PlanMeta` :
+/// on ne peut pas les restituer. Ceux-ci portent la même information utile et
+/// se recalculent sur des données fraîches, ce que le rapport fait déjà pour
+/// le pool.
+fn avertissements_derives(
+    actifs: &[&LignePlan],
+    pool_par_pa: &BTreeMap<String, usize>,
+    pool_par_jj: &BTreeMap<u8, usize>,
+    runs: &[crate::calendrier::RunFacturation],
+) -> Vec<String> {
+    let mut out = Vec::new();
+
+    let servies: std::collections::HashSet<&str> = actifs.iter().map(|l| l.pa.as_str()).collect();
+    for (pa, n) in pool_par_pa {
+        if *n > 0 && !servies.contains(pa.as_str()) {
+            out.push(format!(
+                "plateforme « {pa} » : aucun compte planifié, alors que {n} comptes \
+                 du pool lui appartiennent"
+            ));
+        }
+    }
+
+    let couverts: std::collections::HashSet<u8> =
+        runs.iter().flat_map(|r| r.jjs.iter().copied()).collect();
+    for (jj, n) in pool_par_jj {
+        if *n > 0 && !couverts.contains(jj) {
+            out.push(format!(
+                "jour de cycle {jj} : {n} comptes hors d'atteinte — aucun run retenu \
+                 ne le couvre"
+            ));
+        }
+    }
+    out
 }
 
 pub fn render(d: &PlanReportData) -> String {
@@ -76,9 +116,10 @@ pub fn render(d: &PlanReportData) -> String {
     }
     html.push_str("</section>\n");
 
-    if !d.avertissements.is_empty() {
-        html.push_str("<section><h2>Avertissements</h2>\n<ul>\n");
-        for a in d.avertissements {
+    let avertissements = avertissements_derives(&actifs, d.pool_par_pa, d.pool_par_jj, d.runs);
+    if !avertissements.is_empty() {
+        html.push_str("<section class=\"warn\">\n<h2>Avertissements</h2>\n<ul>\n");
+        for a in &avertissements {
             html.push_str(&format!("<li>{}</li>\n", esc(a)));
         }
         html.push_str("</ul>\n</section>\n");
@@ -197,10 +238,20 @@ mod tests {
         }
     }
 
+    fn runs_test() -> Vec<crate::calendrier::RunFacturation> {
+        vec![crate::calendrier::RunFacturation {
+            num: "R1".into(),
+            date: jour("2026-08-11"),
+            jjs: vec![5],
+            exclu: false,
+        }]
+    }
+
     fn data<'a>(
         lignes: &'a [LignePlan],
         pool: &'a BTreeMap<String, usize>,
-        warns: &'a [String],
+        pool_par_jj: &'a BTreeMap<u8, usize>,
+        runs: &'a [crate::calendrier::RunFacturation],
     ) -> PlanReportData<'a> {
         PlanReportData {
             fichier: "clients.csv",
@@ -209,8 +260,72 @@ mod tests {
             lignes,
             aujourdhui: jour("2026-07-25"),
             pool_par_pa: pool,
-            avertissements: warns,
+            pool_par_jj,
+            runs,
         }
+    }
+
+    #[test]
+    fn avertit_sur_une_plateforme_du_pool_sans_compte_planifie() {
+        let lignes = vec![ligne("CF1", "Cegedim", "2026-08-01", Origine::Auto)];
+        let pool = BTreeMap::from([("Cegedim".to_string(), 10usize), ("Freedz".to_string(), 4)]);
+        let jj = BTreeMap::from([(5u8, 14usize)]);
+        let html = render(&data(&lignes, &pool, &jj, &runs_test()));
+        // Sur la phrase d'alerte, pas sur le seul nom : la table « Répartition
+        // par plateforme » liste déjà les plateformes du pool absentes du plan,
+        // donc « Freedz » seul serait présent même sans avertissement.
+        assert!(
+            html.contains("plateforme « Freedz »"),
+            "la plateforme non servie doit être nommée : {html}"
+        );
+    }
+
+    #[test]
+    fn avertit_sur_un_jour_de_cycle_hors_datteinte() {
+        let lignes = vec![ligne("CF1", "Cegedim", "2026-08-01", Origine::Auto)];
+        let pool = BTreeMap::from([("Cegedim".to_string(), 10usize)]);
+        // Le jour 12 pèse 30 comptes mais aucun run retenu ne le couvre.
+        let jj = BTreeMap::from([(5u8, 14usize), (12u8, 30usize)]);
+        let html = render(&data(&lignes, &pool, &jj, &runs_test()));
+        // Sur la phrase d'alerte, pas sur les nombres nus : le CSS inliné
+        // contient « 12 » et « 30 » (tailles, marges), qui passeraient toujours.
+        assert!(
+            html.contains("jour de cycle 12"),
+            "le jour de cycle orphelin doit être nommé : {html}"
+        );
+        assert!(
+            html.contains("30 comptes hors d&#39;atteinte"),
+            "son effectif aussi : c'est ce qui rend l'alerte actionnable"
+        );
+    }
+
+    #[test]
+    fn aucun_avertissement_quand_le_plan_couvre_tout() {
+        let lignes = vec![ligne("CF1", "Cegedim", "2026-08-01", Origine::Auto)];
+        let pool = BTreeMap::from([("Cegedim".to_string(), 10usize)]);
+        let jj = BTreeMap::from([(5u8, 14usize)]);
+        let html = render(&data(&lignes, &pool, &jj, &runs_test()));
+        // Sur le titre balisé, pas sur le mot : le CSS inliné contient déjà un
+        // commentaire « Avertissements » qui rendrait l'assertion ininterprétable.
+        assert!(!html.contains("<h2>Avertissements</h2>"), "pas de section vide : {html}");
+    }
+
+    #[test]
+    fn les_avertissements_derives_sont_echappes() {
+        let lignes = vec![ligne("CF1", "Cegedim", "2026-08-01", Origine::Auto)];
+        let pool = BTreeMap::from([
+            ("Cegedim".to_string(), 10usize),
+            ("<script>alert(1)</script>".to_string(), 4),
+        ]);
+        let jj = BTreeMap::from([(5u8, 14usize)]);
+        let html = render(&data(&lignes, &pool, &jj, &runs_test()));
+        assert!(!html.contains("<script>alert"), "injection non échappée");
+        // Dans la phrase d'alerte : la table de répartition échappe déjà ce nom
+        // de son côté, l'assertion doit viser l'avertissement lui-même.
+        assert!(
+            html.contains("plateforme « &lt;script&gt;alert(1)&lt;/script&gt; »"),
+            "{html}"
+        );
     }
 
     #[test]
@@ -219,7 +334,7 @@ mod tests {
         r.retire = Some(crate::plan::Retrait { le: 1, motif: "clôturé".into() });
         let lignes = vec![ligne("CF1", "Cegedim", "2026-08-01", Origine::Auto), r];
         let pool = BTreeMap::from([("Cegedim".to_string(), 10usize)]);
-        let html = render(&data(&lignes, &pool, &[]));
+        let html = render(&data(&lignes, &pool, &BTreeMap::new(), &runs_test()));
         assert!(html.contains("comptes planifiés"));
         assert!(html.contains("retirés"));
         // Un seul compte actif malgré deux lignes.
@@ -231,18 +346,9 @@ mod tests {
         // Nom de plateforme issu d'un SMP : entrée non fiable.
         let lignes = vec![ligne("CF1", "<script>alert(1)</script>", "2026-08-01", Origine::Auto)];
         let pool = BTreeMap::new();
-        let html = render(&data(&lignes, &pool, &[]));
+        let html = render(&data(&lignes, &pool, &BTreeMap::new(), &runs_test()));
         assert!(!html.contains("<script>alert"), "injection non échappée");
         assert!(html.contains("&lt;script&gt;"));
-    }
-
-    #[test]
-    fn rapport_echappe_aussi_les_avertissements() {
-        let lignes = vec![ligne("CF1", "PA", "2026-08-01", Origine::Auto)];
-        let pool = BTreeMap::new();
-        let warns = vec!["plateforme <b>X</b> : rien".to_string()];
-        let html = render(&data(&lignes, &pool, &warns));
-        assert!(html.contains("&lt;b&gt;X&lt;/b&gt;"), "{html}");
     }
 
     #[test]
@@ -252,7 +358,7 @@ mod tests {
         l2.run_num = "R2".into();
         let lignes = vec![ligne("CF1", "Cegedim", "2026-08-01", Origine::Auto), l2];
         let pool = BTreeMap::from([("Cegedim".to_string(), 5usize)]);
-        let html = render(&data(&lignes, &pool, &[]));
+        let html = render(&data(&lignes, &pool, &BTreeMap::new(), &runs_test()));
         assert!(html.contains("cumulatif"), "le lecteur doit savoir que les fichiers cumulent");
         assert!(html.contains("<td>R2</td>"));
     }
