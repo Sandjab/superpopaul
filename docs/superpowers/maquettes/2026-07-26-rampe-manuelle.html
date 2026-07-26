@@ -1,0 +1,401 @@
+<!doctype html>
+<html lang="fr">
+<meta charset="utf-8">
+<title>Plan de charge — maquette de la rampe manuelle</title>
+<style>
+  :root {
+    --bg: #0e1524; --card: #172136; --border: #2b3752;
+    --fg: #eae9e2; --muted: #939cb4;
+    --green: #4cc268; --gold: #d9a83f; --gold-hover: #e6bb5c; --on-gold: #241a02;
+    --amber: #e0873a; --red: #e5534b;
+    --btn2: #1b2740; --track: #223050;
+    --green-later: #2f8050;
+    --page: #080d17;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; }
+  .page {
+    background: var(--page); color: var(--fg);
+    font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    padding: 32px 20px 72px;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; display: flex; flex-direction: column; gap: 30px; }
+
+  .intro h1 { font-size: 21px; font-weight: 600; margin: 0 0 6px; text-wrap: balance; }
+  .intro p { margin: 0 0 8px; color: var(--muted); max-width: 74ch; }
+  .intro code, code { color: #e8e4d8; font-size: 12.5px; }
+
+  h2.q { font-size: 15px; font-weight: 600; margin: 0 0 4px; }
+  .lede { color: var(--muted); margin: 0 0 14px; max-width: 78ch; font-size: 13px; }
+  .tagline { display: inline-block; font: 600 10.5px/1 inherit; letter-spacing: .1em;
+    text-transform: uppercase; padding: 4px 8px; border-radius: 3px; margin-bottom: 8px; }
+  .tagline.reco { background: rgba(76,194,104,.14); color: var(--green); }
+  .tagline.alt { background: rgba(147,156,180,.14); color: var(--muted); }
+
+  /* ---- châssis ---- */
+  .app { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .app-head {
+    display: flex; align-items: baseline; gap: 14px;
+    padding: 12px 16px; border-bottom: 1px solid var(--border); background: var(--card);
+  }
+  .app-head .t { font-size: 15px; font-weight: 600; }
+  .app-head .s { font-size: 12px; color: var(--muted); }
+  .app-head .sp { margin-left: auto; }
+  .btn-gold {
+    background: var(--gold); color: var(--on-gold); border: 0; border-radius: 5px;
+    padding: 6px 13px; font: 600 12.5px/1 inherit; cursor: pointer;
+  }
+  .btn2 {
+    background: var(--btn2); color: var(--fg); border: 1px solid var(--border);
+    border-radius: 5px; padding: 5px 10px; font: 500 12px/1 inherit; cursor: pointer;
+  }
+  .tabs { display: flex; gap: 4px; padding: 8px 16px 0; border-bottom: 1px solid var(--border); }
+  .tab { background: none; border: 0; border-bottom: 2px solid transparent; color: var(--muted);
+    padding: 7px 12px; font: 500 13px/1 inherit; cursor: pointer; }
+  .tab.on { color: var(--fg); border-bottom-color: var(--gold); }
+
+  .layout { display: grid; grid-template-columns: 268px 1fr; min-height: 420px; }
+  @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
+  .aside { border-right: 1px solid var(--border); padding: 14px 16px; background: #131c2e; }
+  .main { padding: 16px 18px 22px; overflow: hidden; }
+
+  .aside h3 {
+    font: 600 11px/1 inherit; letter-spacing: .09em; text-transform: uppercase;
+    color: var(--muted); margin: 18px 0 8px;
+  }
+  .aside h3:first-child { margin-top: 0; }
+  .aside label.f { display: block; font-size: 12.5px; color: var(--muted); margin: 8px 0 2px; }
+  .aside select, .aside input[type=date] { width: 100%; }
+  select, input {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 4px;
+    padding: 4px 7px; font: 12.5px/1.4 inherit; color: var(--fg);
+  }
+  input[type=number] { font-variant-numeric: tabular-nums; text-align: right; }
+  .hintline { font-size: 12px; color: var(--muted); margin: 4px 0 8px; }
+
+  /* ---- le bloc neuf : volumes par run ---- */
+  .vols { display: flex; flex-direction: column; gap: 2px; margin-top: 2px; }
+  .vol {
+    display: grid; grid-template-columns: 1fr 66px; align-items: center; gap: 6px;
+    padding: 3px 0;
+  }
+  .vol .who { font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .vol .who b { font-weight: 600; }
+  .vol .who span { color: var(--muted); }
+  .vol input { width: 100%; }
+  .vol.over input { border-color: var(--amber); }
+  .vol .flag {
+    grid-column: 1 / -1; font-size: 11.5px; color: var(--amber); margin: -1px 0 3px;
+  }
+  .vols-foot {
+    display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+    margin-top: 9px; padding-top: 8px; border-top: 1px solid var(--border);
+    font-size: 12.5px; font-variant-numeric: tabular-nums;
+  }
+  .vols-foot .k { color: var(--muted); }
+  .vols-foot b { font-weight: 600; }
+  .vols-acts { display: flex; gap: 6px; margin-top: 9px; }
+  .lnk { background: none; border: 0; color: var(--muted); font: 12px/1 inherit;
+    text-decoration: underline; text-underline-offset: 2px; cursor: pointer; padding: 2px 0; }
+  .lnk:hover { color: var(--fg); }
+
+  .note-inline {
+    font-size: 11.5px; line-height: 1.5; color: var(--muted);
+    border-left: 2px solid var(--amber); padding: 2px 0 2px 8px; margin: 6px 0 0;
+  }
+  .note-inline b { color: var(--fg); font-weight: 600; }
+
+  /* ---- timeline ---- */
+  h2.sec { font-size: 13.5px; font-weight: 600; margin: 0 0 4px; }
+  .hint { font-size: 12px; color: var(--muted); margin: 0 0 12px; max-width: 74ch; }
+  .tl-scroll { overflow-x: auto; }
+  table.tl { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+  table.tl th { font-size: 11.5px; color: var(--muted); font-weight: 600; text-align: left;
+    padding: 0 8px 6px; white-space: nowrap; }
+  table.tl th.n { text-align: right; }
+  table.tl td { padding: 3px 8px; border-top: 1px solid rgba(43,55,82,.5); white-space: nowrap; }
+  table.tl td.n { text-align: right; }
+  tr.month td { padding: 15px 8px 5px; border-top: 0;
+    font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+  tr.month:first-child td { padding-top: 2px; }
+  td.day { color: var(--muted); font-size: 12.5px; }
+  tr.run td.day { color: var(--fg); font-weight: 600; }
+  tr.run { background: rgba(43,55,82,.28); }
+  tr.off td { color: var(--muted); opacity: .62; }
+  td.jj { color: var(--muted); font-size: 12px; }
+  .carry { color: var(--amber); font-weight: 600; }
+  .zero { color: var(--muted); }
+  tr.dropped td.day { font-weight: 500; color: var(--muted); }
+  tr.dropped { background: none; }
+  tr.dropped td.why { color: var(--muted); font-size: 12px; font-style: italic; }
+  tr.mep td { border-top: 1px solid var(--border); padding: 7px 8px;
+    background: linear-gradient(90deg, rgba(47,128,80,.16), rgba(47,128,80,0) 62%); }
+  tr.mep .flag { font-weight: 600; }
+  tr.mep .flag::before { content: "▶"; color: var(--green-later); margin-right: 7px; font-size: 11px; }
+  tr.bound td { padding: 6px 8px; border-top: 1px dashed var(--border); }
+  tr.bound .flag { color: var(--muted); font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase; }
+  .chk { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 12px; }
+  .chk input { accent-color: var(--gold); margin: 0; }
+  td .inline-vol { width: 62px; padding: 2px 6px; text-align: right; }
+  td .inline-vol.over { border-color: var(--amber); }
+
+  .bar-mini { display: flex; align-items: flex-end; gap: 4px; height: 54px; margin: 14px 0 4px; }
+  .bar-mini .b { flex: 1; display: flex; flex-direction: column; justify-content: flex-end;
+    align-items: center; gap: 4px; height: 100%; }
+  .bar-mini .b i { display: block; width: 100%; border-radius: 2px 2px 0 0; background: #5b6b96; }
+  .bar-mini .b.hi i { background: var(--gold); }
+  .bar-mini .b span { font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  /* ---- notes ---- */
+  .notes { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 18px 20px; }
+  .notes h2 { font-size: 14px; margin: 0 0 10px; }
+  .notes h3 { font-size: 12.5px; margin: 18px 0 6px; color: var(--gold); }
+  .notes ul { margin: 0; padding-left: 18px; }
+  .notes li { margin: 0 0 7px; font-size: 13px; color: #cfd5e4; }
+  .notes li b { color: var(--fg); }
+  .notes p { font-size: 13px; color: #cfd5e4; margin: 0 0 8px; }
+  .ask { border-left: 2px solid var(--gold); padding-left: 10px; margin: 6px 0 0; }
+  .ask li { color: var(--fg); }
+</style>
+
+<div class="page">
+<div class="wrap">
+
+  <div class="intro">
+    <h1>Rampe manuelle — maquette</h1>
+    <p>Le moteur sait déjà le faire : <code>Forme::Manuelle { volumes }</code> rend les volumes
+    saisis <b>verbatim</b>, run par run, un run absent valant 0. Il n'existe simplement aucune IHM
+    pour les renseigner — la 4<sup>e</sup> option n'est pas dans le sélecteur de forme.</p>
+    <p>Deux variantes de placement ci-dessous. Les chiffres sont fictifs mais cohérents :
+    6 Runs de Facturation retenus, pool éligible de 1 240 comptes.</p>
+  </div>
+
+  <!-- ================= VARIANTE A ================= -->
+  <div>
+    <span class="tagline reco">Variante A — recommandée : saisie dans le panneau</span>
+    <h2 class="q">Les volumes se saisissent à gauche, avec les autres paramètres</h2>
+    <p class="lede">Conforme au layout de l'écran (paramètres à gauche, résultats à droite), et
+    stable : le panneau ne se reconstruit pas à chaque recalcul, la saisie ne bouge pas sous les
+    doigts. La timeline, à droite, montre l'effet en miroir — stock, placé, reliquat.</p>
+
+    <div class="app">
+      <div class="app-head">
+        <span class="t">Plan de charge</span>
+        <span class="s">clients_2026.csv</span>
+        <span class="sp"></span>
+        <button class="btn2">Fermer</button>
+      </div>
+      <div class="tabs">
+        <button class="tab on">Paramétrage</button>
+        <button class="tab">Récapitulatif <span style="color:var(--muted)">1 000</span></button>
+      </div>
+      <div class="layout">
+
+        <div class="aside">
+          <h3>Fenêtre FUT</h3>
+          <div style="display:flex; gap:8px">
+            <div style="flex:1"><label class="f">Début</label><input type="date" value="2026-08-01"></div>
+            <div style="flex:1"><label class="f">Fin</label><input type="date" value="2026-11-30"></div>
+          </div>
+
+          <h3>Cible</h3>
+          <label class="f">Comptes distincts à traiter</label>
+          <input type="number" placeholder="auto" value="" style="width:120px">
+          <p class="note-inline">En rampe manuelle, la cible <b>ne fixe plus le volume</b> — les
+          volumes saisis font foi. Elle sert encore de base aux <b>quotas par plateforme</b>.</p>
+
+          <h3>Rampe de montée en charge</h3>
+          <label class="f">Forme</label>
+          <select>
+            <option>Plate (équirépartie)</option>
+            <option>Linéaire (croissance douce)</option>
+            <option>Géométrique (raison réglable)</option>
+            <option selected>Manuelle (volume par run)</option>
+          </select>
+
+          <label class="f" style="margin-top:12px">Volumes par run</label>
+          <div class="vols">
+            <div class="vol"><span class="who"><b>3320</b> <span>· 11/08</span></span><input type="number" value="40"></div>
+            <div class="vol"><span class="who"><b>3327</b> <span>· 10/09</span></span><input type="number" value="80"></div>
+            <div class="vol"><span class="who"><b>3331</b> <span>· 25/09</span></span><input type="number" value="120"></div>
+            <div class="vol over">
+              <span class="who"><b>3336</b> <span>· 09/10</span></span><input type="number" value="200">
+              <span class="flag">stock 143 sur ce run — 57 reportés</span>
+            </div>
+            <div class="vol"><span class="who"><b>3341</b> <span>· 23/10</span></span><input type="number" value="260"></div>
+            <div class="vol"><span class="who"><b>3346</b> <span>· 06/11</span></span><input type="number" value="300"></div>
+          </div>
+          <div class="vols-foot">
+            <span class="k">Total saisi</span><b>1 000</b>
+          </div>
+          <div class="vols-foot" style="margin-top:2px; padding-top:0; border:0">
+            <span class="k">Pool atteignable</span><b style="color:var(--muted)">1 240</b>
+          </div>
+          <div class="vols-acts">
+            <button class="lnk">Tout à 0</button>
+            <span style="color:var(--border)">·</span>
+            <button class="lnk">Repartir de la forme linéaire</button>
+          </div>
+
+          <h3>Options</h3>
+          <label class="f">Seed</label>
+          <input type="number" value="42" style="width:100px">
+          <p class="hintline">Départage déterministe à priorité égale.</p>
+
+          <button class="btn-gold" style="width:100%; margin-top:16px">Régénérer le plan</button>
+        </div>
+
+        <div class="main">
+          <h2 class="sec">Calendrier</h2>
+          <p class="hint">6 run(s) retenu(s) sur 7 affiché(s) · rattachement à la dernière MEP passée,
+          celle du jour même comprise. Cocher « exclure » retire le run du plan.</p>
+          <div class="tl-scroll">
+            <table class="tl">
+              <tr>
+                <th>Jour</th><th>Run</th><th>Jours facturés</th>
+                <th class="n">Visé</th><th class="n">Report</th><th class="n">Stock</th>
+                <th class="n">Placé</th><th class="n">Reliquat</th><th></th>
+              </tr>
+              <tr class="month"><td colspan="9">août 2026</td></tr>
+              <tr class="bound"><td class="day">sam 01/08</td><td class="flag" colspan="8">Début de la fenêtre FUT</td></tr>
+              <tr class="mep"><td class="day">lun 03/08</td><td class="flag" colspan="8">MEP 1</td></tr>
+              <tr class="run"><td class="day">mar 11/08</td><td>3320</td><td class="jj">1, 5</td>
+                <td class="n">40</td><td class="n zero">0</td><td class="n">318</td><td class="n">40</td><td class="n zero">0</td>
+                <td><label class="chk"><input type="checkbox"> exclure</label></td></tr>
+              <tr class="month"><td colspan="9">septembre 2026</td></tr>
+              <tr class="run"><td class="day">jeu 10/09</td><td>3327</td><td class="jj">1, 5</td>
+                <td class="n">80</td><td class="n zero">0</td><td class="n">278</td><td class="n">80</td><td class="n zero">0</td>
+                <td><label class="chk"><input type="checkbox"> exclure</label></td></tr>
+              <tr class="run"><td class="day">ven 25/09</td><td>3331</td><td class="jj">10, 15</td>
+                <td class="n">120</td><td class="n zero">0</td><td class="n">204</td><td class="n">120</td><td class="n zero">0</td>
+                <td><label class="chk"><input type="checkbox"> exclure</label></td></tr>
+              <tr class="month"><td colspan="9">octobre 2026</td></tr>
+              <tr class="run"><td class="day">ven 09/10</td><td>3336</td><td class="jj">10, 15</td>
+                <td class="n">200</td><td class="n zero">0</td><td class="n">143</td><td class="n">143</td><td class="n carry">57</td>
+                <td><label class="chk"><input type="checkbox"> exclure</label></td></tr>
+              <tr class="run"><td class="day">ven 23/10</td><td>3341</td><td class="jj">20, 25</td>
+                <td class="n">260</td><td class="n carry">57</td><td class="n">402</td><td class="n">317</td><td class="n zero">0</td>
+                <td><label class="chk"><input type="checkbox"> exclure</label></td></tr>
+              <tr class="dropped"><td class="day">sam 24/10</td><td>3342</td><td class="jj">20</td>
+                <td class="why" colspan="6">écarté — exclu manuellement</td></tr>
+              <tr class="month"><td colspan="9">novembre 2026</td></tr>
+              <tr class="run"><td class="day">ven 06/11</td><td>3346</td><td class="jj">1, 5</td>
+                <td class="n">300</td><td class="n zero">0</td><td class="n">300</td><td class="n">300</td><td class="n zero">0</td>
+                <td><label class="chk"><input type="checkbox"> exclure</label></td></tr>
+              <tr class="bound"><td class="day">lun 30/11</td><td class="flag" colspan="8">Fin de la fenêtre FUT</td></tr>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= VARIANTE B ================= -->
+  <div>
+    <span class="tagline alt">Variante B — saisie dans la timeline</span>
+    <h2 class="q">La colonne « Visé » devient éditable sur les runs retenus</h2>
+    <p class="lede">Plus riche à l'usage : on saisit en voyant le stock du run, le report entrant et
+    le reliquat sur la même ligne. Mais la timeline est un <b>panneau de résultat</b>, reconstruit à
+    chaque recalcul — il faut alors protéger le champ en cours de saisie du re-rendu, et c'est
+    exactement la classe de bug qui a mordu deux fois sur cet écran.</p>
+
+    <div class="app">
+      <div class="main" style="padding:16px 18px 20px">
+        <div class="tl-scroll">
+          <table class="tl">
+            <tr>
+              <th>Jour</th><th>Run</th><th>Jours facturés</th>
+              <th class="n">Visé</th><th class="n">Report</th><th class="n">Stock</th>
+              <th class="n">Placé</th><th class="n">Reliquat</th><th></th>
+            </tr>
+            <tr class="run"><td class="day">mar 11/08</td><td>3320</td><td class="jj">1, 5</td>
+              <td class="n"><input class="inline-vol" type="number" value="40"></td>
+              <td class="n zero">0</td><td class="n">318</td><td class="n">40</td><td class="n zero">0</td>
+              <td><label class="chk"><input type="checkbox"> exclure</label></td></tr>
+            <tr class="run"><td class="day">jeu 10/09</td><td>3327</td><td class="jj">1, 5</td>
+              <td class="n"><input class="inline-vol" type="number" value="80"></td>
+              <td class="n zero">0</td><td class="n">278</td><td class="n">80</td><td class="n zero">0</td>
+              <td><label class="chk"><input type="checkbox"> exclure</label></td></tr>
+            <tr class="run"><td class="day">ven 09/10</td><td>3336</td><td class="jj">10, 15</td>
+              <td class="n"><input class="inline-vol over" type="number" value="200"></td>
+              <td class="n zero">0</td><td class="n">143</td><td class="n">143</td><td class="n carry">57</td>
+              <td><label class="chk"><input type="checkbox"> exclure</label></td></tr>
+            <tr class="dropped"><td class="day">sam 24/10</td><td>3342</td><td class="jj">20</td>
+              <td class="why" colspan="6">écarté — exclu manuellement (pas de volume à saisir)</td></tr>
+          </table>
+        </div>
+        <p class="hint" style="margin-top:12px">Le champ borde d'ambre quand le volume dépasse le
+        stock du run : le surplus part en report sur le run suivant, il n'est pas perdu.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= APERÇU ================= -->
+  <div>
+    <span class="tagline alt">Commun aux deux variantes</span>
+    <h2 class="q">Aperçu de la rampe en barres</h2>
+    <p class="lede">Annoncé en v2 dans la spec, il manque aujourd'hui : les volumes ne se lisent
+    qu'en chiffres. Une barre par run, sous la timeline, à côté du graphe du stock par jour de
+    cycle. En manuel, la barre du run édité s'éclaire à la saisie.</p>
+    <div class="app"><div class="main">
+      <h2 class="sec">Volumes par run</h2>
+      <div class="bar-mini">
+        <span class="b" style="height:100%"><i style="height:13%"></i><span>40</span></span>
+        <span class="b" style="height:100%"><i style="height:27%"></i><span>80</span></span>
+        <span class="b" style="height:100%"><i style="height:40%"></i><span>120</span></span>
+        <span class="b hi" style="height:100%"><i style="height:67%"></i><span>200</span></span>
+        <span class="b" style="height:100%"><i style="height:87%"></i><span>260</span></span>
+        <span class="b" style="height:100%"><i style="height:100%"></i><span>300</span></span>
+      </div>
+      <p class="hint">3320 · 3327 · 3331 · 3336 · 3341 · 3346 — total 1 000 comptes.</p>
+    </div></div>
+  </div>
+
+  <!-- ================= NOTES ================= -->
+  <div class="notes">
+    <h2>Ce que la maquette engage côté code</h2>
+
+    <h3>Trois pièges déjà repérés dans le moteur</h3>
+    <ul>
+      <li><b>La cible n'est pas neutralisée en manuel.</b> <code>construire_rampe</code> l'ignore,
+      mais <code>allouer</code> s'en sert toujours : <code>quotas_par_pa(cible + préservées)</code>
+      pilote la répartition entre plateformes. La griser serait donc faux — d'où la note explicite
+      dans le panneau plutôt qu'un champ désactivé.</li>
+      <li><b>Le pilote, lui, n'a aucun effet en manuel</b> (le code retourne avant
+      <code>niveau_pilote</code>). Pire : <code>rampe_pilote_infaisable</code> reste appelé et peut
+      cracher « la cible est trop basse pour tenir V comptes par run » à propos d'un pilote qui ne
+      s'applique pas. La maquette le retire donc de l'écran en manuel — et le JS devra forcer
+      <code>pilote: null</code>, pas seulement masquer le bloc.</li>
+      <li><b>Un run absent de la map vaut 0</b>, sans un mot. Les champs doivent donc couvrir tous
+      les runs retenus, et un run nouvellement retenu (MEP déplacée, exclusion décochée) doit
+      apparaître dans la liste, à 0 mais visible.</li>
+    </ul>
+
+    <h3>Ce que la bascule vers « manuelle » doit faire</h3>
+    <p>Pré-remplir les champs avec les volumes <b>actuellement affichés</b>, ceux de la forme qu'on
+    quitte. Repartir de zéro obligerait à tout ressaisir alors que le geste réel est « je prends
+    ma rampe linéaire et j'ajuste deux runs ». C'est aussi ce qui rend inutile un bouton
+    « répartir » : on choisit la forme, on bascule, on retouche.</p>
+
+    <h3>Le code mort à retirer au passage</h3>
+    <p><code>app.js:1214</code> porte déjà <code>if (forme === "manuelle") rampe.volumes = {}</code> —
+    jamais atteint faute d'option dans le sélecteur, et il enverrait une map vide, donc tous les
+    runs à 0.</p>
+
+    <h3>Questions ouvertes — à trancher avant le code</h3>
+    <ul class="ask">
+      <li><b>Variante A ou B ?</b> A est plus sûre et conforme au layout ; B est plus agréable mais
+      demande de protéger la saisie du re-rendu.</li>
+      <li><b>L'aperçu en barres, maintenant ou plus tard ?</b> Il est indépendant de la rampe
+      manuelle et sert aussi aux trois autres formes.</li>
+      <li><b>Le dépassement de stock doit-il alerter ?</b> Ici il borde d'ambre. Ce n'est pas une
+      erreur — le surplus part en report — mais c'est utile à voir avant de générer.</li>
+      <li><b>Faut-il persister les volumes manuels</b> dans <code>PlanParams</code> comme le reste ?
+      Le YAML les porte déjà (<code>Forme::Manuelle</code> est sérialisée), donc oui par défaut,
+      mais cela veut dire qu'un plan rechargé rouvre en manuel avec ses volumes.</li>
+    </ul>
+  </div>
+
+</div>
+</div>
+</html>
