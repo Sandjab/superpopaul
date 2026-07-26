@@ -96,7 +96,7 @@ pub fn run() {
             commands::plan_generate,
             commands::plan_load,
             commands::plan_lignes,
-            commands::plan_candidats,
+            commands::plan_candidats_run,
             commands::plan_ajouter,
             commands::plan_deplacer,
             commands::plan_retirer,

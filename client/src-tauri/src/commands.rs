@@ -1165,7 +1165,13 @@ pub struct Candidat {
     pub raison_sociale: String,
     pub jj: u8,
     pub pa: String,
+    /// Agrégat qui décide du marquage ⚠ : CTC prêt ET PPF utilisable.
     pub eligible: bool,
+    /// Adressage sous forme nue (`0225:…`) quand le schéma s'y prête.
+    pub participant: String,
+    /// `"ready"` | `"later"` | `"expired"` | `""` — jamais aplati.
+    pub ctc_status: String,
+    pub ppf_usable: bool,
 }
 
 fn etat_de(e: Option<&crate::plan::LigneEntree>) -> String {
@@ -1229,37 +1235,61 @@ fn entrees_par_cf(
     Ok(entrees.into_iter().map(|e| (e.cf.clone(), e)).collect())
 }
 
-/// Comptes du fichier absents du plan. Un compte NON éligible est proposé
-/// quand même — l'ajouter est un choix assumé (forcer un pilote qu'on sait
-/// prêt côté PDP) —, mais il est signalé.
+/// Comptes proposables sur un run : jour de cycle couvert et absents du plan.
+///
+/// Le filtre par jour de cycle est une contrainte arithmétique — un run ne peut
+/// pas facturer un autre jour. En revanche un compte non éligible (CTC non prêt,
+/// PPF non utilisable) est proposé et **signalé** : le forcer est un choix assumé.
+fn candidats_du_run(
+    entrees: &[crate::plan::LigneEntree],
+    run: &crate::calendrier::RunFacturation,
+    deja_au_plan: &HashSet<String>,
+) -> Vec<Candidat> {
+    entrees
+        .iter()
+        .filter(|e| !deja_au_plan.contains(&e.cf))
+        .filter_map(|e| {
+            let jj = crate::plan::parse_jj(&e.jj_brut)?;
+            run.couvre(jj).then(|| Candidat {
+                cf: e.cf.clone(),
+                raison_sociale: e.raison_sociale.clone(),
+                jj,
+                pa: e.pa.clone(),
+                eligible: e.ctc_ready && e.ppf_usable,
+                participant: crate::directory::parse_0225_value(&e.participant)
+                    .unwrap_or_else(|| e.participant.clone()),
+                ctc_status: e.ctc_status.clone(),
+                ppf_usable: e.ppf_usable,
+            })
+        })
+        .collect()
+}
+
+/// Comptes proposables sur un run donné. Le run est le point d'entrée : on
+/// choisit d'abord où livrer, ensuite quoi y mettre.
 #[tauri::command]
-pub async fn plan_candidats(state: State<'_, AppState>) -> Result<Vec<Candidat>, String> {
+pub async fn plan_candidats_run(
+    state: State<'_, AppState>,
+    run_num: String,
+) -> Result<Vec<Candidat>, String> {
     let cfg = state.current_config()?;
     let input = state.input_path()?;
     let store = state.store.clone();
     tokio::task::spawn_blocking(move || {
-        let deja: HashSet<String> = store
-            .lock()
-            .unwrap()
-            .charger_plan()?
-            .map(|(l, _)| l.into_iter().map(|l| l.cf).collect())
-            .unwrap_or_default();
-        let par_cf = entrees_par_cf(&store, &input, &cfg)?;
-        let mut out: Vec<Candidat> = par_cf
-            .values()
-            .filter(|e| !deja.contains(&e.cf))
-            .filter_map(|e| {
-                e.jj_brut.trim().parse::<u8>().ok().filter(|j| (1..=31).contains(j)).map(|jj| {
-                    Candidat {
-                        cf: e.cf.clone(),
-                        raison_sociale: e.raison_sociale.clone(),
-                        jj,
-                        pa: e.pa.clone(),
-                        eligible: e.ctc_ready && e.ppf_usable,
-                    }
-                })
-            })
-            .collect();
+        let (lignes, meta) = charger_pour_retouche(&store)?;
+        let (runs, _) = calendrier_du_plan(&meta)?;
+        // Run inconnu ou écarté : une erreur nommée, pas une liste vide qui
+        // ferait croire qu'aucun compte n'est proposable.
+        let run = runs
+            .iter()
+            .find(|r| r.num == run_num)
+            .ok_or_else(|| format!("run « {run_num} » inconnu ou écarté du plan"))?;
+        let deja: HashSet<String> = lignes.into_iter().map(|l| l.cf).collect();
+        let entrees: Vec<crate::plan::LigneEntree> =
+            entrees_par_cf(&store, &input, &cfg)?.into_values().collect();
+        let mut out = candidats_du_run(&entrees, run, &deja);
+        // `entrees_par_cf` rend une table de hachage : sans tri, l'ordre de la
+        // fenêtre d'ajout changerait à chaque ouverture.
         out.sort_by(|a, b| a.cf.cmp(&b.cf));
         Ok(out)
     })
@@ -1694,5 +1724,81 @@ mod tests {
             sha256_hex(b"abc"),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
+    }
+
+    /// Un run couvrant les jours de cycle 1 et 5.
+    fn run_test() -> crate::calendrier::RunFacturation {
+        crate::calendrier::RunFacturation {
+            num: "R3".into(),
+            date: chrono::NaiveDate::from_ymd_opt(2026, 9, 8).unwrap(),
+            jjs: vec![1, 5],
+            exclu: false,
+        }
+    }
+
+    fn entree(cf: &str, jj: &str, ctc: &str, ppf: bool) -> crate::plan::LigneEntree {
+        crate::plan::LigneEntree {
+            cf: cf.into(),
+            participant: "0225:1".into(),
+            jj_brut: jj.into(),
+            raison_sociale: "ACME".into(),
+            pa: "Cegedim".into(),
+            resolu: true,
+            ctc_ready: ctc == "ready",
+            ctc_status: ctc.into(),
+            ppf_usable: ppf,
+            in_directory: true,
+            resolved_at: 0,
+        }
+    }
+
+    #[test]
+    fn candidats_run_ne_rend_que_les_jours_de_cycle_couverts() {
+        let entrees = vec![
+            entree("CF1", "5", "ready", true),
+            entree("CF2", "12", "ready", true),
+        ];
+        let out = candidats_du_run(&entrees, &run_test(), &HashSet::new());
+        assert_eq!(out.len(), 1, "le jour 12 n'est pas couvert par ce run");
+        assert_eq!(out[0].cf, "CF1");
+    }
+
+    #[test]
+    fn candidats_run_exclut_les_comptes_deja_au_plan() {
+        let entrees = vec![entree("CF1", "5", "ready", true)];
+        let deja: HashSet<String> = ["CF1".to_string()].into_iter().collect();
+        assert!(candidats_du_run(&entrees, &run_test(), &deja).is_empty());
+    }
+
+    #[test]
+    fn candidats_run_rend_les_non_eligibles_signales() {
+        // Les forcer reste un choix assumé : ils sont proposés ET marqués.
+        let entrees = vec![
+            entree("CF1", "5", "later", true),
+            entree("CF2", "1", "ready", false),
+        ];
+        let out = candidats_du_run(&entrees, &run_test(), &HashSet::new());
+        assert_eq!(out.len(), 2);
+        assert!(out.iter().all(|c| !c.eligible), "aucun des deux n'est pleinement éligible");
+    }
+
+    #[test]
+    fn candidats_run_porte_le_statut_ctc_complet() {
+        // Le test qui distingue le champ neuf du booléen préexistant : sans lui,
+        // rendre `ctc_status` toujours vide passerait inaperçu.
+        let entrees = vec![
+            entree("CF1", "5", "later", true),
+            entree("CF2", "1", "expired", true),
+        ];
+        let out = candidats_du_run(&entrees, &run_test(), &HashSet::new());
+        let statuts: Vec<&str> = out.iter().map(|c| c.ctc_status.as_str()).collect();
+        assert!(statuts.contains(&"later") && statuts.contains(&"expired"), "{statuts:?}");
+    }
+
+    #[test]
+    fn candidats_run_ignore_un_jour_de_cycle_illisible() {
+        // Un JJ hors bornes ou non numérique ne correspond à aucun run.
+        let entrees = vec![entree("CF1", "zzz", "ready", true), entree("CF2", "99", "ready", true)];
+        assert!(candidats_du_run(&entrees, &run_test(), &HashSet::new()).is_empty());
     }
 }

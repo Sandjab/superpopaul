@@ -160,7 +160,7 @@ pub fn construire_pool(
 
 /// Jour de cycle : entier 1..=31, espaces tolérés. Tout le reste est écarté
 /// (et compté par le funnel) — un JJ hors bornes ne correspond à aucun run.
-fn parse_jj(brut: &str) -> Option<u8> {
+pub(crate) fn parse_jj(brut: &str) -> Option<u8> {
     let jj: u8 = brut.trim().parse().ok()?;
     (1..=31).contains(&jj).then_some(jj)
 }
