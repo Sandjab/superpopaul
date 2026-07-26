@@ -13,6 +13,9 @@
 Résolution Peppol en masse : un CSV d'adressages en entrée, un CSV enrichi en
 sortie (présence dans Peppol, code, nom et pays de la PA, prise en charge
 d'EXTENDED-CTC-FR).
+L'application graphique va plus loin : croisement avec les annuaires Peppol et
+PPF, rapports HTML, et **plan de charge** — la répartition des comptes de
+facturation sur un calendrier de Runs de Facturation.
 Le repo contient tout l'écosystème — le serveur d'API et ses clients :
 
 ```
@@ -45,6 +48,19 @@ maintenue par tests miroir.
 - **Pause/reprise** à chaud et entre sessions (détection de run incomplet).
 - Erreurs intelligentes : 401 → suspension + ressaisie de clé ; 429 → backoff
   adaptatif (AIMD) ; 5xx en rafale → circuit breaker avec re-test automatique.
+- **Annuaires** : chargement cumulatif de l'annuaire PPF et de l'annuaire
+  Peppol, croisés avec les résolutions — colonnes de sortie dédiées et panneau
+  de couverture avant le run.
+- **Plan de charge** (écran dédié, ouvert depuis l'étape Run) : à partir d'un
+  calendrier de Runs de Facturation, répartit les comptes éligibles sur les
+  runs — quotas par plateforme, rampe de montée (automatique ou reprise en
+  main run par run), jours de cycle de facturation, timeline calendaire
+  (week-ends, fériés français calculés, jalons de mise en production) et
+  graphiques de charge. Retouche manuelle : ajout, déplacement, retrait ; le
+  plan est persisté en base et rouvrable sans relancer de run.
+- **Livrables du plan** : un fichier de comptes par mise en production
+  (`…_plan_mep_<n>_<date>.txt`), un **rapport HTML** (`…_plan.html`) et un
+  **classeur Excel** du périmètre (`…_plan_comptes.xlsx`).
 
 ```bash
 cd client/src-tauri
@@ -133,9 +149,10 @@ fonctions, `Write-Progress`, `-Resume`) — compatible PowerShell 5.1 et 7+.
 ## Tests
 
 ```bash
-(cd client/src-tauri && cargo test)                     # 126 tests Rust
-(cd server && python3 -m unittest discover -s tests)    # API + résolveur
-(cd cli    && python3 -m unittest discover -s tests)    # canonicalisation (miroir de pid.rs)
+(cd client/src-tauri && cargo test)                     # 523 tests Rust
+(cd client && node --test "tests/*.test.js")            # 38 tests JS (câblage UI)
+(cd server && python3 -m unittest discover -s tests)    # 94 tests — API + résolveur
+(cd cli    && python3 -m unittest discover -s tests)    # 5 tests — canonicalisation (miroir de pid.rs)
 ```
 
 ## Spec & plan
