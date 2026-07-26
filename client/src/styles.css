@@ -417,6 +417,14 @@ footer .logo a:hover { color: var(--gold); text-decoration: underline; }
   font-size: 12.5px; text-decoration: underline; padding: 0 4px;
 }
 
+/* `#modal input` (display: block ; width: 100 %) habille les champs de saisie
+   des modales de confirmation. Appliqué aux cases à cocher de la table
+   d'ajout, logées dans une colonne qui s'ajuste à son contenu, il les réduit
+   à quelques pixels : présentes dans le DOM, invisibles et incliquables.
+   Sélecteur d'attribut, donc plus spécifique que la règle générique. */
+#modal input[type="checkbox"] {
+  display: inline-block; width: auto; margin: 0; cursor: pointer;
+}
 .add-scroll { flex: 1 1 auto; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; }
 .add-scroll table.plan-data { margin: 0; }
 /* En-tête collant : sur 300 comptes, on perd sinon le sens des colonnes

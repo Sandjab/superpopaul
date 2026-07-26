@@ -12,14 +12,37 @@ const { chargerApp } = require("./dom_shim");
 
 const CSS = fs.readFileSync(path.join(__dirname, "..", "src", "styles.css"), "utf8");
 
-/** Le z-index déclaré pour un sélecteur, tel qu'écrit dans la feuille. */
-function couche(selecteur) {
+/** Le corps de la règle déclarée pour un sélecteur, tel qu'écrit dans la feuille. */
+function regle(selecteur) {
   const bloc = CSS.split(selecteur + " {")[1];
   assert.ok(bloc, `sélecteur « ${selecteur} » introuvable dans styles.css`);
-  const m = bloc.split("}")[0].match(/z-index:\s*(\d+)/);
+  return bloc.split("}")[0];
+}
+
+/** Le z-index déclaré pour un sélecteur, tel qu'écrit dans la feuille. */
+function couche(selecteur) {
+  const m = regle(selecteur).match(/z-index:\s*(\d+)/);
   assert.ok(m, `pas de z-index sur « ${selecteur} »`);
   return Number(m[1]);
 }
+
+test("les cases à cocher de la fenêtre d'ajout échappent au style des champs de saisie", () => {
+  // Vécu en application : les cases étaient dans le DOM — les tests de tri et
+  // de filtres les comptaient — mais invisibles et inatteignables à l'écran.
+  // `#modal input { display: block; width: 100% }` habille les champs de
+  // saisie des modales de confirmation ; appliqué à une case à cocher logée
+  // dans une colonne qui s'ajuste à son contenu, il la réduit à quelques
+  // pixels. Le faux DOM ne calculant aucun style, seul un test de la feuille
+  // elle-même peut retenir cette règle.
+  const cases = regle('#modal input[type="checkbox"]');
+  assert.match(cases, /width:\s*auto/, "la case ne doit pas suivre la largeur du champ de saisie");
+  assert.match(cases, /display:\s*inline-block/, "ni son display: block");
+
+  // La règle générique doit rester plus faible : elle est ciblée par un
+  // sélecteur d'attribut, donc plus spécifique — on vérifie qu'elle existe
+  // toujours, sans quoi ce test ne protègerait plus rien.
+  assert.match(regle("#modal input"), /width:\s*100%/, "la règle générique a disparu");
+});
 
 test("la modale s'empile au-dessus de l'écran plein du plan", () => {
   // On teste l'ORDRE, pas les valeurs : un test sur « z-index: 70 » casserait
