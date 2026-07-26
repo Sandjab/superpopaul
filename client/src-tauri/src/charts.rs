@@ -23,7 +23,12 @@ fn echelle(max: u64) -> (u64, u64) {
         for mult in [1u64, 2, 5] {
             let pas = mult * p;
             if pas.saturating_mul(4) >= max {
-                return (max.div_ceil(pas) * pas, pas);
+                // `max.div_ceil(pas) * pas` déborde sur un maximum extrême :
+                // l'arrondi au palier supérieur sort de `u64`. On sature plutôt
+                // que de multiplier sec — un axe légèrement rogné vaut mieux
+                // qu'une panique.
+                let n = max / pas + u64::from(!max.is_multiple_of(pas));
+                return (n.saturating_mul(pas), pas);
             }
         }
         match p.checked_mul(10) {
@@ -62,11 +67,13 @@ pub fn barres_empilees(barres: &[Barre]) -> String {
     }
 
     let max = barres.iter().map(|b| b.bas + b.haut).max().unwrap_or(0);
-    let (haut, pas) = echelle(max);
-    let y = |v: u64| Y1 - (v as f64 / haut as f64) * (Y1 - Y0);
+    // `borne`, pas `haut` : `Barre.haut` est le segment supérieur d'une barre,
+    // celle-ci est la borne haute de l'axe. Les deux se côtoient plus bas.
+    let (borne, pas) = echelle(max);
+    let y = |v: u64| Y1 - (v as f64 / borne as f64) * (Y1 - Y0);
 
     let mut v = 0u64;
-    while v <= haut {
+    while v <= borne {
         s.push_str(&format!(
             "<line class=\"grid\" x1=\"{X0}\" y1=\"{0:.1}\" x2=\"{X1}\" y2=\"{0:.1}\"></line>\
              <text class=\"tick end\" x=\"44\" y=\"{1:.1}\">{2}</text>",
@@ -157,11 +164,14 @@ pub fn aire_cumulee(
     let jours = (fin - debut).num_days().max(1) as f64;
     let x = |d: NaiveDate| X0 + ((d - debut).num_days() as f64 / jours) * (X1 - X0);
     let max = points.iter().map(|p| p.valeur).max().unwrap_or(0);
-    let (haut, pas) = echelle(max);
-    let y = |v: u64| Y1 + 6.0 - (v as f64 / haut as f64) * (Y1 + 6.0 - Y0);
+    let (borne, pas) = echelle(max);
+    // `Y1 + 6.0` : la courbe descend jusqu'à sa ligne d'axe propre (200), plus
+    // basse que celle des barres (194) — elle n'a pas d'étiquette de run à
+    // loger sous l'axe, contrairement à `barres_empilees`.
+    let y = |v: u64| Y1 + 6.0 - (v as f64 / borne as f64) * (Y1 + 6.0 - Y0);
 
     let mut v = 0u64;
-    while v <= haut {
+    while v <= borne {
         s.push_str(&format!(
             "<line class=\"grid\" x1=\"{X0}\" y1=\"{0:.1}\" x2=\"{X1}\" y2=\"{0:.1}\"></line>\
              <text class=\"tick end\" x=\"44\" y=\"{1:.1}\">{2}</text>",
@@ -214,6 +224,12 @@ mod tests {
     #[test]
     fn echelle_dun_maximum_nul_ne_divise_pas_par_zero() {
         assert_eq!(echelle(0), (1, 1));
+    }
+
+    #[test]
+    fn echelle_dun_maximum_extreme_ne_deborde_pas() {
+        let (borne, pas) = echelle(u64::MAX);
+        assert!(borne >= u64::MAX / 2 && pas > 0);
     }
 
     fn barre(label: &str, sous: &str, bas: u64, haut: u64) -> Barre {

@@ -37,6 +37,13 @@ impl ChargeRun {
 ///
 /// Règle : un compte facture **une fois par mois civil**, au premier run du
 /// mois dont les jours de cycle couvrent le sien.
+///
+/// Le tri est une **exigence**, pas une préférence : les récurrences sont
+/// cherchées après le run de départ *par rang dans le slice*, pas par date.
+/// Sur des runs non triés, un compte placé sur un run tardif du slice ne
+/// récurre nulle part — silencieusement, sans erreur ni série vide. En
+/// production `calendrier::runs_utilisables` garantit l'ordre ; le test
+/// `des_runs_non_tries_perdent_les_recurrences` fige ce qui arrive sinon.
 pub fn charge(lignes: &[LignePlan], runs: &[RunFacturation]) -> Vec<ChargeRun> {
     let index_par_num: HashMap<&str, usize> = runs
         .iter()
@@ -144,6 +151,18 @@ mod tests {
             recurrences: 4,
         };
         assert_eq!(c.total(), 7);
+    }
+
+    #[test]
+    fn des_runs_non_tries_perdent_les_recurrences() {
+        // Contrat documenté, pas comportement souhaitable : `charge` exige des runs
+        // triés par date. `calendrier::runs_utilisables` le garantit ; ce test fige
+        // ce qui arrive sinon, pour qu'un futur appelant ne le découvre pas en prod.
+        let runs = vec![run("R2", "2026-09-08", &[5]), run("R1", "2026-08-11", &[5])];
+        let lignes = vec![ligne("CF1", 5, "R1")];
+        let c = charge(&lignes, &runs);
+        assert_eq!(c[0].recurrences, 0);
+        assert_eq!(c[1].recurrences, 0, "runs non triés : la récurrence est perdue");
     }
 
     #[test]
