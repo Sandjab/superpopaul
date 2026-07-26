@@ -387,6 +387,71 @@ footer .logo a:hover { color: var(--gold); text-decoration: underline; }
 }
 #modal input { display: block; margin: 8px 0; width: 100%; }
 
+/* --- Fenêtre d'ajout de comptes à un run ------------------------------------
+   #modal plafonne à 460px : illisible pour six colonnes. Variante dédiée
+   plutôt qu'un élargissement global, qui déformerait les confirmations. */
+#modal.modal-wide {
+  max-width: min(1080px, 94vw); width: min(1080px, 94vw);
+  display: flex; flex-direction: column; max-height: 88vh;
+}
+.add-head { flex: none; }
+.add-run {
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+  background: var(--btn2); border: 1px solid var(--border); border-radius: 8px;
+  padding: 9px 14px; margin: 4px 0 12px;
+}
+.add-run b { color: var(--gold); }
+.add-run .jjs { color: var(--muted); font-size: 12.5px; }
+.add-run .jjs code {
+  color: var(--fg); background: var(--track); border-radius: 4px;
+  padding: 1px 6px; font-size: 12px;
+}
+
+/* Barre de filtres : une ligne, tout à plat — un filtre replié est un
+   filtre oublié, et on veut voir d'un coup d'œil ce qui est actif. */
+.add-filters { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
+.add-filters input[type="search"] { flex: 1 1 220px; min-width: 160px; margin: 0; }
+.add-filters select { margin: 0; }
+.add-filters .reset {
+  background: none; border: 0; color: var(--muted); cursor: pointer;
+  font-size: 12.5px; text-decoration: underline; padding: 0 4px;
+}
+
+.add-scroll { flex: 1 1 auto; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; }
+.add-scroll table.plan-data { margin: 0; }
+/* En-tête collant : sur 300 comptes, on perd sinon le sens des colonnes
+   et donc le tri en cours. */
+.add-scroll table.plan-data th {
+  position: sticky; top: 0; background: var(--card); z-index: 1;
+  border-bottom: 1px solid var(--border);
+}
+table.plan-data td.pa { color: var(--muted); }
+
+/* Statuts : valeurs brutes (ready/later/expired), comme dans les autres
+   sorties du projet — écart assumé à la règle « UI en français », pour que
+   les filtres se transposent d'un artefact à l'autre. */
+.st { font-size: 12px; border-radius: 4px; padding: 1px 7px; white-space: nowrap; }
+.st-ready { color: var(--green); background: rgba(76, 194, 104, .12); }
+.st-later { color: var(--green-later); background: rgba(47, 128, 80, .16); }
+.st-expired { color: var(--red); background: rgba(229, 83, 75, .12); }
+.st-none { color: var(--muted); background: var(--track); }
+.st-yes { color: var(--ppf-l3); background: rgba(168, 146, 255, .12); }
+.st-no { color: var(--muted); background: var(--track); }
+
+/* Une ligne non pleinement éligible reste sélectionnable : la forcer est un
+   choix assumé. Elle est atténuée, pas barrée — barrer dirait « impossible ». */
+table.plan-data tr.warn td.cf::after {
+  content: "⚠"; color: var(--amber); margin-left: 6px; font-size: 11px;
+}
+.add-foot {
+  flex: none; display: flex; align-items: center; gap: 12px;
+  margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border);
+}
+.add-count { color: var(--muted); font-size: 13px; }
+.add-count b { color: var(--fg); }
+.add-count .warn-n { color: var(--amber); }
+.add-foot .spacer { flex: 1; }
+
 /* --- Banc d'essai du calibrage (modale) ------------------------------------
    Une colonne par palier : valeur (adr/s), barre, label (nb de sessions).
    Hauteurs pilotées par app.js (normalisées sur le meilleur débit vu). */

@@ -113,7 +113,11 @@ function banner(kind, text, ...actionNodes) {
 }
 function hideBanner() { $("banner").className = "hidden"; }
 function modal(...nodes) {
-  $("modal").replaceChildren(...nodes);
+  // Le contenant est partagé par toutes les modales : la variante large d'une
+  // ouverture précédente doit tomber, sinon la confirmation suivante l'hérite.
+  const el = $("modal");
+  el.classList.remove("modal-wide");
+  el.replaceChildren(...nodes);
   $("modal-backdrop").classList.remove("hidden");
 }
 function closeModal() { $("modal-backdrop").classList.add("hidden"); }
@@ -1974,6 +1978,37 @@ function ouvrirRetrait() {
   modal(...noeuds);
 }
 
+/** Tri d'une liste de candidats sur une colonne. Ne mute pas l'entrée. */
+function trierCandidats(liste, colonne, croissant) {
+  const val = (c) => (colonne === "jj" ? c.jj : String(c[colonne] ?? "").toLowerCase());
+  return [...liste].sort((a, b) => {
+    const x = val(a), y = val(b);
+    const d = x < y ? -1 : x > y ? 1 : 0;
+    return croissant ? d : -d;
+  });
+}
+
+/** Filtres combinés. Un filtre vide ne restreint rien. */
+function filtrerCandidats(liste, f) {
+  const t = (f.texte ?? "").trim().toLowerCase();
+  return liste.filter((c) => {
+    if (t && !`${c.cf} ${c.raison_sociale}`.toLowerCase().includes(t)) return false;
+    if (f.pa && c.pa !== f.pa) return false;
+    if (f.ctc && c.ctc_status !== (f.ctc === "(vide)" ? "" : f.ctc)) return false;
+    if (f.ppf === "oui" && !c.ppf_usable) return false;
+    if (f.ppf === "non" && c.ppf_usable) return false;
+    return true;
+  });
+}
+
+/** Pastille de statut CTC. La valeur reste BRUTE (`ready`, `later`…), y compris
+ *  à l'écran : c'est la même que dans le fichier d'export et les autres sorties,
+ *  écart assumé à la règle « texte UI en français ». */
+function pastilleCtc(s) {
+  const classe = { ready: "st-ready", later: "st-later", expired: "st-expired" }[s] ?? "st-none";
+  return h("span", { class: `st ${classe}` }, s || "(vide)");
+}
+
 /** Ajout de comptes SUR UN RUN donné (`RunJour` de la timeline, avec son jour
  *  civil porteur). Le run est fixé par l'appel : plus de sélecteur de run, donc
  *  plus d'intersection à calculer — le backend ne rend que les comptes dont le
@@ -1986,35 +2021,100 @@ async function ouvrirAjoutRun(run, jour) {
     return planBanner("info", `Aucun compte à ajouter au run ${run.num} : tous ceux dont le jour de cycle est couvert sont déjà au plan.`);
 
   const choisis = new Set();
-  const recherche = h("input", { type: "search", style: "width:100%",
-    placeholder: "Filtrer par compte ou raison sociale…" });
-  const liste = h("div", { style: "max-height:260px;overflow:auto;margin:8px 0" });
-  const dessiner = () => {
-    const q = recherche.value.trim().toLowerCase();
-    liste.replaceChildren(...candidats
-      .filter((c) => !q || c.cf.toLowerCase().includes(q) || (c.raison_sociale ?? "").toLowerCase().includes(q))
-      .slice(0, 200)
-      .map((c) => {
-        const cb = h("input", { type: "checkbox", onchange: () => {
-          if (choisis.has(c.cf)) choisis.delete(c.cf); else choisis.add(c.cf);
-        } });
-        cb.checked = choisis.has(c.cf);
-        return h("label", { style: "display:block;font-size:12.5px" }, cb, ` ${c.cf} — ${c.raison_sociale} `,
-          h("span", { class: "muted" }, `(JJ ${c.jj}, ${c.pa || "sans plateforme"})`),
-          c.eligible ? "" : h("span", { class: "tag stale" }, "non éligible"));
-      }));
+  let tri = { colonne: "cf", croissant: true };
+  const filtres = { texte: "", pa: "", ctc: "", ppf: "" };
+
+  const recherche = h("input", { type: "search", placeholder: "Rechercher un compte, une raison sociale…" });
+  const selPa = h("select", {}, h("option", { value: "" }, "Toutes les plateformes"),
+    ...[...new Set(candidats.map((c) => c.pa))].filter(Boolean).sort()
+      .map((p) => h("option", { value: p }, p)));
+  const selCtc = h("select", {}, h("option", { value: "" }, "CTC : tous"),
+    ...["ready", "later", "expired", "(vide)"].map((s) => h("option", { value: s }, s)));
+  const selPpf = h("select", {}, h("option", { value: "" }, "PPF : tous"),
+    h("option", { value: "oui" }, "utilisable"), h("option", { value: "non" }, "non utilisable"));
+  const raz = h("button", { class: "reset", onclick: () => {
+    recherche.value = ""; selPa.value = ""; selCtc.value = ""; selPpf.value = "";
+    Object.assign(filtres, { texte: "", pa: "", ctc: "", ppf: "" });
+    dessiner();
+  } }, "réinitialiser");
+
+  const corps = h("div", { class: "add-scroll" });
+  const pied = h("span", { class: "add-count" });
+
+  const enTete = (cle, libelle, classe = "") =>
+    h("th", {
+      class: `sortable ${classe} ${tri.colonne === cle ? "sorted" : ""}`.trim(),
+      onclick: () => {
+        tri = { colonne: cle, croissant: tri.colonne === cle ? !tri.croissant : true };
+        dessiner();
+      },
+    }, tri.colonne === cle ? `${libelle} ${tri.croissant ? "▲" : "▼"}` : libelle);
+
+  /** Case à cocher dont l'état vient de `checked`, jamais de l'attribut :
+   *  `setAttribute("checked", false)` COCHE la case. */
+  const caseACocher = (coche, onchange) => {
+    const cb = h("input", { type: "checkbox", onchange });
+    cb.checked = coche;
+    return cb;
   };
-  recherche.addEventListener("input", dessiner);
+
+  function dessiner() {
+    const vus = trierCandidats(filtrerCandidats(candidats, filtres), tri.colonne, tri.croissant);
+    // L'état de la case « tout » suit la sélection : reconstruite décochée, un
+    // second clic recocherait ce qui l'est déjà au lieu de tout décocher.
+    const toutCoche = caseACocher(vus.length > 0 && vus.every((c) => choisis.has(c.cf)), (ev) => {
+      for (const c of vus) ev.target.checked ? choisis.add(c.cf) : choisis.delete(c.cf);
+      dessiner();
+    });
+    corps.replaceChildren(h("table", { class: "plan-data" },
+      h("tr", {},
+        h("th", { style: "width:1%" }, toutCoche),
+        enTete("cf", "Compte"), enTete("raison_sociale", "Raison sociale"),
+        enTete("jj", "JJ", "n"), enTete("pa", "Plateforme"),
+        enTete("ctc_status", "CTC"), enTete("ppf_usable", "PPF")),
+      ...vus.map((c) => h("tr", { class: `${c.eligible ? "" : "warn"} ${choisis.has(c.cf) ? "sel" : ""}`.trim() },
+        h("td", {}, caseACocher(choisis.has(c.cf), (ev) => {
+          ev.target.checked ? choisis.add(c.cf) : choisis.delete(c.cf);
+          dessiner();
+        })),
+        h("td", { class: "cf" }, c.cf),
+        h("td", {}, c.raison_sociale),
+        h("td", { class: "n jj" }, String(c.jj)),
+        h("td", { class: "pa" }, c.pa),
+        h("td", {}, pastilleCtc(c.ctc_status)),
+        h("td", {}, h("span", { class: `st ${c.ppf_usable ? "st-yes" : "st-no"}` },
+          String(c.ppf_usable)))))));
+    const forces = [...choisis].filter((cf) => !candidats.find((c) => c.cf === cf)?.eligible).length;
+    pied.replaceChildren(
+      h("b", {}, String(choisis.size)), " compte(s) sélectionné(s)",
+      ...(forces ? [" · ", h("span", { class: "warn-n" }, `${forces} non pleinement éligible(s)`)] : []),
+      h("br", {}),
+      h("span", { style: "font-size:12px" },
+        `${fmtN(candidats.length)} compte(s) éligible(s) à ce run · ${fmtN(vus.length)} affiché(s) après filtres`));
+  }
+
+  for (const [el, cle] of [[recherche, "texte"], [selPa, "pa"], [selCtc, "ctc"], [selPpf, "ppf"]]) {
+    el.addEventListener(el.tagName.toLowerCase() === "select" ? "change" : "input", () => {
+      filtres[cle] = el.value; dessiner();
+    });
+  }
   dessiner();
 
   modal(
-    h("h3", {}, `Ajouter des comptes au run ${run.num}`),
-    h("p", { class: "field-hint" },
-      `Run ${run.num} du ${fmtDateFr(jour.date)}, jours de cycle couverts : ${run.jjs.join(", ")}. `
-      + "Seuls les comptes dont le jour de cycle est couvert par ce run sont listés. "
-      + "Les comptes non éligibles sont proposés et signalés : les ajouter est un choix assumé."),
-    recherche, liste,
-    h("div", { class: "actions" },
+    h("div", { class: "add-head" },
+      h("h3", { style: "margin:2px 0 0" }, `Ajouter des comptes au run ${run.num}`),
+      h("div", { class: "add-run" },
+        h("span", {}, "Run ", h("b", {}, run.num), " du ", h("b", {}, fmtDateFr(jour.date))),
+        h("span", { class: "jjs" }, "jours de cycle couverts ",
+          ...run.jjs.map((j) => h("code", {}, String(j)))),
+        h("span", { class: "jjs" }, "· rattaché à la ", h("b", {}, `MEP ${run.detail.mep_id}`))),
+      h("p", { class: "field-hint", style: "margin-top:-4px" },
+        "Seuls les comptes dont le jour de cycle est couvert par ce run sont listés — un run "
+        + "ne peut pas facturer un autre jour. Les comptes non prêts sont proposés et signalés "
+        + "(⚠) : les ajouter reste un choix assumé."),
+      h("div", { class: "add-filters" }, recherche, selPa, selCtc, selPpf, raz)),
+    corps,
+    h("div", { class: "add-foot" }, pied, h("span", { class: "spacer" }),
       h("button", { class: "btn-ghost", onclick: closeModal }, "Annuler"),
       h("button", { class: "btn-primary", onclick: async () => {
         if (!choisis.size) return;
@@ -2023,6 +2123,10 @@ async function ouvrirAjoutRun(run, jour) {
           closeModal(); await rechargerRecap();
         } catch (e) { planBanner("error", String(e)); closeModal(); }
       } }, `Ajouter au run ${run.num}`)));
+
+  // La fenêtre porte un tableau : #modal plafonne à 460px, il lui faut sa
+  // variante large. Posée après `modal()`, qui la retire à chaque ouverture.
+  $("modal").classList.add("modal-wide");
 }
 
 // --- Cycle de vie de l'écran -------------------------------------------------
