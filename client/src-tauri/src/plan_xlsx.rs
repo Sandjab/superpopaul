@@ -170,6 +170,64 @@ mod tests {
         }
     }
 
+    /// Décode le classeur en cellules texte, en-tête compris, huit colonnes par
+    /// ligne. Les valeurs d'un `.xlsx` ne vivent pas dans la feuille mais dans
+    /// `xl/sharedStrings.xml` : `sheet1.xml` ne porte que des index, et une
+    /// cellule vide n'y est pas écrite du tout. Sans ce décodage, un test ne
+    /// peut pas voir qu'une colonne a changé de place.
+    fn cellules(chemin: &Path) -> Vec<Vec<String>> {
+        use std::io::Read;
+        let fichier = std::fs::File::open(chemin).expect("ouverture");
+        let mut archive = zip::ZipArchive::new(fichier).expect("archive illisible");
+        let mut lire = |nom: &str| {
+            let mut s = String::new();
+            archive.by_name(nom).expect(nom).read_to_string(&mut s).expect("lecture");
+            s
+        };
+        let table = lire("xl/sharedStrings.xml");
+        let feuille = lire("xl/worksheets/sheet1.xml");
+
+        let chaines: Vec<&str> = table
+            .split("<si><t")
+            .skip(1)
+            .map(|bloc| {
+                let apres = bloc.split_once('>').expect("<t> mal formé").1;
+                apres.split_once("</t>").expect("</t> absent").0
+            })
+            .collect();
+
+        let corps = feuille
+            .split_once("<sheetData>")
+            .expect("sheetData absent")
+            .1
+            .split_once("</sheetData>")
+            .expect("sheetData non refermé")
+            .0;
+        corps
+            .split("<row ")
+            .skip(1)
+            .map(|ligne| {
+                let mut cols = vec![String::new(); ENTETES.len()];
+                for bloc in ligne.split("<c r=\"").skip(1) {
+                    let (reference, reste) = bloc.split_once('"').expect("référence de cellule");
+                    // Huit colonnes : la référence tient sur une lettre (A..H).
+                    let col = reference.as_bytes()[0] as usize - b'A' as usize;
+                    let index: usize = reste
+                        .split_once("<v>")
+                        .expect("cellule sans valeur")
+                        .1
+                        .split_once("</v>")
+                        .expect("valeur non refermée")
+                        .0
+                        .parse()
+                        .expect("index de chaîne partagée");
+                    cols[col] = chaines[index].to_string();
+                }
+                cols
+            })
+            .collect()
+    }
+
     fn ligne_plan(cf: &str, run: &str) -> LignePlan {
         LignePlan {
             cf: cf.into(),
@@ -289,6 +347,36 @@ mod tests {
         }
         assert!(xml.contains("<autoFilter"), "filtres automatiques absents : {xml}");
         assert!(xml.contains("state=\"frozen\""), "volet figé absent : {xml}");
+        std::fs::remove_file(&chemin).ok();
+    }
+
+    #[test]
+    fn le_classeur_ecrit_les_valeurs_de_chaque_ligne() {
+        // Sans cette vérification, `ecrire` peut produire un classeur à en-tête
+        // seul, ou permuter deux colonnes, sans qu'aucun test ne bronche : les
+        // autres n'assertent que la taille du fichier et sa signature ZIP.
+        let dir = std::env::temp_dir().join("popaul_test_xlsx_valeurs");
+        std::fs::create_dir_all(&dir).unwrap();
+        let chemin = dir.join("v.xlsx");
+        let mut retiree = ligne_plan("CF2", "R2");
+        retiree.retire = Some(crate::plan::Retrait { le: 1, motif: "clôturé".into() });
+        let l = lignes(
+            &[entree("CF1", "5", "ready"), entree("CF2", "12", "later")],
+            &[ligne_plan("CF1", "R1"), retiree],
+        );
+        ecrire(&chemin, &l).expect("écriture");
+
+        let table = cellules(&chemin);
+        assert_eq!(table.len(), 3, "l'en-tête et les deux comptes : {table:?}");
+        assert_eq!(table[0], ENTETES, "colonnes dans l'ordre annoncé");
+        assert_eq!(
+            table[1],
+            ["R1", "CF1", "5", "12345678900012", "ACME", "ready", "true", "oui"]
+        );
+        assert_eq!(
+            table[2],
+            ["R2", "CF2", "12", "12345678900012", "ACME", "later", "true", "retiré"]
+        );
         std::fs::remove_file(&chemin).ok();
     }
 

@@ -1813,6 +1813,22 @@ mod tests {
     }
 
     #[test]
+    fn candidats_run_portent_leur_adressage_et_leur_ppf_usable() {
+        // Deux champs que rien ne retenait : les remplacer par une chaîne vide
+        // ou un `true` en dur ne cassait aucun test.
+        let mut prefixe = entree("CF2", "1", "ready", false);
+        prefixe.participant = "iso6523-actorid-upis::0225:12345678900012".into();
+        let entrees = vec![entree("CF1", "5", "ready", true), prefixe];
+        let out = candidats_du_run(&entrees, &run_test(), &HashSet::new());
+        let cf1 = out.iter().find(|c| c.cf == "CF1").expect("CF1 absent");
+        let cf2 = out.iter().find(|c| c.cf == "CF2").expect("CF2 absent");
+        assert_eq!(cf2.participant, "12345678900012", "l'ICD est retiré, comme en base");
+        assert_eq!(cf1.participant, "0225:1", "hors schéma connu, la valeur sort telle quelle");
+        assert!(cf1.ppf_usable);
+        assert!(!cf2.ppf_usable, "le champ suit l'entrée, il n'est pas vrai par construction");
+    }
+
+    #[test]
     fn candidats_run_ignore_un_jour_de_cycle_illisible() {
         // Un JJ hors bornes ou non numérique ne correspond à aucun run.
         let entrees = vec![entree("CF1", "zzz", "ready", true), entree("CF2", "99", "ready", true)];

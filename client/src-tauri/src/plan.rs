@@ -1140,6 +1140,15 @@ mod tests {
         }
     }
 
+    /// Pose les deux champs CTC ensemble : l'invariant de production est
+    /// `ctc_ready == (ctc_status == "ready")`, une fixture ne doit pas
+    /// pouvoir le violer.
+    fn avec_ctc(mut l: LigneEntree, statut: &str) -> LigneEntree {
+        l.ctc_status = statut.into();
+        l.ctc_ready = statut == "ready";
+        l
+    }
+
     fn sans_exclusion() -> HashSet<String> {
         HashSet::new()
     }
@@ -1164,11 +1173,7 @@ mod tests {
             l.resolu = false;
             l
         });
-        e.push({
-            let mut l = ligne("CF4", "5", "PA");
-            l.ctc_ready = false;
-            l
-        });
+        e.push(avec_ctc(ligne("CF4", "5", "PA"), "later"));
         e.push({
             let mut l = ligne("CF5", "5", "PA");
             l.ppf_usable = false;
@@ -1198,31 +1203,8 @@ mod tests {
     }
 
     #[test]
-    fn le_statut_ctc_nest_pas_aplati_en_booleen() {
-        // « later » et « expired » sont deux situations distinctes qu'un booléen
-        // `ctc_ready == false` confond : on arbitre différemment sur l'une et
-        // sur l'autre.
-        let e = LigneEntree {
-            cf: "CF1".into(),
-            participant: "0225:1".into(),
-            jj_brut: "5".into(),
-            raison_sociale: "ACME".into(),
-            pa: "Cegedim".into(),
-            resolu: true,
-            ctc_ready: false,
-            ctc_status: "later".into(),
-            ppf_usable: true,
-            in_directory: true,
-            resolved_at: 0,
-        };
-        assert_eq!(e.ctc_status, "later");
-        assert!(!e.ctc_ready, "« later » n'est pas « ready »");
-    }
-
-    #[test]
     fn ctc_non_pret_est_exclu() {
-        let mut l = ligne("CF1", "5", "PA");
-        l.ctc_ready = false; // « later » ou « expired »
+        let l = avec_ctc(ligne("CF1", "5", "PA"), "later");
         let (pool, f) = construire_pool(&[l], &sans_exclusion()).unwrap();
         assert!(pool.is_empty());
         assert_eq!(f.resolus, 1);
