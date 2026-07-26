@@ -230,6 +230,48 @@ mod tests {
         // La barre sans récurrence ne doit pas produire de rectangle de hauteur nulle.
         assert_eq!(svg.matches("class=\"b-rec\"").count(), 1);
         assert!(svg.contains(">R1<") && svg.contains(">11/08<"));
+        // Le maximum vaut 1 030 : `echelle` porte l'axe à 1 500 par pas de 500.
+        // Ces graduations ne peuvent venir que d'elle — sans `echelle`, l'axe
+        // s'arrêterait au maximum brut. \u{202F} : le séparateur de `fmt_int`.
+        assert!(
+            svg.contains(">1\u{202F}500<"),
+            "graduation haute absente : {svg}"
+        );
+        assert!(
+            svg.contains(">1\u{202F}000<"),
+            "graduation intermédiaire absente"
+        );
+    }
+
+    #[test]
+    fn les_recurrences_sempilent_sur_les_premieres() {
+        let svg = barres_empilees(&[barre("R1", "11/08", 100, 100)]);
+        let attr = |classe: &str, nom: &str| -> f64 {
+            let rect = svg
+                .split("<rect")
+                .find(|s| s.contains(classe))
+                .unwrap_or_else(|| panic!("rect {classe} absent de : {svg}"));
+            let apres = rect
+                .split(&format!("{nom}=\""))
+                .nth(1)
+                .expect("attribut absent");
+            apres
+                .split('"')
+                .next()
+                .unwrap()
+                .parse()
+                .expect("valeur non numérique")
+        };
+        let y_first = attr("b-first", "y");
+        let y_rec = attr("b-rec", "y");
+        let h_rec = attr("b-rec", "height");
+        // En SVG, y croît vers le bas : les récurrences sont au-dessus, et leur
+        // base touche le sommet des premières factures.
+        assert!(y_rec < y_first, "les récurrences doivent être au-dessus");
+        assert!(
+            (y_rec + h_rec - y_first).abs() < 0.05,
+            "les deux rectangles doivent se toucher : {y_rec} + {h_rec} != {y_first}"
+        );
     }
 
     #[test]
@@ -256,6 +298,7 @@ mod tests {
     fn barres_empilees_valeurs_toutes_nulles_ne_divisent_pas_par_zero() {
         let svg = barres_empilees(&[barre("R1", "11/08", 0, 0)]);
         assert!(svg.starts_with("<svg"));
+        assert!(!svg.contains("NaN"), "coordonnée non calculable : {svg}");
     }
 
     #[test]
@@ -264,6 +307,14 @@ mod tests {
         let svg = barres_empilees(&[barre("<script>alert(1)</script>", "11/08", 1, 0)]);
         assert!(!svg.contains("<script>alert"), "injection non échappée : {svg}");
         assert!(svg.contains("&lt;script&gt;"));
+    }
+
+    #[test]
+    fn les_sous_etiquettes_sont_aussi_echappees() {
+        // La date du run vient du runs.csv au même titre que son numéro.
+        let svg = barres_empilees(&[barre("R1", "<b>11/08</b>", 1, 0)]);
+        assert!(!svg.contains("<b>11/08"), "injection non échappée : {svg}");
+        assert!(svg.contains("&lt;b&gt;"));
     }
 
     fn j(iso: &str) -> NaiveDate {
@@ -298,6 +349,7 @@ mod tests {
         let pts = vec![Point { date: j("2026-08-01"), valeur: 5 }];
         let svg = aire_cumulee(&pts, &[], j("2026-08-01"), j("2026-08-01"));
         assert!(svg.starts_with("<svg"));
+        assert!(!svg.contains("NaN"), "coordonnée non calculable : {svg}");
     }
 
     #[test]

@@ -136,6 +136,52 @@ mod tests {
     }
 
     #[test]
+    fn le_total_additionne_premieres_et_recurrences() {
+        let c = ChargeRun {
+            num: "R1".into(),
+            date: jour("2026-08-11"),
+            premieres: 3,
+            recurrences: 4,
+        };
+        assert_eq!(c.total(), 7);
+    }
+
+    #[test]
+    fn un_run_multi_jours_de_cycle_fait_recurrer_chaque_jour() {
+        // Cas normal : `parse_runs_csv` accepte « 1-5-15 ». Chaque jour de cycle
+        // du run porte sa propre facture mensuelle.
+        let runs = vec![
+            run("R1", "2026-08-11", &[1, 5, 15]),
+            run("R2", "2026-09-08", &[1, 5, 15]),
+        ];
+        let lignes = vec![
+            ligne("CF1", 1, "R1"),
+            ligne("CF2", 5, "R1"),
+            ligne("CF3", 15, "R1"),
+        ];
+        let c = charge(&lignes, &runs);
+        assert_eq!(c[0].premieres, 3);
+        assert_eq!(c[1].recurrences, 3, "chaque jour de cycle doit récurrer");
+    }
+
+    #[test]
+    fn le_passage_dannee_ne_confond_pas_les_mois() {
+        // L'horizon du plan est de deux ans : un même mois y revient. Sans
+        // l'année dans la clé du porteur, décembre 2027 passerait pour déjà
+        // facturé par décembre 2026 et perdrait sa récurrence — le mois seul ne
+        // suffit pas à identifier un mois civil.
+        let runs = vec![
+            run("R1", "2026-12-08", &[5]),
+            run("R2", "2027-01-12", &[5]),
+            run("R3", "2027-12-07", &[5]),
+        ];
+        let lignes = vec![ligne("CF1", 5, "R1")];
+        let c = charge(&lignes, &runs);
+        assert_eq!(c[1].recurrences, 1, "janvier 2027 n'est pas décembre 2026");
+        assert_eq!(c[2].recurrences, 1, "décembre 2027 n'est pas décembre 2026");
+    }
+
+    #[test]
     fn pas_de_recurrence_avant_le_demarrage() {
         // Un seul run : le compte y démarre. Il ne peut pas y « revenir ».
         let runs = vec![run("R1", "2026-08-11", &[5])];
