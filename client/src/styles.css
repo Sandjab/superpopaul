@@ -352,7 +352,7 @@ footer .logo a:hover { color: var(--gold); text-decoration: underline; }
    space-between colle un enfant unique à gauche, margin-left auto le pousse
    à droite dans tous les cas. */
 #btn-next { margin-left: auto; }
-/* Panneau Réglages : overlay dédié, sous la modale (z-index 40 < 50) pour que
+/* Panneau Réglages : overlay dédié, sous la modale (z-index 40 < 70) pour que
    la saisie des identifiants proxy (« Tester ») s'empile au-dessus. */
 #settings-backdrop {
   position: fixed; inset: 0; background: rgba(0, 0, 0, .6); z-index: 40;
@@ -373,8 +373,12 @@ footer .logo a:hover { color: var(--gold); text-decoration: underline; }
    du haut est recouverte par l'overlay). */
 #settings-error { color: var(--red); font-weight: 600; }
 
+/* Au-dessus de #plan-screen (60), qui est un écran plein : sinon toute modale
+   ouverte depuis le Plan de charge est recouverte et paraît ne pas s'ouvrir.
+   Reste sous #splash (99). #settings-backdrop (40) reste dessous, pour que la
+   saisie des identifiants proxy s'empile par-dessus les réglages. */
 #modal-backdrop {
-  position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 50;
+  position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 70;
   display: flex; align-items: center; justify-content: center;
 }
 #modal {
