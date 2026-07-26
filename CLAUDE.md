@@ -20,6 +20,11 @@
   avalé par le handler drag-drop Tauri (requis pour le drop de fichier), et le
   mode `forceFallback` de Sortable donne un drag pointeur animé qu'un
   équivalent maison ne justifiait pas de réécrire.
+  Tests : `node --test "tests/*.test.js"` depuis `client/` (stdlib Node, aucune
+  dépendance). `client/tests/dom_shim.js` fournit un faux DOM qui exécute le
+  **vrai** `src/app.js` — réservé au câblage de l'UI (un champ reconstruit qui
+  perd sa valeur, un écouteur qui ne rebranche pas) ; tout ce qui touche au
+  rendu réel se vérifie dans l'application.
 - Sécurité UI : **jamais d'innerHTML avec des données dynamiques** (contenu
   CSV, messages d'erreur backend) — construire le DOM via le helper `h()`
   de `app.js` ou `textContent`. Un CSV est une entrée non fiable.

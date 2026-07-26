@@ -1267,6 +1267,27 @@ function renderPlanAside() {
   const forme = $("plan-forme")?.value ?? "lineaire";
   const pilOn = $("plan-pilote")?.checked ?? false;
 
+  // Le panneau est reconstruit en entier à chaque rendu, et ces champs-là
+  // n'ont d'état QUE dans le DOM — `planParams` les relit sur les éléments.
+  // Sans cette capture, le moindre re-rendu (ajouter une MEP, changer une
+  // colonne, la forme de rampe) les rendrait à leur valeur par défaut.
+  const saisi = (id, defaut) => $(id)?.value ?? defaut;
+  const vals = {
+    debut: saisi("plan-debut", ""),
+    fin: saisi("plan-fin", ""),
+    mepcount: saisi("plan-mepcount", "0"),
+    cible: saisi("plan-cible", ""),
+    raison: saisi("plan-raison", "1.55"),
+    piloteRuns: saisi("plan-pilote-runs", "0"),
+    piloteCf: saisi("plan-pilote-cf", "0"),
+    seed: saisi("plan-seed", "42"),
+  };
+  // Un booléen se pose après coup : `setAttribute("checked", false)` cocherait
+  // la case (l'attribut compte par sa présence, pas par sa valeur).
+  const casePilote = h("input", { type: "checkbox", id: "plan-pilote",
+    onchange: () => { renderPlanAside(); planRecalc(); } });
+  casePilote.checked = pilOn;
+
   $("plan-aside").replaceChildren(
     h("h3", { id: "plan-cols-title", class: manque ? "need" : "" }, "Colonnes"), bloc,
 
@@ -1278,8 +1299,8 @@ function renderPlanAside() {
 
     h("h3", {}, "Fenêtre FUT"),
     h("div", { class: "row" },
-      h("label", {}, "Début", h("input", { type: "date", id: "plan-debut", oninput: planRecalc })),
-      h("label", {}, "Fin", h("input", { type: "date", id: "plan-fin", oninput: planRecalc }))),
+      h("label", {}, "Début", h("input", { type: "date", id: "plan-debut", value: vals.debut, oninput: planRecalc })),
+      h("label", {}, "Fin", h("input", { type: "date", id: "plan-fin", value: vals.fin, oninput: planRecalc }))),
 
     h("h3", {}, "Mises en production"),
     chips,
@@ -1290,11 +1311,11 @@ function renderPlanAside() {
       e.target.value = ""; renderPlanAside(); planRecalc();
     } }),
     h("label", {}, "Nombre total visé"),
-    h("input", { type: "number", id: "plan-mepcount", min: "0", value: "0", style: "width:80px", oninput: planRecalc }),
+    h("input", { type: "number", id: "plan-mepcount", min: "0", value: vals.mepcount, style: "width:80px", oninput: planRecalc }),
 
     h("h3", {}, "Cible"),
     h("label", {}, "Comptes distincts à traiter"),
-    h("input", { type: "number", id: "plan-cible", min: "1", placeholder: "auto", style: "width:120px", oninput: planRecalc }),
+    h("input", { type: "number", id: "plan-cible", min: "1", placeholder: "auto", value: vals.cible, style: "width:120px", oninput: planRecalc }),
     h("p", { class: "field-hint" }, "Vide = tout le pool éligible atteignable."),
 
     h("h3", {}, "Rampe de montée en charge"),
@@ -1307,18 +1328,18 @@ function renderPlanAside() {
         return o;
       })),
     ...(forme === "geometrique"
-      ? [h("label", {}, "Raison"), h("input", { type: "number", id: "plan-raison", min: "1.1", step: "0.05", value: "1.55", style: "width:90px", oninput: planRecalc })]
+      ? [h("label", {}, "Raison"), h("input", { type: "number", id: "plan-raison", min: "1.1", step: "0.05", value: vals.raison, style: "width:90px", oninput: planRecalc })]
       : []),
-    h("label", {}, h("input", { type: "checkbox", id: "plan-pilote", onchange: () => { renderPlanAside(); planRecalc(); } }), " Pilote prudent au démarrage"),
+    h("label", {}, casePilote, " Pilote prudent au démarrage"),
     ...(pilOn
-      ? [h("label", {}, "Durée du pilote (runs)"), h("input", { type: "number", id: "plan-pilote-runs", min: "0", value: "0", style: "width:80px", oninput: planRecalc }),
-         h("label", {}, "Comptes par run de pilote"), h("input", { type: "number", id: "plan-pilote-cf", min: "0", value: "0", style: "width:80px", oninput: planRecalc }),
+      ? [h("label", {}, "Durée du pilote (runs)"), h("input", { type: "number", id: "plan-pilote-runs", min: "0", value: vals.piloteRuns, style: "width:80px", oninput: planRecalc }),
+         h("label", {}, "Comptes par run de pilote"), h("input", { type: "number", id: "plan-pilote-cf", min: "0", value: vals.piloteCf, style: "width:80px", oninput: planRecalc }),
          h("p", { class: "field-hint" }, "Le niveau du pilote sert de socle : la rampe ne redescend jamais en dessous.")]
       : []),
 
     h("h3", {}, "Options"),
     h("label", {}, "Seed"),
-    h("input", { type: "number", id: "plan-seed", value: "42", style: "width:100px", oninput: planRecalc }),
+    h("input", { type: "number", id: "plan-seed", value: vals.seed, style: "width:100px", oninput: planRecalc }),
     h("p", { class: "field-hint" }, "Départage déterministe à priorité égale. Même seed, même plan."),
 
     h("button", { id: "btn-plan-gen", class: "btn-primary", style: "width:100%;margin-top:16px", onclick: genererPlan },
