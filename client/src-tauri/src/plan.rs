@@ -1073,6 +1073,12 @@ impl Preserves {
 /// niveau sur tous les runs suivants : le socle est alors impossible et
 /// `construire_rampe` bascule sur la forme pure, avec un creux sous V.
 pub fn rampe_pilote_infaisable(cible: usize, n_runs: usize, rampe: &Rampe) -> bool {
+    // En forme manuelle, `construire_rampe` retourne avant le pilote : aucun
+    // socle n'est posé, les volumes saisis font foi. Signaler un pilote
+    // infaisable désignerait une cause qui n'agit pas.
+    if matches!(rampe.forme, Forme::Manuelle { .. }) {
+        return false;
+    }
     let (v, p) = niveau_pilote(rampe, n_runs);
     let suite = n_runs.saturating_sub(p);
     if v == 0 || p == 0 || suite == 0 || cible == 0 {
@@ -1456,6 +1462,22 @@ mod tests {
         assert!(rampe_pilote_infaisable(25, 5, &r));
         let v = construire_rampe(25, &rs, &r);
         assert_eq!(v.values().sum::<usize>(), 25);
+    }
+
+    #[test]
+    fn pilote_infaisable_jamais_signale_en_forme_manuelle() {
+        // Mêmes chiffres que le cas plat ci-dessus — la seule différence est la
+        // forme. En manuelle, `construire_rampe` retourne avant le pilote : les
+        // volumes saisis font foi, aucun socle n'est posé. Avertir que la cible
+        // « est trop basse pour tenir 10 comptes par run » désignerait alors une
+        // cause qui n'agit pas, et enverrait l'utilisateur corriger la mauvaise
+        // chose. Un YAML persisté peut porter les deux : l'UI qui force
+        // `pilote: null` ne suffit pas à fermer ce chemin.
+        let r = Rampe {
+            forme: Forme::Manuelle { volumes: BTreeMap::new() },
+            pilote: Some(Pilote { runs: 2, cf_par_run: 10 }),
+        };
+        assert!(!rampe_pilote_infaisable(25, 5, &r));
     }
 
     #[test]

@@ -598,6 +598,49 @@ tr.tl-borne .flag { color: var(--muted); font-size: 11.5px; letter-spacing: .06e
 .jj-legend { font-size: 12px; color: var(--muted); margin-top: 10px; }
 .jj-legend b { color: var(--fg); font-variant-numeric: tabular-nums; }
 
+/* Note d'un réglage dont l'effet change selon le contexte — ici la cible, qui
+   ne fixe plus le volume en rampe manuelle mais reste la base des quotas. */
+#plan-aside .warn-hint { color: var(--amber); border-left: 2px solid var(--amber);
+  padding-left: 8px; }
+
+/* Volumes visés par run — même grammaire que les barres de jours de cycle,
+   mais une barre par run retenu, donc en nombre bien plus faible : largeur
+   plafonnée pour qu'un plan à trois runs ne produise pas trois pavés. */
+.vol-bars { display: flex; align-items: flex-end; gap: 6px; height: 104px;
+  margin: 12px 0 0; }
+.vol-bar { flex: 1; max-width: 72px; display: flex; flex-direction: column;
+  justify-content: flex-end; align-items: center; gap: 4px; height: 100%; }
+.vol-bar i { display: block; width: 100%; border-radius: 2px 2px 0 0;
+  background: var(--gold); }
+.vol-bar.over i { background: var(--amber); }
+.vol-bar span { font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+/* Saisie des volumes (rampe manuelle), dans le panneau étroit : le libellé
+   prend la place restante, le champ garde une largeur fixe. */
+#plan-volumes .vols { display: flex; flex-direction: column; gap: 2px; }
+#plan-volumes .vol { display: grid; grid-template-columns: 1fr 68px;
+  align-items: center; gap: 6px; padding: 2px 0; }
+#plan-volumes .vol .who { font-size: 12.5px; font-variant-numeric: tabular-nums;
+  white-space: nowrap; color: var(--muted); }
+#plan-volumes .vol .who b { color: var(--fg); font-weight: 600; }
+#plan-volumes .vol input { width: 100%; text-align: right;
+  font-variant-numeric: tabular-nums; }
+/* Ambre et non rouge : un volume que le stock n'absorbe pas n'est pas une
+   erreur, le surplus part en report sur le run suivant. */
+#plan-volumes .vol.over input { border-color: var(--amber); }
+#plan-volumes .vol .flag { grid-column: 1 / -1; font-size: 11.5px;
+  color: var(--amber); margin: -1px 0 3px; }
+#plan-volumes .vols-foot { display: flex; justify-content: space-between;
+  align-items: baseline; gap: 8px; margin-top: 9px; padding-top: 8px;
+  border-top: 1px solid var(--border); font-size: 12.5px;
+  font-variant-numeric: tabular-nums; }
+#plan-volumes .vols-foot.last { margin-top: 2px; padding-top: 0; border-top: 0; }
+#plan-volumes .vols-foot .k { color: var(--muted); }
+#plan-volumes .lnk { background: none; border: 0; color: var(--muted);
+  font: 12px/1 inherit; text-decoration: underline; text-underline-offset: 2px;
+  cursor: pointer; padding: 8px 0 0; }
+#plan-volumes .lnk:hover { color: var(--fg); }
+
 /* Les 4 états + « devenu inéligible » (celui-là EST un avertissement). */
 .tag {
   font-size: 10.5px; font-weight: 600; letter-spacing: .3px; text-transform: uppercase;

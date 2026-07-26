@@ -91,11 +91,22 @@ function creerDocument() {
  *  Rend :
  *  - `app`  : les fonctions déclarées par app.js (`renderPlanAside`, `planParams`…) ;
  *  - `$`    : `getElementById` du faux document ;
- *  - `invocations` : les `invoke("commande", args)` partis vers le backend. */
+ *  - `invocations` : les `invoke("commande", args)` partis vers le backend ;
+ *  - `evaluer(expr)` : évalue une expression DANS le contexte. Sert à atteindre
+ *    l'état déclaré en `const` (`plan`, `state`) : ces liaisons vivent dans
+ *    l'environnement lexical du realm, pas sur `globalThis`, donc `app.plan`
+ *    est indéfini là où `evaluer("plan")` rend l'objet — et le mute. */
 function chargerApp() {
   const document = creerDocument();
   const invocations = [];
-  const invoke = (cmd, args) => { invocations.push([cmd, args]); return Promise.resolve(null); };
+  // `app.js` fait `const { invoke } = window.__TAURI__.core` au chargement :
+  // remplacer la fonction après coup n'aurait aucun effet. D'où l'indirection,
+  // que `repondreAux` réarme quand un test veut simuler le backend.
+  let repondre = () => null;
+  const invoke = (cmd, args) => {
+    invocations.push([cmd, args]);
+    return Promise.resolve(repondre(cmd, args));
+  };
   const window = {
     __TAURI__: {
       core: { invoke },
@@ -120,11 +131,21 @@ function chargerApp() {
   ctx.globalThis = ctx;
   vm.runInContext(fs.readFileSync(CHEMIN_APP, "utf8"), ctx, { filename: "app.js" });
 
-  return { app: ctx, $: document.getElementById, invocations };
+  return {
+    app: ctx,
+    $: document.getElementById,
+    invocations,
+    evaluer: (expr) => vm.runInContext(expr, ctx),
+    /** Installe la réponse du backend : `(commande, args) => valeur`. */
+    repondreAux: (fn) => { repondre = fn; },
+  };
 }
 
-/** Premier nœud du sous-arbre satisfaisant `predicat`, en profondeur d'abord. */
+/** Premier ÉLÉMENT du sous-arbre satisfaisant `predicat`, en profondeur
+ *  d'abord. Les enfants texte sont ignorés : `h()` les empile tels quels, et un
+ *  prédicat qui lit `attrs` ou `tagName` s'y casserait. */
 function trouver(noeud, predicat) {
+  if (typeof noeud !== "object" || noeud === null) return null;
   if (predicat(noeud)) return noeud;
   for (const enfant of noeud.children ?? []) {
     const t = trouver(enfant, predicat);

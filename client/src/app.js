@@ -1177,7 +1177,19 @@ const plan = {
   tri: { col: "mep_id", asc: true },
   filtres: { mep: "", run: "", pa: "", origine: "", etat: "", q: "" },
   genere: false,
+  // Rampe manuelle : { [run_num]: volume }. Vit ici et non dans le DOM — les
+  // champs sont dynamiques (un par run retenu) et le panneau est reconstruit
+  // en entier à chaque rendu. Un run absent vaut 0 côté moteur, en silence :
+  // c'est pourquoi le rendu liste TOUS les runs retenus.
+  volumes: {},
 };
+
+/** Runs retenus de l'aperçu, en ordre chronologique, avec leur détail chiffré.
+ *  Unique source des volumes : la timeline porte déjà l'ordre et les écarts. */
+function runsRetenus() {
+  const t = plan.apercu?.timeline ?? [];
+  return t.flatMap((j) => j.runs.filter((r) => !r.ecart).map((r) => ({ ...r, date: j.date })));
+}
 
 const PLAN_ETATS = {
   eligible: ["", "éligible"],
@@ -1206,12 +1218,21 @@ function fmtN(n) { return (n ?? 0).toLocaleString("fr-FR"); }
 /** Paramètres envoyés au moteur. Forme exacte de PlanParams (plan.rs). */
 function planParams() {
   const forme = $("plan-forme")?.value ?? "plate";
-  const pilote = $("plan-pilote")?.checked
+  // Le pilote n'a AUCUN effet en forme manuelle (`construire_rampe` retourne
+  // avant lui) : l'envoyer quand même ferait porter à l'utilisateur un réglage
+  // qui n'agit pas. Il est masqué à l'écran, mais la case garde son état —
+  // c'est ici que la décision se prend.
+  const pilote = forme !== "manuelle" && $("plan-pilote")?.checked
     ? { runs: +$("plan-pilote-runs").value || 0, cf_par_run: +$("plan-pilote-cf").value || 0 }
     : null;
   const rampe = { forme, pilote };
   if (forme === "geometrique") rampe.raison = +$("plan-raison").value || 2;
-  if (forme === "manuelle") rampe.volumes = {};
+  // Les runs absents de la map valent 0 côté moteur : on n'envoie que les runs
+  // retenus, ce que le panneau affiche exactement.
+  if (forme === "manuelle") {
+    rampe.volumes = Object.fromEntries(
+      runsRetenus().map((r) => [r.num, plan.volumes[r.num] ?? 0]));
+  }
   const cibleBrute = $("plan-cible")?.value ?? "";
   return {
     runs: plan.runs,
@@ -1224,6 +1245,76 @@ function planParams() {
     pa_exclues: [...plan.paExclues],
     rampe,
   };
+}
+
+/** Bloc de saisie des volumes, un champ par run retenu.
+ *
+ *  Ne se re-rend PAS à la frappe : `oninput` écrit dans `plan.volumes` et
+ *  déclenche le recalcul, mais reconstruire le panneau ferait perdre le focus
+ *  au champ en cours de saisie. L'alerte de dépassement arrive donc au rendu
+ *  suivant, avec l'aperçu — elle vient du moteur, pas d'un calcul local. */
+function volumesParRun() {
+  const runs = runsRetenus();
+  if (!runs.length) {
+    return h("p", { class: "field-hint" },
+      "Aucun Run de Facturation retenu : rien à répartir pour l'instant.");
+  }
+  const lignes = runs.map((r) => {
+    const champ = h("input", {
+      type: "number", min: "0", id: `plan-vol-${r.num}`,
+      value: String(plan.volumes[r.num] ?? 0),
+      oninput: (e) => {
+        plan.volumes[r.num] = Math.max(0, +e.target.value | 0);
+        planRecalc();
+      },
+    });
+    // `reliquat` dit ce qu'un calcul « volume > stock » raterait : il tient
+    // compte du report entrant. Ce n'est pas une erreur — le surplus part sur
+    // le run suivant — d'où l'ambre et non le rouge.
+    const reste = r.detail?.reliquat ?? 0;
+    const ligne = h("div", { class: reste > 0 ? "vol over" : "vol" },
+      h("span", { class: "who" },
+        h("b", {}, r.num), ` · ${jourMois(r.date)}`),
+      champ);
+    if (reste > 0) {
+      ligne.append(h("span", { class: "flag" },
+        `stock ${fmtN(r.detail.stock)} · ${fmtN(reste)} reportés`));
+    }
+    return ligne;
+  });
+
+  const total = runs.reduce((n, r) => n + (plan.volumes[r.num] ?? 0), 0);
+  const atteignables = (plan.apercu?.stock_jj ?? [])
+    .reduce((n, s) => n + (s.couvert ? s.comptes : 0), 0);
+
+  return h("div", { id: "plan-volumes" },
+    h("div", { class: "vols" }, ...lignes),
+    h("div", { class: "vols-foot" },
+      h("span", { class: "k" }, "Total saisi"), h("b", {}, fmtN(total))),
+    h("div", { class: "vols-foot last" },
+      h("span", { class: "k" }, "Pool atteignable"), h("span", { class: "k" }, fmtN(atteignables))),
+    h("button", { class: "lnk", id: "plan-vol-zero", onclick: () => {
+      plan.volumes = {};
+      renderPlanAside();
+      planRecalc();
+    } }, "Tout à 0"));
+}
+
+/** « 2026-08-11 » → « 11/08 ». Les dates de la timeline sont ISO. */
+function jourMois(iso) { return `${iso.slice(8, 10)}/${iso.slice(5, 7)}`; }
+
+/** Changement de forme de rampe.
+ *
+ *  La première bascule vers « manuelle » part des volumes que l'écran affiche
+ *  déjà : le geste réel est « je prends ma rampe linéaire et j'ajuste deux
+ *  runs », pas « je ressaisis six valeurs ». Une saisie existante n'est jamais
+ *  réécrasée — repasser par une forme calculée puis revenir la retrouve. */
+function basculerForme(forme) {
+  if (forme === "manuelle" && !Object.keys(plan.volumes).length) {
+    for (const r of runsRetenus()) plan.volumes[r.num] = r.detail?.vise ?? 0;
+  }
+  renderPlanAside();
+  planRecalc();
 }
 
 // --- Panneau latéral ---------------------------------------------------------
@@ -1288,6 +1379,8 @@ function renderPlanAside() {
     onchange: () => { renderPlanAside(); planRecalc(); } });
   casePilote.checked = pilOn;
 
+  const blocVolumes = forme === "manuelle" ? volumesParRun() : null;
+
   $("plan-aside").replaceChildren(
     h("h3", { id: "plan-cols-title", class: manque ? "need" : "" }, "Colonnes"), bloc,
 
@@ -1317,12 +1410,20 @@ function renderPlanAside() {
     h("label", {}, "Comptes distincts à traiter"),
     h("input", { type: "number", id: "plan-cible", min: "1", placeholder: "auto", value: vals.cible, style: "width:120px", oninput: planRecalc }),
     h("p", { class: "field-hint" }, "Vide = tout le pool éligible atteignable."),
+    // La cible n'est PAS neutralisée en manuel : `construire_rampe` l'ignore,
+    // mais `allouer` s'en sert encore pour les quotas par plateforme. La griser
+    // serait donc faux — d'où cette note.
+    ...(forme === "manuelle"
+      ? [h("p", { class: "field-hint warn-hint", id: "plan-cible-manuel" },
+          "En rampe manuelle, la cible ne fixe plus le volume — les volumes saisis font foi. Elle sert encore de base aux quotas par plateforme.")]
+      : []),
 
     h("h3", {}, "Rampe de montée en charge"),
     h("label", {}, "Forme"),
-    h("select", { id: "plan-forme", onchange: () => { renderPlanAside(); planRecalc(); } },
+    h("select", { id: "plan-forme", onchange: () => basculerForme($("plan-forme").value) },
       ...[["plate", "Plate (équirépartie)"], ["lineaire", "Linéaire (croissance douce)"],
-          ["geometrique", "Géométrique (raison réglable)"]].map(([v, t]) => {
+          ["geometrique", "Géométrique (raison réglable)"],
+          ["manuelle", "Manuelle (volume par run)"]].map(([v, t]) => {
         const o = h("option", { value: v }, t);
         if (v === forme) o.selected = true;
         return o;
@@ -1330,12 +1431,17 @@ function renderPlanAside() {
     ...(forme === "geometrique"
       ? [h("label", {}, "Raison"), h("input", { type: "number", id: "plan-raison", min: "1.1", step: "0.05", value: vals.raison, style: "width:90px", oninput: planRecalc })]
       : []),
-    h("label", {}, casePilote, " Pilote prudent au démarrage"),
-    ...(pilOn
-      ? [h("label", {}, "Durée du pilote (runs)"), h("input", { type: "number", id: "plan-pilote-runs", min: "0", value: vals.piloteRuns, style: "width:80px", oninput: planRecalc }),
-         h("label", {}, "Comptes par run de pilote"), h("input", { type: "number", id: "plan-pilote-cf", min: "0", value: vals.piloteCf, style: "width:80px", oninput: planRecalc }),
-         h("p", { class: "field-hint" }, "Le niveau du pilote sert de socle : la rampe ne redescend jamais en dessous.")]
-      : []),
+    ...(blocVolumes ? [h("label", {}, "Volumes par run"), blocVolumes] : []),
+    // Le pilote ne s'applique pas en manuel : le laisser à l'écran donnerait un
+    // réglage sans effet. `planParams` force `null` de son côté.
+    ...(forme === "manuelle" ? [] : [
+      h("label", {}, casePilote, " Pilote prudent au démarrage"),
+      ...(pilOn
+        ? [h("label", {}, "Durée du pilote (runs)"), h("input", { type: "number", id: "plan-pilote-runs", min: "0", value: vals.piloteRuns, style: "width:80px", oninput: planRecalc }),
+           h("label", {}, "Comptes par run de pilote"), h("input", { type: "number", id: "plan-pilote-cf", min: "0", value: vals.piloteCf, style: "width:80px", oninput: planRecalc }),
+           h("p", { class: "field-hint" }, "Le niveau du pilote sert de socle : la rampe ne redescend jamais en dessous.")]
+        : []),
+    ]),
 
     h("h3", {}, "Options"),
     h("label", {}, "Seed"),
@@ -1521,6 +1627,29 @@ function renderPlanParam() {
         tbl.append(ligneJalon(j, jl));
     }
     noeuds.push(h("div", { class: "tl-scroll" }, tbl));
+
+    // Aperçu des volumes : une barre par run retenu. Les chiffres sont ceux du
+    // moteur (`detail.vise`), jamais recalculés ici — et le graphe disparaît
+    // sans run retenu plutôt que de diviser par zéro.
+    const retenusDetail = runsRetenus();
+    if (retenusDetail.length) {
+      const maxVise = Math.max(1, ...retenusDetail.map((r) => r.detail?.vise ?? 0));
+      noeuds.push(h("h2", {}, "Volumes par run"));
+      noeuds.push(h("p", { class: "field-hint" },
+        "Comptes visés par Run de Facturation. En ambre, les runs dont le stock n'a pas absorbé le volume : le surplus part en report sur le run suivant."));
+      const vb = h("div", { class: "vol-bars", id: "plan-vol-bars" });
+      for (const r of retenusDetail) {
+        const vise = r.detail?.vise ?? 0;
+        const reste = r.detail?.reliquat ?? 0;
+        const titre = reste > 0
+          ? `${r.num} du ${jourMois(r.date)} — ${fmtN(vise)} visés, ${fmtN(reste)} reportés`
+          : `${r.num} du ${jourMois(r.date)} — ${fmtN(vise)} visés`;
+        vb.append(h("div", { class: reste > 0 ? "vol-bar over" : "vol-bar", title: titre },
+          h("i", { style: `height:${((vise / maxVise) * 100).toFixed(1)}%` }),
+          h("span", {}, fmtN(vise))));
+      }
+      noeuds.push(vb);
+    }
 
     const totalPool = a.stock_jj.reduce((n, s) => n + s.comptes, 0);
     const atteignables = a.stock_jj.reduce((n, s) => n + (s.couvert ? s.comptes : 0), 0);
@@ -1907,6 +2036,7 @@ async function ouvrirPlan() {
       plan.runs = enr.params.runs ?? [];
       plan.meps = enr.params.meps ?? [];
       plan.paExclues = new Set(enr.params.pa_exclues ?? []);
+      plan.volumes = { ...(enr.params.rampe?.volumes ?? {}) };
       plan.genere = true;
       renderPlanAside();
       if ($("plan-debut")) $("plan-debut").value = enr.params.debut ?? "";
@@ -1914,6 +2044,19 @@ async function ouvrirPlan() {
       if ($("plan-mepcount")) $("plan-mepcount").value = enr.params.mep_count ?? 0;
       if ($("plan-cible")) $("plan-cible").value = enr.params.cible ?? "";
       if ($("plan-seed")) $("plan-seed").value = enr.params.seed ?? 42;
+      // La rampe n'était pas restaurée du tout : un plan enregistré en
+      // géométrique rouvrait en « plate », sa raison perdue. Les champs qui en
+      // dépendent (raison, volumes, pilote) n'existent qu'une fois la forme
+      // posée — d'où le second rendu, qui conserve ce qui vient d'être écrit.
+      const ra = enr.params.rampe ?? {};
+      if ($("plan-forme")) $("plan-forme").value = ra.forme ?? "plate";
+      if ($("plan-pilote")) $("plan-pilote").checked = !!ra.pilote;
+      renderPlanAside();
+      if (ra.raison && $("plan-raison")) $("plan-raison").value = ra.raison;
+      if (ra.pilote) {
+        if ($("plan-pilote-runs")) $("plan-pilote-runs").value = ra.pilote.runs ?? 0;
+        if ($("plan-pilote-cf")) $("plan-pilote-cf").value = ra.pilote.cf_par_run ?? 0;
+      }
       $("plan-foot-info").textContent =
         `Plan enregistré depuis ${enr.fichier}` + (enr.autre_fichier ? " — ⚠ le fichier ouvert est différent" : "");
       if (enr.autre_fichier)
