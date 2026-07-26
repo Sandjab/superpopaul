@@ -121,6 +121,85 @@ pub fn barres_empilees(barres: &[Barre]) -> String {
     s
 }
 
+/// Un palier de la courbe cumulée : à cette date, le cumul vaut cette valeur.
+pub struct Point {
+    pub date: NaiveDate,
+    pub valeur: u64,
+}
+
+/// Un repère vertical daté (mise en production).
+pub struct JalonChart {
+    pub date: NaiveDate,
+    pub label: String,
+}
+
+/// Aire cumulée **en escalier** : le parc facturant saute à chaque run, il ne
+/// croît pas continûment. Une courbe lissée suggérerait une progression
+/// quotidienne qui n'existe pas.
+pub fn aire_cumulee(
+    points: &[Point],
+    jalons: &[JalonChart],
+    debut: NaiveDate,
+    fin: NaiveDate,
+) -> String {
+    let mut s = String::with_capacity(4 * 1024);
+    s.push_str(&format!(
+        "<svg viewBox=\"0 0 {W} 240\" role=\"img\" aria-label=\"Parc facturant cumulé\">"
+    ));
+    if points.is_empty() {
+        s.push_str(&format!(
+            "<text class=\"tick mid\" x=\"{}\" y=\"120\">Aucune première facture planifiée</text></svg>",
+            W / 2.0
+        ));
+        return s;
+    }
+
+    let jours = (fin - debut).num_days().max(1) as f64;
+    let x = |d: NaiveDate| X0 + ((d - debut).num_days() as f64 / jours) * (X1 - X0);
+    let max = points.iter().map(|p| p.valeur).max().unwrap_or(0);
+    let (haut, pas) = echelle(max);
+    let y = |v: u64| Y1 + 6.0 - (v as f64 / haut as f64) * (Y1 + 6.0 - Y0);
+
+    let mut v = 0u64;
+    while v <= haut {
+        s.push_str(&format!(
+            "<line class=\"grid\" x1=\"{X0}\" y1=\"{0:.1}\" x2=\"{X1}\" y2=\"{0:.1}\"></line>\
+             <text class=\"tick end\" x=\"44\" y=\"{1:.1}\">{2}</text>",
+            y(v),
+            y(v) + 4.0,
+            fmt_int(v)
+        ));
+        v += pas;
+    }
+
+    for jl in jalons {
+        let jx = x(jl.date);
+        s.push_str(&format!(
+            "<line class=\"mep\" x1=\"{jx:.1}\" y1=\"{Y0}\" x2=\"{jx:.1}\" y2=\"{:.1}\"></line>\
+             <text class=\"mep-lbl\" x=\"{:.1}\" y=\"27\">{}</text>",
+            y(0),
+            jx + 22.0,
+            esc(&jl.label)
+        ));
+    }
+
+    // Escalier : on avance à l'horizontale jusqu'à la date du run, puis on
+    // monte d'un coup (H puis V, jamais de segment oblique).
+    let base = y(0);
+    let mut d = format!("M {X0:.1},{base:.1}");
+    for p in points {
+        d.push_str(&format!(" H {:.1} V {:.1}", x(p.date), y(p.valeur)));
+    }
+    d.push_str(&format!(" H {X1:.1}"));
+    s.push_str(&format!("<path class=\"area\" d=\"{d} V {base:.1} Z\"></path>"));
+    s.push_str(&format!("<path class=\"line\" d=\"{d}\"></path>"));
+
+    s.push_str(&format!(
+        "<line class=\"axis\" x1=\"{X0}\" y1=\"{base:.1}\" x2=\"{X1}\" y2=\"{base:.1}\"></line></svg>"
+    ));
+    s
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,6 +263,49 @@ mod tests {
         // Le numéro de run vient du runs.csv : entrée non fiable.
         let svg = barres_empilees(&[barre("<script>alert(1)</script>", "11/08", 1, 0)]);
         assert!(!svg.contains("<script>alert"), "injection non échappée : {svg}");
+        assert!(svg.contains("&lt;script&gt;"));
+    }
+
+    fn j(iso: &str) -> NaiveDate {
+        NaiveDate::parse_from_str(iso, "%Y-%m-%d").unwrap()
+    }
+
+    #[test]
+    fn aire_cumulee_trace_un_escalier_et_ses_jalons() {
+        let pts = vec![
+            Point { date: j("2026-08-11"), valeur: 420 },
+            Point { date: j("2026-09-08"), valeur: 1030 },
+        ];
+        let jalons = vec![JalonChart { date: j("2026-08-01"), label: "MEP 1".into() }];
+        let svg = aire_cumulee(&pts, &jalons, j("2026-08-01"), j("2026-09-30"));
+        assert!(svg.starts_with("<svg") && svg.ends_with("</svg>"));
+        assert!(svg.contains("class=\"area\"") && svg.contains("class=\"line\""));
+        // Escalier : le tracé n'utilise que des segments horizontaux et verticaux.
+        assert!(svg.contains(" H ") && svg.contains(" V "), "{svg}");
+        assert!(!svg.contains(" C "), "aucune courbe de Bézier : le parc saute, il ne glisse pas");
+        assert!(svg.contains("MEP 1"));
+    }
+
+    #[test]
+    fn aire_cumulee_sans_point_rend_un_svg_valide() {
+        let svg = aire_cumulee(&[], &[], j("2026-08-01"), j("2026-09-30"));
+        assert!(svg.starts_with("<svg") && svg.ends_with("</svg>"), "{svg}");
+        assert!(svg.contains("Aucune"));
+    }
+
+    #[test]
+    fn aire_cumulee_fenetre_dun_seul_jour_ne_divise_pas_par_zero() {
+        let pts = vec![Point { date: j("2026-08-01"), valeur: 5 }];
+        let svg = aire_cumulee(&pts, &[], j("2026-08-01"), j("2026-08-01"));
+        assert!(svg.starts_with("<svg"));
+    }
+
+    #[test]
+    fn les_libelles_de_jalon_sont_echappes() {
+        let jalons = vec![JalonChart { date: j("2026-08-01"), label: "<script>x</script>".into() }];
+        let pts = vec![Point { date: j("2026-08-11"), valeur: 1 }];
+        let svg = aire_cumulee(&pts, &jalons, j("2026-08-01"), j("2026-09-30"));
+        assert!(!svg.contains("<script>x"), "{svg}");
         assert!(svg.contains("&lt;script&gt;"));
     }
 }
