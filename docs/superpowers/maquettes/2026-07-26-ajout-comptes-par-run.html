@@ -1,0 +1,952 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Maquette — ajout de comptes par run</title>
+<style>
+/* Palette « Bleu nuit & or », dérivée du splash et du logo : neutres bleu nuit,
+   or de l'emblème SP en accent signature (actions, focus, activité), vert
+   réservé au succès/progression, orange aux avertissements (distinct de l'or),
+   rouge aux erreurs. */
+:root {
+  --bg: #0e1524; --card: #172136; --border: #2b3752;
+  --fg: #eae9e2; --muted: #939cb4;
+  --green: #4cc268; --gold: #d9a83f; --gold-hover: #e6bb5c; --on-gold: #241a02;
+  --amber: #e0873a; --red: #e5534b;
+  --btn2: #1b2740; --track: #223050;
+  /* écru lumineux — accent colonne des adressages (🔑) */
+  --pid: #e8e4d8;
+  /* famille PPF (onglet Format) : violet en dégradé, entonnoir large → strict */
+  --ppf-l1: #6f6aa8; --ppf-l2: #8a80d4; --ppf-l3: #a892ff; --ppf-l4: #c3b6ff;
+  /* Prêt plus tard (v0.4.0) : vert éteint, pris sur le vert — c'était compté
+     prêt, on précise. Jamais l'or (accent) ni l'orange (avertissement). */
+  --green-later: #2f8050;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 14px/1.5 -apple-system, "Segoe UI", system-ui, sans-serif;
+  display: flex; flex-direction: column;
+  /* Hauteur FIXE (pas min-) : un contenu haut fait défiler main (qui a son
+     ascenseur), au lieu d'agrandir la page — header et footer restent visibles. */
+  height: 100vh; overflow: hidden;
+}
+h1, h2 { font-weight: 600; }
+button {
+  background: var(--btn2); color: var(--fg); border: 1px solid var(--border);
+  border-radius: 6px; padding: 5px 14px; cursor: pointer;
+}
+button:hover:not(:disabled) { border-color: var(--gold); }
+button:active:not(:disabled) { background: var(--bg); transform: translateY(1px); }
+button:disabled { opacity: .45; cursor: default; }
+button:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+/* Hiérarchie des boutons : le style de base ci-dessus est le niveau secondaire ;
+   primaire = l'action qui fait avancer (une seule par écran), danger = arrêt/
+   destruction, ghost = boutons d'icône discrets. */
+.btn-primary { background: var(--gold); border-color: var(--gold-hover); color: var(--on-gold); font-weight: 600; }
+.btn-primary:hover:not(:disabled) { background: var(--gold-hover); border-color: var(--gold-hover); }
+.btn-primary:active:not(:disabled) { background: #c69434; }
+.btn-primary:disabled { background: var(--btn2); color: var(--muted); border-color: var(--border); }
+.btn-danger { border-color: var(--red); color: var(--red); }
+.btn-danger:hover:not(:disabled) { background: rgba(229, 83, 75, .12); border-color: var(--red); }
+.btn-ghost { background: transparent; border-color: transparent; color: var(--muted); }
+.btn-ghost:hover:not(:disabled) { background: var(--card); color: var(--fg); border-color: transparent; }
+/* L'engrenage : glyphe lisible, padding réduit pour garder la hauteur commune. */
+#btn-settings { font-size: 18px; padding: 2px 10px; line-height: 1.3; }
+input, select {
+  background: var(--bg); color: var(--fg); border: 1px solid var(--border);
+  border-radius: 6px; padding: 5px 8px;
+}
+input:disabled, select:disabled { opacity: .45; }
+.muted { color: var(--muted); }
+.hidden { display: none !important; }
+/* Ligne d'aide visible sous un contrôle structurant (mode de run, mode de
+   résolution, note de calibration) : l'info de décision ne vit pas en tooltip. */
+.field-hint { font-size: 12.5px; color: var(--muted); margin: 4px 0 8px; }
+
+#splash {
+  position: fixed; inset: 0; z-index: 99;
+  background: var(--bg) url(splash.jpg) center / cover no-repeat;
+  display: flex; align-items: flex-end; justify-content: center;
+  font-size: 42px; transition: opacity 3s;
+}
+#splash.fade { opacity: 0; pointer-events: none; }
+.splash-inner {
+  text-align: center; padding-bottom: 4vh;
+  text-shadow: 0 1px 6px rgba(0, 0, 0, .85); /* lisible sur l'illustration */
+}
+.splash-inner h1 { margin: 8px 0 0; }
+.splash-inner p { font-size: 42px; color: var(--fg); }
+
+header {
+  display: flex; align-items: center; gap: 16px;
+  padding: 10px 16px; border-bottom: 1px solid var(--border);
+}
+.logo { font-weight: 700; display: flex; align-items: center; gap: 7px; }
+.logo img { height: 22px; }
+#stepper { flex: 1; display: flex; gap: 6px; justify-content: center; }
+.step { border-radius: 14px; }
+.step.active { background: var(--gold); color: var(--on-gold); border-color: var(--gold); font-weight: 600; }
+.step.done { color: var(--green); }
+
+/* min-height 0 : sans lui, l'item flex refuse de rétrécir sous la hauteur de
+   son contenu (min-height:auto) et l'ascenseur n'apparaît jamais. */
+main { flex: 1; min-height: 0; padding: 18px; overflow-y: auto; }
+/* Ascenseur visible en permanence quand ça déborde (macOS le masque hors
+   défilement par défaut) — n'apparaît pas si le contenu tient. */
+main::-webkit-scrollbar { width: 10px; }
+main::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; }
+main::-webkit-scrollbar-thumb:hover { background: #3c4a6b; }
+main::-webkit-scrollbar-track { background: transparent; }
+.panel { max-width: 900px; margin: 0 auto; }
+fieldset { border: 1px solid var(--border); border-radius: 8px; margin: 12px 0; }
+#settings fieldset.ppf-settings { border-color: var(--ppf-l2); }
+#settings fieldset.ppf-settings > legend { color: var(--ppf-l3); }
+
+#banner {
+  padding: 10px 16px; font-weight: 600; display: flex; gap: 12px;
+  align-items: center; justify-content: center;
+}
+#banner.error { background: #331518; color: var(--red); }
+#banner.warn { background: #2e2010; color: var(--amber); }
+
+/* Carte « fichier principal » : héro de l'onglet Fichiers (bordure dorée +
+   fin halo doré) — l'entrée primaire prime sur la carte annuaire (référence). */
+#main-card {
+  border: 1px solid var(--gold); background: var(--card); border-radius: 12px;
+  padding: 16px 18px; box-shadow: 0 0 0 1px color-mix(in srgb, var(--gold) 15%, transparent);
+}
+#main-card > h3 {
+  font-size: 15px; margin: 0 0 12px; display: flex; align-items: center; gap: 8px; color: var(--fg);
+}
+.chip-main {
+  font-size: 11px; font-weight: 600; letter-spacing: .3px; text-transform: uppercase;
+  color: var(--on-gold); background: var(--gold); border-radius: 20px; padding: 1px 9px;
+}
+#dropzone {
+  border: 2px dashed var(--muted); border-radius: 10px; padding: 28px 16px;
+  text-align: center; color: var(--fg);
+}
+#dropzone.over { border-color: var(--gold); color: var(--fg); }
+/* Fichier à nombreuses colonnes : l'aperçu scrolle horizontalement DANS la
+   carte plutôt que de déborder par-dessus le cadre doré. */
+#file-info { overflow-x: auto; }
+/* Nom du fichier chargé : en évidence dans la ligne meta atténuée. */
+#file-meta b { color: var(--fg); }
+/* Colonne des adressages choisie : surbrillance à la couleur d'accent (même
+   langage que th.peppol / td.temp de l'étape 2). */
+#preview-table th.pid-col { color: var(--pid); box-shadow: inset 0 0 0 1px var(--pid); }
+#preview-table td.pid-col { background: color-mix(in srgb, var(--pid) 10%, transparent); }
+table { border-collapse: collapse; margin: 12px 0; width: 100%; }
+th, td { border: 1px solid var(--border); padding: 4px 10px; text-align: left; }
+th { background: var(--card); }
+#out-preview th { cursor: grab; user-select: none; white-space: nowrap; }
+#out-preview th.peppol { color: var(--gold); box-shadow: inset 0 0 0 1px var(--gold); }
+#out-preview th.dir { color: var(--green); box-shadow: inset 0 0 0 1px var(--green); }
+#out-preview th.ppf-annuaire { color: var(--ppf-l1); box-shadow: inset 0 0 0 1px var(--ppf-l1); }
+#out-preview th.ppf-active   { color: var(--ppf-l2); box-shadow: inset 0 0 0 1px var(--ppf-l2); }
+#out-preview th.ppf-pdp      { color: var(--ppf-l3); box-shadow: inset 0 0 0 1px var(--ppf-l3); }
+#out-preview th.ppf-usable   { color: var(--ppf-l4); box-shadow: inset 0 0 0 1px var(--ppf-l4); }
+/* Drag des colonnes (SortableJS forceFallback) : placeholder or translucide
+   dans le tableau, clone flottant ombré qui suit le curseur (fallbackOnBody). */
+#out-preview th.drag-ghost { opacity: .4; background: rgba(217, 168, 63, .16); }
+body > .drag-fallback {
+  opacity: .9; box-shadow: 0 8px 24px rgba(0, 0, 0, .6);
+  border-radius: 4px; cursor: grabbing;
+}
+/* Drop zone des colonnes écartées : cible/départ du DnD (même langage
+   visuel que le #dropzone de l'étape 1). */
+#col-zone {
+  border: 2px dashed var(--border); border-radius: 10px; padding: 10px 12px;
+  display: flex; gap: 8px; flex-wrap: wrap; align-items: center; min-height: 48px;
+}
+#col-zone:empty::after {
+  content: "Glisse ici les colonnes à écarter — et depuis ici pour les réintégrer.";
+  color: var(--muted);
+}
+.chip {
+  border: 1px solid var(--border); background: var(--card); border-radius: 14px;
+  padding: 3px 12px; cursor: grab; user-select: none; white-space: nowrap;
+}
+.chip.peppol { color: var(--gold); border-color: var(--gold); }
+.chip.dir { color: var(--green); border-color: var(--green); }
+.chip.ppf-annuaire { color: var(--ppf-l1); border-color: var(--ppf-l1); }
+.chip.ppf-active   { color: var(--ppf-l2); border-color: var(--ppf-l2); }
+.chip.ppf-pdp      { color: var(--ppf-l3); border-color: var(--ppf-l3); }
+.chip.ppf-usable   { color: var(--ppf-l4); border-color: var(--ppf-l4); }
+#out-preview td.temp { background: rgba(217, 168, 63, .10); }
+
+#format-head { display: flex; align-items: center; gap: 10px; }
+#format-head h2 { margin-right: auto; }
+#profile-name { font-size: .85em; }
+.profile-dirty { color: var(--gold); }
+#out-preview th.pid { color: var(--pid); box-shadow: inset 0 0 0 1px var(--pid); }
+#out-preview td.pid { background: color-mix(in srgb, var(--pid) 10%, transparent); }
+.key-btn { background: none; border: none; padding: 0 2px; cursor: pointer; opacity: 0; }
+.key-btn:hover:not(:disabled) { border: none; }
+#out-preview th.input:not(.pid):hover .key-btn { opacity: .45; }
+#out-preview th.pid .key-btn { opacity: 1; cursor: default; }
+
+#run-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+/* Chiffres à chasse fixe : pas de tremblement pendant les ticks de télémétrie. */
+#step-run { font-variant-numeric: tabular-nums; }
+#run-title { font-weight: 600; }
+/* Stats du pré-run (compteurs d'analyze_input) : échecs et périmés ne se
+   colorent que s'ils sont > 0. */
+#run-stats { display: flex; gap: 6px 22px; flex-wrap: wrap; margin: 10px 0 2px;
+             font-size: 12.5px; color: var(--muted); }
+#run-stats b { color: var(--fg); font-size: 14px; margin-right: 4px; }
+#run-stats .warn b { color: var(--amber); }
+#run-stats .err b { color: var(--red); }
+/* Bloc de fin de run : bilan + accès au fichier. Liseré vert (terminé),
+   orange (arrêté), rouge (écriture en échec). */
+#run-result { border: 1px solid var(--border); border-left: 3px solid var(--green);
+              border-radius: 8px; padding: 12px 16px; margin-top: 14px; }
+#run-result.stopped { border-left-color: var(--amber); }
+#run-result.failed { border-left-color: var(--red); }
+.result-title { font-weight: 600; color: var(--green); margin: 0 0 8px; }
+#run-result.stopped .result-title { color: var(--amber); }
+.result-stats { display: flex; gap: 6px 26px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); }
+.result-stats b { color: var(--fg); font-size: 14px; margin-right: 4px; }
+.result-file { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+               margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); font-size: 13px; }
+.result-file .path { color: var(--muted); font-size: 12px; overflow: hidden;
+                     text-overflow: ellipsis; white-space: nowrap; max-width: 46ch; }
+/* Cockpit à deux niveaux : bandeau métier aéré (sans cartes, l'espacement fait
+   la structure), télémétrie repliée dans <details> en dessous. */
+#biz-band { display: flex; flex-wrap: wrap; align-items: center;
+            gap: 18px 30px; padding: 8px 4px 20px; }
+#ring-block { text-align: center; }
+/* flex 0 1 300px : les métriques restent regroupées près de l'anneau (pas
+   d'étirement) tout en pouvant rétrécir — la base < largeur naturelle évite
+   que flex-wrap ne les renvoie à la ligne. */
+.biz-metric { display: flex; gap: 16px; align-items: center; flex: 0 1 300px; min-width: 0; }
+.biz-metric > div:last-child { min-width: 0; }
+.biz-metric h3 { margin: 0 0 5px; font-size: 13px; font-weight: 600; color: var(--muted);
+                 display: flex; align-items: center; gap: 6px; }
+.biz-metric h3 svg { color: var(--gold); flex: none; }
+/* Échecs sous l'anneau : info métier, rouge dès qu'il y en a. */
+#fail-line { margin: 6px 0 0; font-size: 12.5px; font-weight: 600; color: var(--red); }
+#fail-line.zero { color: var(--muted); font-weight: 400; }
+#ring {
+  width: 150px; height: 150px; border-radius: 50%;
+  background: conic-gradient(var(--green) 0%, var(--track) 0%);
+  display: flex; align-items: center; justify-content: center;
+}
+#ring-center {
+  width: 116px; height: 116px; border-radius: 50%; background: var(--bg);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+}
+#ring-pct { font-size: 26px; }
+/* État du run sous l'anneau : « en cours » or à pulsation douce (l'or est la
+   couleur d'activité, le rouge reste réservé aux erreurs), « suspendu » orange
+   (durée/moyenne provisoires en italique), « terminé » vert avec durée à la
+   place de l'ETA et moyenne en dessous — marges resserrées. */
+#ring-state { margin: 8px 0 -10px; font-weight: 600; color: var(--green); }
+#ring-state.running { color: var(--gold); animation: ring-pulse 2.4s ease-in-out infinite; }
+#ring-state.suspended { color: var(--amber); }
+@keyframes ring-pulse { 50% { opacity: .55; } }
+@media (prefers-reduced-motion: reduce) { #ring-state.running { animation: none; } }
+#avg-rate { margin: -12px 0 0; font-size: 12px; }
+.provisional, .provisional b { font-style: italic; }
+/* Présence en annuaire (étape 3, avant le run) : couverture déclarative, en
+   barres (pas anneaux) pour la distinguer des tuiles-run. Réutilise les tokens
+   violets PPF (--ppf-l1..l4, entonnoir large → strict) et le vert « présence ». */
+#coverage { padding: 6px 4px 16px; border-bottom: 1px solid var(--border); margin-bottom: 12px; }
+.cov-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin: 0 0 4px; }
+.cov-head h3 { margin: 0; font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 7px; }
+.cov-head h3 svg { color: var(--gold); flex: none; }
+.cov-elig { color: var(--muted); font-size: 12.5px; }
+.cov-elig b { color: var(--fg); }
+.cov-caption { color: var(--muted); font-size: 12px; font-style: italic; margin: 0 0 14px; }
+.cov-gh { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; margin: 16px 0 4px; }
+.cov-row { display: grid; grid-template-columns: 210px 1fr 132px; align-items: center; gap: 12px; margin: 8px 0; }
+.cov-row.cov-sub .cov-name { padding-left: 20px; position: relative; color: var(--muted); }
+.cov-row.cov-sub .cov-name::before { content: "├"; position: absolute; left: 4px; color: var(--border); }
+.cov-row.cov-sub.last .cov-name::before { content: "└"; }
+.cov-name { font-size: 13px; display: flex; align-items: center; gap: 8px; min-width: 0; }
+.cov-tag { color: var(--muted); font-size: 11px; }
+.cov-swatch { width: 9px; height: 9px; border-radius: 3px; flex: none; }
+.cov-bar { height: 12px; border-radius: 6px; background: var(--track); overflow: hidden; }
+.cov-bar i { display: block; height: 100%; border-radius: 6px; }
+.cov-num { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); white-space: nowrap; font-size: 13px; }
+.cov-num b { color: var(--fg); font-size: 15px; }
+.cov-pct { display: inline-block; min-width: 4ch; }
+.cov-row.cov-sub.last .cov-num b { color: var(--ppf-l4); }
+/* Télémétrie repliable : summary discret, grille plate (pas de cartes),
+   typographie réduite. L'état ouvert/fermé vit dans le DOM, donc persiste
+   entre les runs d'une même session. */
+#telemetry { border-top: 1px solid var(--border); }
+#telemetry > summary { cursor: pointer; list-style: none; padding: 10px 4px;
+                       color: var(--muted); font-size: 13px; user-select: none; }
+#telemetry > summary::-webkit-details-marker { display: none; }
+#telemetry > summary::before { content: "▸ "; }
+#telemetry[open] > summary::before { content: "▾ "; }
+#telemetry > summary:hover { color: var(--fg); }
+.tel-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px 24px; padding: 2px 4px 12px; }
+.tel-cell { padding: 6px 0; font-size: 12px; color: var(--muted); min-width: 0; }
+.tel-cell h4 { margin: 0 0 4px; font-size: 11px; font-weight: 600;
+               letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
+.tel-cell b { color: var(--fg); font-size: 14px; }
+.tel-span { grid-column: 1 / -1; }
+.hbar-legend { font-size: 12px; color: var(--muted); margin-top: 4px; }
+.http-row { display: flex; align-items: center; gap: 8px; font-size: 12px; margin-top: 7px; }
+.http-code { min-width: 6ch; text-align: right; }
+.http-bar-wrap { flex: 1; }
+.http-bar { display: block; height: 12px; border-radius: 3px; }
+.http-count { min-width: 5ch; }
+.mini-ring {
+  flex: none; width: 96px; height: 96px; border-radius: 50%;
+  background: conic-gradient(var(--green) 0%, var(--track) 0%);
+  display: flex; align-items: center; justify-content: center;
+}
+.mini-ring-center {
+  width: 70px; height: 70px; border-radius: 50%; background: var(--bg);
+  display: flex; align-items: center; justify-content: center;
+}
+.mini-ring-center b { font-size: 18px; }
+.ring-abs { display: flex; flex-direction: column; gap: 2px; font-size: 12.5px; }
+.ring-abs b { font-size: 17px; }
+.spark svg { display: block; width: 100%; height: 60px; margin-top: 8px; }
+#rate-spark svg { height: 40px; }
+.ctc-gap { margin: 7px 0 0; font-size: 12px; }
+.ctc-gap b { font-size: 13px; }
+/* Prêts plus tard (activation à venir) : ligne masquée à zéro, pastille à la
+   couleur du segment du mini-anneau. */
+.ctc-later { margin: 7px 0 0; font-size: 12px; color: var(--muted); }
+.ctc-later b { font-size: 13px; color: var(--fg); }
+.ctc-later .dot-later { display: inline-block; width: 8px; height: 8px;
+  border-radius: 2px; background: var(--green-later); margin-right: 5px; }
+/* Verdict CTC inconnu (catalogue SMP illisible) : avertissement orange,
+   ligne présente seulement quand le compteur est > 0. */
+.ctc-nv { margin: 3px 0 0; font-size: 12px; color: var(--amber); }
+.ctc-nv b { font-size: 13px; }
+.err-row { display: flex; align-items: baseline; gap: 10px; font-size: 12px; margin-top: 6px; }
+.err-count { color: var(--red); font-weight: 600; min-width: 6ch; text-align: right; }
+.err-row.muted .err-count { color: var(--muted); }
+.err-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#lat-hist { display: flex; gap: 4px; height: 78px; margin-top: 8px; }
+.lat-bucket {
+  flex: 1; display: flex; flex-direction: column; min-width: 0;
+  font-size: 10px; color: var(--muted); text-align: center;
+}
+.lat-bar-wrap { flex: 1; display: flex; align-items: flex-end; }
+.lat-bar { width: 100%; background: var(--gold); border-radius: 2px 2px 0 0; }
+#pa-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0 18px; margin-top: 8px; }
+.pa-col { display: flex; flex-direction: column; }
+.pa-row { display: flex; align-items: baseline; gap: 8px; font-size: 12px; padding: 2px 0; }
+.pa-rank { color: var(--muted); min-width: 2ch; text-align: right; }
+.pa-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pa-count, .pa-pct { color: var(--muted); white-space: nowrap; }
+.pa-pct { min-width: 6ch; text-align: right; }
+
+footer {
+  display: flex; justify-content: space-between; padding: 10px 18px;
+  border-top: 1px solid var(--border);
+  position: relative; /* ancre le bloc marque centré en absolu */
+}
+/* Marque centrée indépendamment de la largeur des boutons Précédent/Suivant
+   (un centrage flex dériverait quand « Précédent » est masqué à l'étape 1). */
+footer .logo {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  font-size: 12px; white-space: nowrap;
+}
+footer .logo img { height: 16px; }
+footer .logo a { color: var(--muted); text-decoration: none; }
+footer .logo a:hover { color: var(--gold); text-decoration: underline; }
+/* « Suivant » reste à droite même quand « Précédent » est masqué (étape 1) :
+   space-between colle un enfant unique à gauche, margin-left auto le pousse
+   à droite dans tous les cas. */
+#btn-next { margin-left: auto; }
+/* Panneau Réglages : overlay dédié, sous la modale (z-index 40 < 50) pour que
+   la saisie des identifiants proxy (« Tester ») s'empile au-dessus. */
+#settings-backdrop {
+  position: fixed; inset: 0; background: rgba(0, 0, 0, .6); z-index: 40;
+  display: flex; align-items: flex-start; justify-content: center;
+  overflow-y: auto; padding: 4vh 18px;
+}
+#settings {
+  background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+  padding: 2px 22px 16px; width: min(880px, 100%);
+}
+#settings-head { display: flex; justify-content: space-between; align-items: center; }
+#settings fieldset { background: var(--bg); }
+/* Zone Proxy décochée : la case de la légende échappe au disabled natif du
+   fieldset, le contenu (contrôles ET textes) est grisé. */
+#proxy-zone:disabled p { opacity: .45; }
+#proxy-zone legend label { cursor: pointer; }
+/* Erreur d'enregistrement des réglages : affichée dans le panneau (la bannière
+   du haut est recouverte par l'overlay). */
+#settings-error { color: var(--red); font-weight: 600; }
+
+#modal-backdrop {
+  position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 50;
+  display: flex; align-items: center; justify-content: center;
+}
+#modal {
+  background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+  padding: 22px; max-width: 460px;
+}
+#modal input { display: block; margin: 8px 0; width: 100%; }
+
+/* --- Banc d'essai du calibrage (modale) ------------------------------------
+   Une colonne par palier : valeur (adr/s), barre, label (nb de sessions).
+   Hauteurs pilotées par app.js (normalisées sur le meilleur débit vu). */
+#calibrate-bench { display: flex; align-items: flex-end; gap: 8px; height: 84px; margin: 2px 0 8px 2px; }
+.cal-col { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 3px; width: 34px; }
+.cal-bar { width: 100%; min-height: 4px; border-radius: 3px 3px 0 0; background: var(--border); transition: height .3s ease; }
+.cal-bar.measuring { background: var(--gold); height: 6px; animation: cal-pulse 1s ease-in-out infinite; }
+@keyframes cal-pulse { 50% { opacity: .45; } }
+.cal-bar.win { background: var(--green); }
+.cal-bar.reject { background: var(--red); }
+.cal-bar.ratelimited { background: var(--amber); }
+.cal-bar.dim { opacity: .35; }
+.cal-val, .cal-lab { font-size: 10px; color: var(--muted); }
+/* Légende du banc, visible sous le graphe (remplace l'ancien tooltip). */
+.cal-legend { font-size: 11.5px; color: var(--muted); margin: 0 0 4px; }
+.cal-legend .dot { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin: 0 4px 0 10px; }
+.cal-val { height: 12px; }
+.cal-col.win .cal-val { color: var(--green); }
+.cal-col.reject .cal-val { color: var(--red); }
+.cal-col.ratelimited .cal-val { color: var(--amber); }
+
+/* --- Modale de calibration ------------------------------------------------------
+   Boutons de fin : Appliquer = .btn-primary, Arrêter = .btn-danger,
+   Retenter garde sa bordure d'accent — or, le bleu ayant quitté la palette
+   (choix explicite) —, Ignorer = secondaire. */
+.modal-btns { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
+.btn-retry { border-color: var(--gold); color: var(--gold); }
+#calibrate-status { font-size: 12px; color: var(--muted); margin-top: 6px; }
+#calibrate-status.done { color: var(--green); }
+
+/* --- Carte Annuaire Peppol (onglet Fichiers) : référence secondaire, fond
+   transparent et titre atténué pour laisser la primauté au fichier principal. --- */
+#dir-card { margin-top: 16px; border: 1px solid var(--border); background: transparent;
+            border-radius: 12px; padding: 14px 16px; }
+.dir-head { display: flex; flex-direction: column; gap: 3px; margin-bottom: 12px; }
+.dir-head h3 { font-size: 13.5px; margin: 0; display: flex; align-items: center; gap: 8px; color: var(--muted); }
+.chip-ref { font-size: 11px; font-weight: 600; letter-spacing: .3px; text-transform: uppercase;
+            color: var(--gold); border: 1px solid var(--gold); border-radius: 20px; padding: 1px 9px; }
+#dir-dropzone { border: 2px dashed var(--border); border-radius: 10px; padding: 16px 14px;
+                display: flex; align-items: center; flex-wrap: wrap; gap: 10px; color: var(--muted); }
+#dir-dropzone.over { border-color: var(--gold); color: var(--fg); }
+.dir-spacer { flex: 1; min-width: 8px; }
+#dir-status { margin: 12px 0 0; font-size: 13px; }
+#dir-status b { color: var(--fg); }
+#dir-status.empty b { color: var(--amber); }
+#dir-status .dot { color: var(--green); }
+#dir-prog { margin: 12px 0 0; }
+.dir-prog-lbl { font-size: 13px; margin-bottom: 6px; display: flex; justify-content: space-between; color: var(--muted); }
+.dir-bar { height: 8px; border-radius: 6px; background: var(--track); overflow: hidden; }
+.dir-bar > span { display: block; height: 100%; width: 0; background: var(--gold); }
+.dir-bar.indet > span { width: 40%; animation: dir-slide 1.2s ease-in-out infinite; }
+@keyframes dir-slide { 0% { margin-left: -40%; } 100% { margin-left: 100%; } }
+
+/* --- Carte Annuaire PPF (onglet Fichiers) : cumulative, historique des fichiers.
+   Même langage visuel que #dir-card ; bouton Reset (danger) au lieu de Télécharger. --- */
+#ppf-card { margin-top: 16px; border: 1px solid var(--border); background: transparent;
+            border-radius: 12px; padding: 14px 16px; }
+#ppf-dropzone { border: 2px dashed var(--border); border-radius: 10px; padding: 16px 14px;
+                display: flex; align-items: center; flex-wrap: wrap; gap: 10px; color: var(--muted); }
+#ppf-dropzone.over { border-color: var(--gold); color: var(--fg); }
+#ppf-prog { margin: 12px 0 0; }
+#ppf-summary { margin: 14px 0 6px; font-size: 13px; }
+#ppf-summary b { color: var(--fg); }
+#ppf-summary .dot { color: var(--green); }
+table.ppf-files { border-collapse: collapse; width: 100%; margin: 6px 0 0; font-size: 12.5px; }
+.ppf-files th, .ppf-files td { border: 1px solid var(--border); padding: 4px 10px; text-align: left; }
+.ppf-files th { background: var(--card); color: var(--muted); font-weight: 600; }
+.ppf-files th.num, .ppf-files td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* Nom tronquable + « (doublon) » toujours visible : le nom vit dans un flex
+   item qui rétrécit et coupe (min-width:0 + ellipsis), la mention reste à
+   droite en flex:none — sinon un nom long la pousse hors du overflow:hidden. */
+.ppf-files td.name { max-width: 34ch; }
+.ppf-files .name-inner { display: flex; align-items: baseline; gap: 6px; }
+.ppf-files .name-inner .fname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.ppf-dup { flex: none; color: var(--muted); font-style: italic; }
+.ppf-files td.added.pos b { color: var(--green); }
+.ppf-files td.added.zero { color: var(--muted); }
+.ppf-files td.when { color: var(--muted); white-space: nowrap; }
+
+/* ===== Plan de charge (écran de plein niveau, 2 onglets) ==================
+   Maquette validée le 2026-07-25. Marquage des états : ni or (accent
+   d'action) ni orange (avertissement) pour gelé/manuel/couverture/retiré —
+   ces deux rôles sont déjà pris. */
+#plan-screen {
+  position: fixed; inset: 0; z-index: 60; background: var(--bg);
+  display: flex; flex-direction: column;
+}
+#plan-head, #plan-foot {
+  flex: none; display: flex; align-items: center; gap: 16px; padding: 10px 16px;
+}
+#plan-head { border-bottom: 1px solid var(--border); }
+#plan-foot { border-top: 1px solid var(--border); font-size: 12.5px; }
+#plan-foot .spacer { flex: 1; }
+#plan-title { flex: 1; text-align: center; font-weight: 600; }
+#plan-sub { font-weight: 400; font-size: 12.5px; }
+#plan-tabs { flex: none; display: flex; gap: 6px; padding: 8px 16px 0; }
+.plan-tab { border-radius: 14px 14px 0 0; border-bottom-color: transparent; }
+.plan-tab.active {
+  background: var(--card); color: var(--fg); border-color: var(--border);
+  border-bottom-color: var(--card); font-weight: 600;
+}
+#plan-layout {
+  flex: 1; min-height: 0; display: flex;
+  border-top: 1px solid var(--border); margin-top: -1px;
+}
+#plan-aside {
+  width: 360px; flex: none; overflow-y: auto; padding: 14px 16px;
+  border-right: 1px solid var(--border); background: var(--card);
+}
+#plan-aside h3 {
+  font-size: 12px; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--muted); margin: 18px 0 6px; font-weight: 600;
+}
+#plan-aside h3:first-child { margin-top: 0; }
+#plan-aside label { display: block; font-size: 12.5px; color: var(--muted); margin: 8px 0 2px; }
+#plan-aside select, #plan-aside input[type=date] { width: 100%; }
+#plan-aside .row { display: flex; gap: 8px; align-items: center; }
+#plan-aside .row label { margin: 0; }
+#plan-main { flex: 1; min-height: 0; overflow-y: auto; padding: 18px 22px 40px; }
+#plan-main h2 { font-size: 15px; margin: 22px 0 2px; }
+#plan-main h2:first-child { margin-top: 0; }
+#plan-banner { border-radius: 8px; padding: 10px 16px; margin-bottom: 16px; font-weight: 600; }
+#plan-banner.warn { background: #2e2010; color: var(--amber); }
+#plan-banner.error { background: #331518; color: var(--red); }
+#plan-banner.info { background: var(--card); color: var(--fg); font-weight: 400; }
+/* Mapping des colonnes : mis en évidence quand il manque (c'est lui qui
+   débloque l'écran, sans aller-retour vers l'étape Format). */
+#plan-cols.need { border: 1px solid var(--amber); border-radius: 8px; padding: 10px 12px; background: var(--bg); }
+
+/* Entonnoir : effectif ET perte par marche — une marche muette ne sert à rien. */
+.fstep {
+  display: grid; grid-template-columns: 200px 1fr 84px 90px;
+  align-items: center; gap: 10px; padding: 3px 0;
+  font-variant-numeric: tabular-nums; font-size: 13px;
+}
+.fstep .lbl { color: var(--muted); }
+.fstep .bar { background: var(--track); border-radius: 3px; height: 12px; }
+.fstep .bar span { display: block; height: 100%; border-radius: 3px; background: #3d4d72; }
+.fstep .val { text-align: right; font-weight: 600; }
+.fstep .loss { text-align: right; color: var(--muted); font-size: 12px; }
+.fstep.final .lbl { color: var(--fg); font-weight: 600; }
+.fstep.final .bar span { background: var(--gold); }
+.fstep.final .val { color: var(--gold); font-size: 15px; }
+
+table.plan-data { font-variant-numeric: tabular-nums; font-size: 13px; }
+table.plan-data th { font-size: 12px; color: var(--muted); font-weight: 600; }
+table.plan-data td.n, table.plan-data th.n { text-align: right; }
+table.plan-data td.jj { color: var(--muted); font-size: 12px; }
+table.plan-data tr.sel { background: rgba(217, 168, 63, .09); }
+table.plan-data th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+table.plan-data th.sorted { color: var(--gold); }
+table.plan-data td.addr { color: var(--pid); }
+table.plan-data tr.removed { opacity: .55; }
+table.plan-data tr.removed td.cf { text-decoration: line-through; }
+.carry { color: var(--amber); font-weight: 600; }
+.zero { color: var(--muted); }
+
+/* --- Timeline calendaire du plan de charge -------------------------------- */
+.tl-scroll { overflow-x: auto; }
+table.plan-tl { width: 100%; border-collapse: collapse; font-size: 13px;
+  font-variant-numeric: tabular-nums; }
+table.plan-tl th { font-size: 11.5px; color: var(--muted); font-weight: 600;
+  text-align: left; padding: 0 8px 6px; white-space: nowrap; }
+table.plan-tl th.n, table.plan-tl td.n { text-align: right; }
+table.plan-tl td { padding: 3px 8px; border-top: 1px solid rgba(43, 55, 82, .5);
+  white-space: nowrap; }
+table.plan-tl td.jj { color: var(--muted); font-size: 12px; }
+
+tr.tl-mois td { padding: 16px 8px 5px; border-top: 0; font-size: 11px;
+  letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+/* Le premier en-tête de mois n'est pas le premier <tr> de la table : la ligne
+   d'en-têtes de colonnes l'est. D'où une classe posée par le JS plutôt qu'un
+   :first-child, qui viserait la mauvaise ligne. */
+table.plan-tl tr.tl-mois-1er td { padding-top: 2px; }
+
+/* Le marquage week-end/férié vit sur la cellule Jour (`celluleJour`), pas sur
+   la ligne : un run ou une MEP posé ce jour-là reste pleinement lisible. */
+td.tl-jour { color: var(--muted); font-size: 12.5px; }
+td.tl-jour.tl-off { opacity: .62; }
+tr.tl-run { background: rgba(43, 55, 82, .28); }
+tr.tl-run td.tl-jour { color: var(--fg); font-weight: 600; }
+.tl-note { color: var(--muted); font-size: 12px; font-style: italic; }
+tr.tl-ecarte td.tl-why { color: var(--muted); font-size: 12px; }
+
+/* Un jalon coupe le calendrier : bande pleine largeur, pas une couleur de
+   jour. Vert éteint — ni or (action) ni orange (avertissement). */
+tr.tl-mep td { border-top: 1px solid var(--border); padding-top: 7px;
+  padding-bottom: 7px;
+  background: linear-gradient(90deg, rgba(47, 128, 80, .16), rgba(47, 128, 80, 0) 62%); }
+tr.tl-mep .flag { font-weight: 600; }
+tr.tl-mep .flag::before { content: "▶"; color: var(--green-later);
+  margin-right: 7px; font-size: 11px; }
+/* La fenêtre est un cadre, la MEP un événement : plus faible, en pointillés. */
+tr.tl-borne td { border-top: 1px dashed var(--border); padding-top: 6px;
+  padding-bottom: 6px; }
+tr.tl-borne .flag { color: var(--muted); font-size: 11.5px; letter-spacing: .06em;
+  text-transform: uppercase; }
+
+.tl-chk { display: inline-flex; align-items: center; gap: 5px;
+  color: var(--muted); font-size: 12px; cursor: pointer; }
+.tl-chk input { margin: 0; }
+
+/* --- Stock par jour de cycle ---------------------------------------------- */
+.jj-bars { display: flex; align-items: flex-end; gap: 3px; height: 104px;
+  margin: 12px 0 0; }
+.jj-bar { flex: 1; display: flex; flex-direction: column; justify-content: flex-end;
+  align-items: center; gap: 4px; height: 100%; }
+.jj-bar i { display: block; width: 100%; border-radius: 2px 2px 0 0;
+  background: var(--green); }
+.jj-bar.no i { background: var(--red); }
+.jj-bar span { font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.jj-bar.no span { color: var(--red); }
+.jj-legend { font-size: 12px; color: var(--muted); margin-top: 10px; }
+.jj-legend b { color: var(--fg); font-variant-numeric: tabular-nums; }
+
+/* Note d'un réglage dont l'effet change selon le contexte — ici la cible, qui
+   ne fixe plus le volume en rampe manuelle mais reste la base des quotas. */
+#plan-aside .warn-hint { color: var(--amber); border-left: 2px solid var(--amber);
+  padding-left: 8px; }
+
+/* Volumes visés par run — même grammaire que les barres de jours de cycle,
+   mais une barre par run retenu, donc en nombre bien plus faible : largeur
+   plafonnée pour qu'un plan à trois runs ne produise pas trois pavés. */
+.vol-bars { display: flex; align-items: flex-end; gap: 6px; height: 104px;
+  margin: 12px 0 0; }
+.vol-bar { flex: 1; max-width: 72px; display: flex; flex-direction: column;
+  justify-content: flex-end; align-items: center; gap: 4px; height: 100%; }
+.vol-bar i { display: block; width: 100%; border-radius: 2px 2px 0 0;
+  background: var(--gold); }
+.vol-bar.over i { background: var(--amber); }
+.vol-bar span { font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+/* Saisie des volumes (rampe manuelle), dans le panneau étroit : le libellé
+   prend la place restante, le champ garde une largeur fixe. */
+#plan-volumes .vols { display: flex; flex-direction: column; gap: 2px; }
+#plan-volumes .vol { display: grid; grid-template-columns: 1fr 68px;
+  align-items: center; gap: 6px; padding: 2px 0; }
+#plan-volumes .vol .who { font-size: 12.5px; font-variant-numeric: tabular-nums;
+  white-space: nowrap; color: var(--muted); }
+#plan-volumes .vol .who b { color: var(--fg); font-weight: 600; }
+#plan-volumes .vol input { width: 100%; text-align: right;
+  font-variant-numeric: tabular-nums; }
+/* Ambre et non rouge : un volume que le stock n'absorbe pas n'est pas une
+   erreur, le surplus part en report sur le run suivant. */
+#plan-volumes .vol.over input { border-color: var(--amber); }
+#plan-volumes .vol .flag { grid-column: 1 / -1; font-size: 11.5px;
+  color: var(--amber); margin: -1px 0 3px; }
+#plan-volumes .vols-foot { display: flex; justify-content: space-between;
+  align-items: baseline; gap: 8px; margin-top: 9px; padding-top: 8px;
+  border-top: 1px solid var(--border); font-size: 12.5px;
+  font-variant-numeric: tabular-nums; }
+#plan-volumes .vols-foot.last { margin-top: 2px; padding-top: 0; border-top: 0; }
+#plan-volumes .vols-foot .k { color: var(--muted); }
+#plan-volumes .lnk { background: none; border: 0; color: var(--muted);
+  font: 12px/1 inherit; text-decoration: underline; text-underline-offset: 2px;
+  cursor: pointer; padding: 8px 0 0; }
+#plan-volumes .lnk:hover { color: var(--fg); }
+
+/* Les 4 états + « devenu inéligible » (celui-là EST un avertissement). */
+.tag {
+  font-size: 10.5px; font-weight: 600; letter-spacing: .3px; text-transform: uppercase;
+  border-radius: 20px; padding: 1px 8px; border: 1px solid var(--border);
+  color: var(--muted); white-space: nowrap;
+}
+.tag.frozen  { color: var(--green-later); border-color: var(--green-later); }
+.tag.fill    { color: var(--ppf-l3);      border-color: var(--ppf-l3); }
+.tag.pinned  { color: var(--pid);         border-color: var(--pid); }
+.tag.removed { color: var(--red);         border-color: var(--red); }
+.tag.stale   { color: var(--amber);       border-color: var(--amber); }
+
+.pa-line {
+  display: grid; grid-template-columns: 22px 1fr 120px 64px 64px;
+  align-items: center; gap: 8px; font-size: 13px; padding: 3px 0;
+  font-variant-numeric: tabular-nums;
+}
+.pa-line.off { opacity: .45; }
+.pa-line .bar { background: var(--track); border-radius: 3px; height: 10px; }
+.pa-line .bar span { display: block; height: 100%; border-radius: 3px; background: var(--gold); opacity: .75; }
+.pa-line .n { text-align: right; }
+.pa-head { color: var(--muted); font-size: 11.5px; text-transform: uppercase; letter-spacing: .04em; }
+
+.plan-warns {
+  border: 1px solid var(--border); border-left: 3px solid var(--amber);
+  border-radius: 8px; padding: 10px 14px; margin: 14px 0;
+}
+.plan-warns p { margin: 4px 0; font-size: 13px; }
+.plan-warns .ico { color: var(--amber); }
+.plan-result {
+  border: 1px solid var(--border); border-left: 3px solid var(--green);
+  border-radius: 8px; padding: 12px 16px; margin-top: 14px;
+}
+.plan-result h3 { margin: 0 0 6px; font-size: 14px; }
+.plan-result ul { margin: 6px 0 0; padding-left: 18px; font-size: 13px; }
+.plan-result code { color: var(--gold); }
+.plan-kv { display: flex; gap: 6px 22px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); margin-bottom: 10px; }
+.plan-kv b { color: var(--fg); font-size: 14px; margin-right: 4px; }
+.plan-toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+.plan-toolbar select, .plan-toolbar input { font-size: 12.5px; padding: 4px 7px; }
+.plan-toolbar .grow { flex: 1; }
+.plan-selbar {
+  display: flex; gap: 8px; align-items: center; background: var(--card);
+  border: 1px solid var(--border); border-radius: 8px; padding: 7px 12px;
+  margin-bottom: 10px; font-size: 13px;
+}
+.plan-selbar b { color: var(--gold); }
+.plan-selbar .spacer { flex: 1; }
+.motif { color: var(--muted); font-style: italic; font-size: 11.5px; }
+.danger-note { background: #331518; color: var(--red); border-radius: 8px; padding: 9px 12px; font-size: 12.5px; margin: 10px 0; }
+
+/* ==================================================================
+   AJOUTS DU CHANTIER « ajout de comptes par run » — maquette 26/07/2026.
+   Tout ce qui précède est le styles.css réel du client, non modifié.
+   ================================================================== */
+
+/* --- A. Correctif de superposition -------------------------------------
+   #plan-screen est en z-index 60 : la modale (50) passait dessous, il
+   fallait la fermer pour voir l'écran. Elle monte au-dessus de l'écran
+   plein, et reste sous #splash (99). #settings-backdrop (40) reste sous
+   la modale, comme son commentaire l'exige. */
+#modal-backdrop { z-index: 70; }
+
+/* --- B. Modale large pour un tableau ----------------------------------
+   #modal plafonne à 460px : illisible pour six colonnes. Variante dédiée
+   plutôt qu'un élargissement global, qui déformerait les confirmations. */
+#modal.modal-wide {
+  max-width: min(1080px, 94vw); width: min(1080px, 94vw);
+  display: flex; flex-direction: column; max-height: 88vh;
+}
+.add-head { flex: none; }
+.add-run {
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+  background: var(--btn2); border: 1px solid var(--border); border-radius: 8px;
+  padding: 9px 14px; margin: 4px 0 12px;
+}
+.add-run b { color: var(--gold); }
+.add-run .jjs { color: var(--muted); font-size: 12.5px; }
+.add-run .jjs code {
+  color: var(--fg); background: var(--track); border-radius: 4px;
+  padding: 1px 6px; font-size: 12px;
+}
+
+/* Barre de filtres : une ligne, tout à plat — un filtre replié est un
+   filtre oublié, et on veut voir d'un coup d'œil ce qui est actif. */
+.add-filters { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
+.add-filters input[type="search"] { flex: 1 1 220px; min-width: 160px; margin: 0; }
+.add-filters select { margin: 0; }
+.add-filters .reset {
+  background: none; border: 0; color: var(--muted); cursor: pointer;
+  font-size: 12.5px; text-decoration: underline; padding: 0 4px;
+}
+
+.add-scroll { flex: 1 1 auto; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; }
+.add-scroll table.plan-data { margin: 0; }
+/* En-tête collant : sur 300 comptes, on perd sinon le sens des colonnes
+   et donc le tri en cours. */
+.add-scroll table.plan-data th {
+  position: sticky; top: 0; background: var(--card); z-index: 1;
+  border-bottom: 1px solid var(--border);
+}
+table.plan-data td.pa { color: var(--muted); }
+
+/* Statuts : valeurs brutes (ready/later/expired), comme dans les autres
+   sorties du projet — écart assumé à la règle « UI en français », pour que
+   les filtres se transposent d'un artefact à l'autre. */
+.st { font-size: 12px; border-radius: 4px; padding: 1px 7px; white-space: nowrap; }
+.st-ready { color: var(--green); background: rgba(76, 194, 104, .12); }
+.st-later { color: var(--green-later); background: rgba(47, 128, 80, .16); }
+.st-expired { color: var(--red); background: rgba(229, 83, 75, .12); }
+.st-none { color: var(--muted); background: var(--track); }
+.st-yes { color: var(--ppf-l3); background: rgba(168, 146, 255, .12); }
+.st-no { color: var(--muted); background: var(--track); }
+
+/* Une ligne non pleinement éligible reste sélectionnable : la forcer est un
+   choix assumé. Elle est atténuée, pas barrée — barrer dirait « impossible ». */
+table.plan-data tr.warn td.cf::after {
+  content: "⚠"; color: var(--amber); margin-left: 6px; font-size: 11px;
+}
+.add-foot {
+  flex: none; display: flex; align-items: center; gap: 12px;
+  margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border);
+}
+.add-count { color: var(--muted); font-size: 13px; }
+.add-count b { color: var(--fg); }
+.add-count .warn-n { color: var(--amber); }
+.add-foot .spacer { flex: 1; }
+
+/* --- Action d'ajout dans la timeline ----------------------------------- */
+td.tl-add { text-align: right; width: 1%; }
+.tl-add-btn {
+  background: none; border: 1px solid var(--border); border-radius: 6px;
+  color: var(--muted); cursor: pointer; font-size: 11.5px; padding: 1px 8px;
+  white-space: nowrap;
+}
+tr.tl-run:hover .tl-add-btn { color: var(--gold); border-color: var(--gold); }
+
+.mq-note {
+  background: var(--card); border-left: 3px solid var(--gold);
+  padding: 10px 16px; margin: 0 0 14px; font-size: 13px; color: var(--muted);
+}
+.mq-note b { color: var(--fg); }
+</style>
+</head>
+<body>
+
+<div id="plan-screen" style="position:static">
+  <header id="plan-head">
+    <div id="plan-title">Plan de charge<div id="plan-sub" class="muted">clients_juillet.csv · 3 340 comptes · 3 MEP</div></div>
+  </header>
+  <nav id="plan-tabs">
+    <button class="plan-tab active">Paramétrage</button>
+    <button class="plan-tab">Comptes de facturation <span class="muted">3 340</span></button>
+  </nav>
+
+  <div style="padding:16px">
+    <p class="mq-note">
+      <b>Maquette — volet B.</b> Le point d'entrée devient le run : chaque Run de Facturation
+      retenu de la timeline porte une action « + Ajouter ». Le bouton global de l'onglet
+      « Comptes de facturation » disparaît.
+    </p>
+
+    <div class="tl-scroll">
+      <table class="plan-tl">
+        <tr><th>Jour</th><th>Événement</th><th>Jours de cycle</th><th class="n">Visé</th><th class="n">Placé</th><th></th></tr>
+        <tr class="tl-mois tl-mois-1er"><td colspan="6">Septembre 2026</td></tr>
+        <tr class="tl-run">
+          <td class="tl-jour">mar. 8</td>
+          <td><b>R3</b> <span class="tl-note">Run de Facturation</span></td>
+          <td class="jj">1, 5</td><td class="n">610</td><td class="n">610</td>
+          <td class="tl-add"><button class="tl-add-btn">+ Ajouter</button></td>
+        </tr>
+        <tr class="tl-run">
+          <td class="tl-jour">mar. 22</td>
+          <td><b>R4</b> <span class="tl-note">Run de Facturation</span></td>
+          <td class="jj">15, 20</td><td class="n">540</td><td class="n">540</td>
+          <td class="tl-add"><button class="tl-add-btn">+ Ajouter</button></td>
+        </tr>
+        <tr class="tl-ecarte">
+          <td class="tl-jour tl-off">dim. 27</td>
+          <td>R4bis <span class="tl-note">écarté</span></td>
+          <td class="jj">15</td><td class="n">—</td><td class="n">—</td>
+          <td class="tl-why">exclu manuellement</td>
+        </tr>
+        <tr class="tl-mois"><td colspan="6">Octobre 2026</td></tr>
+        <tr class="tl-mep"><td class="tl-jour">jeu. 1</td><td colspan="5" class="flag">MEP 2</td></tr>
+        <tr class="tl-run">
+          <td class="tl-jour">mar. 6</td>
+          <td><b>R5</b> <span class="tl-note">Run de Facturation</span></td>
+          <td class="jj">1, 5</td><td class="n">480</td><td class="n">480</td>
+          <td class="tl-add"><button class="tl-add-btn">+ Ajouter</button></td>
+        </tr>
+      </table>
+    </div>
+    <p class="muted" style="font-size:12.5px;margin-top:10px">
+      Un run <b>écarté</b> ne porte pas l'action : on ne peut rien y placer.
+    </p>
+  </div>
+</div>
+
+<!-- ================= La fenêtre d'ajout, ouverte ================= -->
+<div id="modal-backdrop">
+  <div id="modal" class="modal-wide">
+    <div class="add-head">
+      <h3 style="margin:2px 0 0">Ajouter des comptes au run R3</h3>
+
+      <div class="add-run">
+        <span>Run <b>R3</b> du <b>08/09/2026</b></span>
+        <span class="jjs">jours de cycle couverts <code>1</code> <code>5</code></span>
+        <span class="jjs">· rattaché à la <b>MEP 2</b></span>
+      </div>
+
+      <p class="field-hint" style="margin-top:-4px">
+        Seuls les comptes dont le jour de cycle est couvert par ce run sont listés — un run
+        ne peut pas facturer un autre jour. Les comptes non prêts sont proposés et signalés
+        (⚠) : les ajouter reste un choix assumé.
+      </p>
+
+      <div class="add-filters">
+        <input type="search" placeholder="Rechercher un compte, une raison sociale…" value="">
+        <select><option>Toutes les plateformes</option><option>Cegedim</option><option>SAGE</option><option>Docaposte</option><option>Esker</option></select>
+        <select><option>CTC : tous</option><option>ready</option><option>later</option><option>expired</option><option>(vide)</option></select>
+        <select><option>PPF : tous</option><option>utilisable</option><option>non utilisable</option></select>
+        <button class="reset">réinitialiser</button>
+      </div>
+    </div>
+
+    <div class="add-scroll">
+      <table class="plan-data">
+        <tr>
+          <th style="width:1%"><input type="checkbox"></th>
+          <th class="sortable">Compte ▲</th>
+          <th class="sortable">Raison sociale</th>
+          <th class="sortable n">JJ</th>
+          <th class="sortable">Plateforme</th>
+          <th class="sortable sorted">CTC ▼</th>
+          <th class="sortable">PPF</th>
+        </tr>
+        <tr class="sel">
+          <td><input type="checkbox" checked></td>
+          <td class="cf">CF-004182</td><td>MENUISERIE BERTRAND SARL</td>
+          <td class="n jj">5</td><td class="pa">Cegedim</td>
+          <td><span class="st st-ready">ready</span></td><td><span class="st st-yes">true</span></td>
+        </tr>
+        <tr class="sel">
+          <td><input type="checkbox" checked></td>
+          <td class="cf">CF-004190</td><td>TRANSPORTS DELAUNAY</td>
+          <td class="n jj">1</td><td class="pa">Cegedim</td>
+          <td><span class="st st-ready">ready</span></td><td><span class="st st-yes">true</span></td>
+        </tr>
+        <tr>
+          <td><input type="checkbox"></td>
+          <td class="cf">CF-004203</td><td>CABINET VERRIER &amp; ASSOCIÉS</td>
+          <td class="n jj">5</td><td class="pa">SAGE</td>
+          <td><span class="st st-ready">ready</span></td><td><span class="st st-yes">true</span></td>
+        </tr>
+        <tr class="warn sel">
+          <td><input type="checkbox" checked></td>
+          <td class="cf">CF-004217</td><td>PLOMBERIE MOREAU</td>
+          <td class="n jj">1</td><td class="pa">Docaposte</td>
+          <td><span class="st st-later">later</span></td><td><span class="st st-yes">true</span></td>
+        </tr>
+        <tr class="warn">
+          <td><input type="checkbox"></td>
+          <td class="cf">CF-004228</td><td>ÉLECTRICITÉ GÉNÉRALE DU SUD</td>
+          <td class="n jj">5</td><td class="pa">Esker</td>
+          <td><span class="st st-ready">ready</span></td><td><span class="st st-no">false</span></td>
+        </tr>
+        <tr class="warn">
+          <td><input type="checkbox"></td>
+          <td class="cf">CF-004244</td><td>SCI DU VIEUX PONT</td>
+          <td class="n jj">1</td><td class="pa">SAGE</td>
+          <td><span class="st st-expired">expired</span></td><td><span class="st st-yes">true</span></td>
+        </tr>
+        <tr class="warn">
+          <td><input type="checkbox"></td>
+          <td class="cf">CF-004251</td><td>GARAGE CENTRAL PONTHIEU</td>
+          <td class="n jj">5</td><td class="pa">Cegedim</td>
+          <td><span class="st st-none">(vide)</span></td><td><span class="st st-no">false</span></td>
+        </tr>
+        <tr>
+          <td><input type="checkbox"></td>
+          <td class="cf">CF-004263</td><td>BOULANGERIE LEFEVRE</td>
+          <td class="n jj">1</td><td class="pa">Docaposte</td>
+          <td><span class="st st-ready">ready</span></td><td><span class="st st-yes">true</span></td>
+        </tr>
+      </table>
+    </div>
+
+    <div class="add-foot">
+      <span class="add-count">
+        <b>3</b> compte(s) sélectionné(s) · <span class="warn-n">1 non pleinement éligible</span>
+        <br><span style="font-size:12px">142 compte(s) éligible(s) à ce run · 8 affiché(s) après filtres</span>
+      </span>
+      <span class="spacer"></span>
+      <button class="btn-ghost">Annuler</button>
+      <button class="btn-primary">Ajouter au run R3</button>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>
