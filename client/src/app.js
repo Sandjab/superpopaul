@@ -1563,12 +1563,12 @@ function ligneJalon(j, jl) {
     : `Jalon inconnu (${jl.sorte})`;
   const tr = h("tr", { class: jl.sorte === "mep" ? "tl-mep" : "tl-borne" },
     celluleJour(j),
-    h("td", { colspan: "8" }, h("span", { class: "flag" }, texte)));
+    h("td", { colspan: "9" }, h("span", { class: "flag" }, texte)));
   return tr;
 }
 
 function ligneVide(j) {
-  return h("tr", {}, celluleJour(j), h("td", { colspan: "8" }, ""));
+  return h("tr", {}, celluleJour(j), h("td", { colspan: "9" }, ""));
 }
 
 function ligneRun(j, r) {
@@ -1585,14 +1585,21 @@ function ligneRun(j, r) {
   const boite = h("td", {}, h("label", { class: "tl-chk" }, cb, " exclure"));
 
   if (r.ecart) {
+    // Un run écarté ne porte pas l'action : on ne peut rien y placer. La
+    // cellule reste, vide, pour ne pas décaler la colonne des autres lignes.
     return h("tr", { class: "tl-ecarte" },
       celluleJour(j),
       h("td", {}, r.num),
       h("td", { class: "jj" }, r.jjs.join(" · ")),
       h("td", { colspan: "5", class: "tl-why" }, `écarté — ${TL_ECARTS.get(r.ecart) ?? r.ecart}`),
-      boite);
+      boite,
+      h("td", { class: "tl-add" }));
   }
   const d = r.detail;
+  // Le run est le point d'entrée de l'ajout : l'action vit sur sa ligne. Le
+  // jour porteur l'accompagne — `RunJour` n'a pas de date, elle vient de lui.
+  const ajout = h("td", { class: "tl-add" },
+    h("button", { class: "tl-add-btn", onclick: () => ouvrirAjoutRun(r, j) }, "+ Ajouter"));
   return h("tr", { class: "tl-run" },
     celluleJour(j),
     h("td", {}, r.num),
@@ -1604,7 +1611,8 @@ function ligneRun(j, r) {
     h("td", { class: "n" }, fmtN(d.place)),
     h("td", { class: d.reliquat ? "n carry" : "n zero" },
       d.reliquat ? `+${fmtN(d.reliquat)}` : "0"),
-    boite);
+    boite,
+    ajout);
 }
 
 function renderPlanParam() {
@@ -1644,7 +1652,7 @@ function renderPlanParam() {
     const tbl = h("table", { class: "plan-tl" },
       h("tr", {}, ...[["Jour", ""], ["Run", ""], ["Jours facturés", ""],
                       ["Visé", "n"], ["Report", "n"], ["Stock", "n"],
-                      ["Placé", "n"], ["Reliquat", "n"], ["", ""]]
+                      ["Placé", "n"], ["Reliquat", "n"], ["", ""], ["", ""]]
         .map(([t, c]) => h("th", { class: c }, t))));
 
     let moisCourant = "";
@@ -1654,7 +1662,7 @@ function renderPlanParam() {
       if (mois !== moisCourant) {
         moisCourant = mois;
         tbl.append(h("tr", { class: premierMois ? "tl-mois tl-mois-1er" : "tl-mois" },
-          h("td", { colspan: "9" }, libelleMois(j.date))));
+          h("td", { colspan: "10" }, libelleMois(j.date))));
         premierMois = false;
       }
       // Les bornes encadrent le contenu du jour, elles ne le précèdent pas
@@ -1845,8 +1853,9 @@ function renderPlanRecap() {
       h("button", { class: "btn-danger", onclick: ouvrirRetrait }, "Retirer…"),
       h("button", { class: "btn-ghost", onclick: () => { plan.sel.clear(); renderPlanRecap(); } }, "Tout désélectionner")));
   }
+  // Pas de bouton d'ajout ici : la décision part du run, donc l'action vit sur
+  // la ligne du run dans la timeline (onglet Paramétrage).
   noeuds.push(h("div", { class: "plan-toolbar" },
-    h("button", { class: "btn-primary", onclick: ouvrirAjout }, "+ Ajouter des comptes…"),
     h("span", { class: "grow" }),
     h("span", { class: "muted", style: "font-size:12.5px" },
       `${fmtN(actives)} ligne(s) active(s) · ${fmtN(plan.lignes.length - actives)} retirée(s) · ${fmtN(visibles.length)} affichée(s)`)));
@@ -1965,17 +1974,21 @@ function ouvrirRetrait() {
   modal(...noeuds);
 }
 
-async function ouvrirAjout() {
+/** Ajout de comptes SUR UN RUN donné (`RunJour` de la timeline, avec son jour
+ *  civil porteur). Le run est fixé par l'appel : plus de sélecteur de run, donc
+ *  plus d'intersection à calculer — le backend ne rend que les comptes dont le
+ *  jour de cycle est couvert par ce run. */
+async function ouvrirAjoutRun(run, jour) {
   let candidats;
-  try { candidats = await invoke("plan_candidats"); }
+  try { candidats = await invoke("plan_candidats_run", { runNum: run.num }); }
   catch (e) { return planBanner("error", String(e)); }
-  if (!candidats.length) return planBanner("info", "Tous les comptes du fichier sont déjà au plan.");
+  if (!candidats.length)
+    return planBanner("info", `Aucun compte à ajouter au run ${run.num} : tous ceux dont le jour de cycle est couvert sont déjà au plan.`);
 
   const choisis = new Set();
   const recherche = h("input", { type: "search", style: "width:100%",
     placeholder: "Filtrer par compte ou raison sociale…" });
   const liste = h("div", { style: "max-height:260px;overflow:auto;margin:8px 0" });
-  const selRun = h("select", {});
   const dessiner = () => {
     const q = recherche.value.trim().toLowerCase();
     liste.replaceChildren(...candidats
@@ -1984,7 +1997,6 @@ async function ouvrirAjout() {
       .map((c) => {
         const cb = h("input", { type: "checkbox", onchange: () => {
           if (choisis.has(c.cf)) choisis.delete(c.cf); else choisis.add(c.cf);
-          majRuns();
         } });
         cb.checked = choisis.has(c.cf);
         return h("label", { style: "display:block;font-size:12.5px" }, cb, ` ${c.cf} — ${c.raison_sociale} `,
@@ -1992,35 +2004,25 @@ async function ouvrirAjout() {
           c.eligible ? "" : h("span", { class: "tag stale" }, "non éligible"));
       }));
   };
-  const majRuns = async () => {
-    selRun.replaceChildren();
-    if (!choisis.size) return;
-    let communs = null;
-    for (const cf of choisis) {
-      const c = candidats.find((x) => x.cf === cf);
-      const rs = await invoke("plan_runs_compatibles", { jj: c.jj });
-      communs = communs === null ? new Set(rs) : new Set(rs.filter((r) => communs.has(r)));
-    }
-    selRun.replaceChildren(...[...(communs ?? [])].sort().map((r) => h("option", { value: r }, r)));
-  };
   recherche.addEventListener("input", dessiner);
   dessiner();
 
   modal(
-    h("h3", {}, "Ajouter des comptes au plan"),
+    h("h3", {}, `Ajouter des comptes au run ${run.num}`),
     h("p", { class: "field-hint" },
-      "Les comptes non éligibles sont proposés et signalés : les ajouter est un choix assumé. Seuls les runs couvrant les jours de cycle retenus sont ensuite proposés."),
+      `Run ${run.num} du ${fmtDateFr(jour.date)}, jours de cycle couverts : ${run.jjs.join(", ")}. `
+      + "Seuls les comptes dont le jour de cycle est couvert par ce run sont listés. "
+      + "Les comptes non éligibles sont proposés et signalés : les ajouter est un choix assumé."),
     recherche, liste,
-    h("p", {}, h("label", {}, "Run de Facturation "), selRun),
     h("div", { class: "actions" },
       h("button", { class: "btn-ghost", onclick: closeModal }, "Annuler"),
       h("button", { class: "btn-primary", onclick: async () => {
-        if (!choisis.size || !selRun.value) return;
+        if (!choisis.size) return;
         try {
-          await invoke("plan_ajouter", { cfs: [...choisis], runNum: selRun.value });
+          await invoke("plan_ajouter", { cfs: [...choisis], runNum: run.num });
           closeModal(); await rechargerRecap();
         } catch (e) { planBanner("error", String(e)); closeModal(); }
-      } }, "Ajouter")));
+      } }, `Ajouter au run ${run.num}`)));
 }
 
 // --- Cycle de vie de l'écran -------------------------------------------------
