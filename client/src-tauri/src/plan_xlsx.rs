@@ -36,7 +36,8 @@ pub struct LigneExport {
     pub cf: String,
     /// Le jour de cycle tel qu'il figurait dans le fichier, même illisible.
     pub jj: String,
-    /// Adressage sous forme nue quand le schéma s'y prête.
+    /// Adressage sous forme nue — **sans son ICD**, comme en base et dans le
+    /// CSV de sortie — quand le schéma s'y prête.
     pub adressage: String,
     pub raison_sociale: String,
     pub ctc_status: String,
@@ -62,11 +63,10 @@ pub fn lignes(entrees: &[LigneEntree], plan: &[LignePlan]) -> Vec<LigneExport> {
                 run,
                 cf: e.cf.clone(),
                 jj: e.jj_brut.clone(),
-                // `parse_0225_value` rend la valeur SANS son ICD (forme stockée
-                // en base) ; le classeur est lu par un humain, on lui rend le
-                // « 0225: » qui dit de quel schéma vient l'identifiant.
+                // Forme stockée, sans ICD : celle qu'écrivent déjà le CSV de
+                // sortie et la base, donc le classeur se recoupe avec les
+                // autres exports et l'annuaire PPF sans retraitement.
                 adressage: crate::directory::parse_0225_value(&e.participant)
-                    .map(|v| format!("0225:{v}"))
                     .unwrap_or_else(|| e.participant.clone()),
                 raison_sociale: e.raison_sociale.clone(),
                 ctc_status: e.ctc_status.clone(),
@@ -224,7 +224,7 @@ mod tests {
     #[test]
     fn l_adressage_sort_sous_forme_nue() {
         let out = lignes(&[entree("CF1", "5", "ready")], &[]);
-        assert_eq!(out[0].adressage, "0225:12345678900012", "forme canonique non réduite");
+        assert_eq!(out[0].adressage, "12345678900012", "forme canonique non réduite");
     }
 
     #[test]
@@ -262,6 +262,33 @@ mod tests {
         let octets = std::fs::read(&chemin).expect("relecture");
         assert!(octets.len() > 1000, "classeur suspect : {} octets", octets.len());
         assert_eq!(&octets[..2], b"PK", "un .xlsx est un conteneur ZIP");
+        std::fs::remove_file(&chemin).ok();
+    }
+
+    #[test]
+    fn le_classeur_porte_ses_filtres_et_son_volet_fige() {
+        // Ce sont eux qui justifient un vrai .xlsx plutôt qu'un CSV : sans test,
+        // retirer ces deux lignes ne casserait rien jusqu'à ce que quelqu'un ouvre
+        // le fichier. Les entrées du ZIP sont deflatées : il faut décompresser.
+        let dir = std::env::temp_dir().join("popaul_test_xlsx_filtres");
+        std::fs::create_dir_all(&dir).unwrap();
+        let chemin = dir.join("f.xlsx");
+        let l = lignes(&[entree("CF1", "5", "ready")], &[ligne_plan("CF1", "R1")]);
+        ecrire(&chemin, &l).expect("écriture");
+
+        let fichier = std::fs::File::open(&chemin).expect("ouverture");
+        let mut archive = zip::ZipArchive::new(fichier).expect("archive illisible");
+        let mut xml = String::new();
+        {
+            use std::io::Read;
+            archive
+                .by_name("xl/worksheets/sheet1.xml")
+                .expect("feuille absente")
+                .read_to_string(&mut xml)
+                .expect("lecture");
+        }
+        assert!(xml.contains("<autoFilter"), "filtres automatiques absents : {xml}");
+        assert!(xml.contains("state=\"frozen\""), "volet figé absent : {xml}");
         std::fs::remove_file(&chemin).ok();
     }
 

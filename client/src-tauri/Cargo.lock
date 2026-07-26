@@ -3951,6 +3951,7 @@ dependencies = [
  "tokio",
  "wiremock",
  "x509-parser",
+ "zip",
 ]
 
 [[package]]

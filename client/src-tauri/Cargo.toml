@@ -47,6 +47,11 @@ rust_xlsxwriter = "0.93"
 libc = "0.2"                  # setrlimit : relever le soft 256 fd des apps GUI macOS
 
 [dev-dependencies]
+# Relecture du classeur produit : vérifier que le volet figé et les filtres
+# automatiques y sont réellement. Déjà tiré en transitif par rust_xlsxwriter,
+# donc aucun crate supplémentaire n'est téléchargé — d'où les features
+# restreintes à `deflate`, la seule que rust_xlsxwriter active.
+zip = { version = "7", default-features = false, features = ["deflate"] }
 wiremock = "0.6"
 # start_paused pour les tests du breaker (le backoff 30 s s'écoule en virtuel)
 tokio = { version = "1", features = ["test-util"] }
