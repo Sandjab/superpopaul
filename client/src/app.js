@@ -2026,8 +2026,12 @@ async function ouvrirAjoutRun(run, jour) {
   let candidats;
   try { candidats = await invoke("plan_candidats_run", { runNum: run.num }); }
   catch (e) { return planBanner("error", String(e)); }
+  // Deux causes mènent à une liste vide, et on ne sait pas laquelle : ou bien
+  // aucun compte du fichier ne porte un jour de cycle couvert par ce run — le
+  // cas le plus fréquent — ou bien tous ceux qui en portent un sont déjà au
+  // plan. Le message dit les deux plutôt que d'en affirmer une.
   if (!candidats.length)
-    return planBanner("info", `Aucun compte à ajouter au run ${run.num} : tous ceux dont le jour de cycle est couvert sont déjà au plan.`);
+    return planBanner("info", `Aucun compte à proposer pour le run ${run.num} : aucun compte du fichier ne porte un jour de cycle couvert par ce run, ou tous ceux qui en portent un sont déjà au plan.`);
 
   const choisis = new Set();
   let tri = { colonne: "cf", croissant: true };
@@ -2098,8 +2102,11 @@ async function ouvrirAjoutRun(run, jour) {
       h("b", {}, String(choisis.size)), " compte(s) sélectionné(s)",
       ...(forces ? [" · ", h("span", { class: "warn-n" }, `${forces} non pleinement éligible(s)`)] : []),
       h("br", {}),
+      // « éligible(s) » serait faux : la liste contient DÉLIBÉRÉMENT les
+      // comptes non pleinement éligibles, que le compteur juste au-dessus
+      // dénombre. « proposé(s) » est ce que la liste est vraiment.
       h("span", { style: "font-size:12px" },
-        `${fmtN(candidats.length)} compte(s) éligible(s) à ce run · ${fmtN(vus.length)} affiché(s) après filtres`));
+        `${fmtN(candidats.length)} compte(s) proposé(s) à ce run · ${fmtN(vus.length)} affiché(s) après filtres`));
   }
 
   for (const [el, cle] of [[recherche, "texte"], [selPa, "pa"], [selCtc, "ctc"], [selPpf, "ppf"]]) {
@@ -2114,9 +2121,14 @@ async function ouvrirAjoutRun(run, jour) {
       h("h3", { style: "margin:2px 0 0" }, `Ajouter des comptes au run ${run.num}`),
       h("div", { class: "add-run" },
         h("span", {}, "Run ", h("b", {}, run.num), " du ", h("b", {}, fmtDateFr(jour.date))),
+        // Pas de mention de MEP : elle viendrait de l'aperçu VIVANT, alors que
+        // `plan_candidats_run` et `plan_ajouter` résolvent le run sur le
+        // calendrier PERSISTÉ. Changer `mep_count` sans regénérer suffit à les
+        // faire diverger, et le bandeau annoncerait une MEP que l'ajout ne
+        // suivrait pas. Ce qui reste — numéro de run, date, jours de cycle —
+        // est revérifié côté backend au moment de l'ajout.
         h("span", { class: "jjs" }, "jours de cycle couverts ",
-          ...run.jjs.map((j) => h("code", {}, String(j)))),
-        h("span", { class: "jjs" }, "· rattaché à la ", h("b", {}, `MEP ${run.detail.mep_id}`))),
+          ...run.jjs.map((j) => h("code", {}, String(j))))),
       h("p", { class: "field-hint", style: "margin-top:-4px" },
         "Seuls les comptes dont le jour de cycle est couvert par ce run sont listés — un run "
         + "ne peut pas facturer un autre jour. Les comptes non prêts sont proposés et signalés "

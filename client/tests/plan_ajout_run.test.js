@@ -40,7 +40,12 @@ test("la modale s'empile au-dessus de l'écran plein du plan", () => {
  *  trois filtres disparaît : CF-D n'est écarté que par la plateforme, CF-E que
  *  par le statut CTC, CF-C que par PPF. Avec les trois premiers seuls, retirer
  *  le filtre plateforme ne changeait rien — CF-B, le seul autre, étant déjà
- *  écarté par son statut. */
+ *  écarté par son statut.
+ *
+ *  CF-F porte les deux singularités que rien d'autre n'expose : un statut CTC
+ *  VIDE, seul cas où le filtre doit traduire l'option `(vide)` en chaîne vide,
+ *  et un jour de cycle à deux chiffres, seul cas où un tri en texte se voit
+ *  (`"12" < "5"`). Sans lui, ces deux branches passent sans être éprouvées. */
 const CANDIDATS = [
   { cf: "CF-A", raison_sociale: "ALPHA SARL", jj: 5, pa: "Cegedim",
     eligible: true, participant: "0225:1", ctc_status: "ready", ppf_usable: true },
@@ -52,6 +57,8 @@ const CANDIDATS = [
     eligible: true, participant: "0225:4", ctc_status: "ready", ppf_usable: true },
   { cf: "CF-E", raison_sociale: "EPSILON SNC", jj: 5, pa: "Cegedim",
     eligible: false, participant: "0225:5", ctc_status: "later", ppf_usable: true },
+  { cf: "CF-F", raison_sociale: "ZETA EURL", jj: 12, pa: "Cegedim",
+    eligible: false, participant: "0225:6", ctc_status: "", ppf_usable: true },
 ];
 
 /** Les comptes d'une liste rendue par le realm du shim, ramenés côté Node :
@@ -62,8 +69,17 @@ const comptes = (liste) => Array.from(liste, (c) => c.cf);
 test("le tri par colonne réordonne la liste", () => {
   const ctx = chargerApp();
   const lignes = comptes(ctx.app.trierCandidats(CANDIDATS, "cf", false));
-  assert.deepEqual(lignes, ["CF-E", "CF-D", "CF-C", "CF-B", "CF-A"],
+  assert.deepEqual(lignes, ["CF-F", "CF-E", "CF-D", "CF-C", "CF-B", "CF-A"],
     "tri descendant sur le compte");
+});
+
+test("le tri sur le jour de cycle est numérique, pas alphabétique", () => {
+  // `jj` est la seule colonne chiffrée de la fenêtre. Comparée en texte, elle
+  // classerait `12` avant `5` et l'utilisateur lirait un ordre faux sur la
+  // colonne qui décide de ce qu'un run peut facturer.
+  const ctx = chargerApp();
+  const jjs = Array.from(ctx.app.trierCandidats(CANDIDATS, "jj", true), (c) => c.jj);
+  assert.deepEqual(jjs, [1, 1, 5, 5, 5, 12]);
 });
 
 test("les filtres se combinent", () => {
@@ -74,6 +90,15 @@ test("les filtres se combinent", () => {
   assert.deepEqual(comptes(out), ["CF-A", "CF-C"]);
   const strict = ctx.app.filtrerCandidats(CANDIDATS, { texte: "", pa: "Cegedim", ctc: "ready", ppf: "oui" });
   assert.deepEqual(comptes(strict), ["CF-A"], "le filtre PPF doit encore réduire");
+});
+
+test("le filtre CTC « (vide) » retient les statuts vides", () => {
+  // L'option porte le libellé `(vide)`, le candidat porte la chaîne vide : le
+  // filtre doit traduire. Sans cela l'option existe mais ne rend jamais rien.
+  const ctx = chargerApp();
+  assert.deepEqual(
+    comptes(ctx.app.filtrerCandidats(CANDIDATS, { texte: "", pa: "", ctc: "(vide)", ppf: "" })),
+    ["CF-F"]);
 });
 
 test("la recherche porte sur le compte et la raison sociale", () => {
