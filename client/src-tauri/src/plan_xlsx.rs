@@ -1,5 +1,6 @@
-//! Classeur XLSX du périmètre du plan — **tous** les comptes du fichier
-//! d'entrée, au plan ou non.
+//! Classeur XLSX du périmètre du plan — l'**union** des comptes du fichier
+//! d'entrée, au plan ou non, et de ceux du plan que le fichier ne contient
+//! plus.
 //!
 //! La composition du tableau (`lignes`) est PURE et testable ; l'écriture
 //! (`ecrire`) n'a aucune logique métier. Même séparation que `charge` et
@@ -28,7 +29,9 @@ impl Appartenance {
     }
 }
 
-/// Une ligne du classeur : un compte du fichier d'entrée.
+/// Une ligne du classeur : un compte du fichier d'entrée, ou un compte du plan
+/// que le fichier ne contient plus — ses colonnes issues du fichier sont alors
+/// vides.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LigneExport {
     /// Vide si le compte n'a jamais été placé ; **conservé** s'il a été retiré.
@@ -45,18 +48,28 @@ pub struct LigneExport {
     pub appartenance: Appartenance,
 }
 
+/// Un compte du plan y est soit encore placé, soit retiré : ce sont deux
+/// décisions opposées, jamais confondues.
+fn appartenance_de(l: &LignePlan) -> Appartenance {
+    if l.retiree() {
+        Appartenance::Retire
+    } else {
+        Appartenance::Oui
+    }
+}
+
 /// Compose le tableau : une ligne par compte du fichier d'entrée, dans l'ordre
-/// où il les fournit. PURE — ni disque, ni format.
+/// où il les fournit, puis les comptes du plan que le fichier ne contient plus.
+/// PURE — ni disque, ni format.
 pub fn lignes(entrees: &[LigneEntree], plan: &[LignePlan]) -> Vec<LigneExport> {
     let par_cf: std::collections::HashMap<&str, &LignePlan> =
         plan.iter().map(|l| (l.cf.as_str(), l)).collect();
 
-    entrees
+    let mut out: Vec<LigneExport> = entrees
         .iter()
         .map(|e| {
             let (run, appartenance) = match par_cf.get(e.cf.as_str()) {
-                Some(l) if l.retiree() => (l.run_num.clone(), Appartenance::Retire),
-                Some(l) => (l.run_num.clone(), Appartenance::Oui),
+                Some(l) => (l.run_num.clone(), appartenance_de(l)),
                 None => (String::new(), Appartenance::Non),
             };
             LigneExport {
@@ -74,7 +87,27 @@ pub fn lignes(entrees: &[LigneEntree], plan: &[LignePlan]) -> Vec<LigneExport> {
                 appartenance,
             }
         })
-        .collect()
+        .collect();
+
+    // Le fichier a pu changer depuis le tirage du plan : un compte peut y avoir
+    // disparu tout en restant planifié (gelé, épinglé, retiré). L'écran le
+    // montre « absent du fichier » — le classeur ne doit pas l'effacer, sans
+    // quoi deux livrables de la même exécution ne comptent pas les mêmes
+    // comptes. Ses colonnes issues du fichier restent vides : il n'y a plus
+    // rien à en dire. L'ordre du plan est déterministe (`charger_plan` trie par
+    // `mep_id, run_date, cf`), celui du reliquat l'est donc aussi.
+    let vus: std::collections::HashSet<&str> = entrees.iter().map(|e| e.cf.as_str()).collect();
+    out.extend(plan.iter().filter(|l| !vus.contains(l.cf.as_str())).map(|l| LigneExport {
+        run: l.run_num.clone(),
+        cf: l.cf.clone(),
+        jj: String::new(),
+        adressage: String::new(),
+        raison_sociale: String::new(),
+        ctc_status: String::new(),
+        ppf_usable: false,
+        appartenance: appartenance_de(l),
+    }));
+    out
 }
 
 /// En-têtes du classeur, dans l'ordre des colonnes.
@@ -261,6 +294,46 @@ mod tests {
         let cf2 = out.iter().find(|l| l.cf == "CF2").expect("CF2 absent");
         assert_eq!(cf2.appartenance, Appartenance::Non);
         assert_eq!(cf2.run, "", "jamais placé : pas de run");
+    }
+
+    #[test]
+    fn un_compte_du_plan_disparu_du_fichier_figure_quand_meme() {
+        // Le fichier a changé entre deux tirages : le compte reste au plan mais
+        // n'a plus de ligne d'entrée. L'écran le montre « absent du fichier » ;
+        // le classeur, qui documente le périmètre, ne doit pas l'effacer.
+        let out = lignes(
+            &[entree("CF1", "5", "ready")],
+            &[ligne_plan("CF1", "R1"), ligne_plan("CF9", "R2")],
+        );
+        assert_eq!(out.len(), 2, "le compte disparu doit figurer : {out:?}");
+        let cf9 = out.iter().find(|l| l.cf == "CF9").expect("CF9 absent du tableau");
+        assert_eq!(cf9.run, "R2", "son run est connu, il vient du plan");
+        assert_eq!(cf9.appartenance, Appartenance::Oui);
+        assert_eq!(cf9.raison_sociale, "", "rien à dire de ce que le fichier ne contient plus");
+        assert_eq!(cf9.jj, "");
+        assert_eq!(cf9.adressage, "");
+        assert_eq!(cf9.ctc_status, "");
+        assert!(!cf9.ppf_usable);
+    }
+
+    #[test]
+    fn les_comptes_disparus_viennent_apres_ceux_du_fichier() {
+        // Ordre stable : le fichier d'abord, dans son ordre, puis le reliquat.
+        let out = lignes(
+            &[entree("CF1", "5", "ready")],
+            &[ligne_plan("CF9", "R2"), ligne_plan("CF1", "R1")],
+        );
+        assert_eq!(out.iter().map(|l| l.cf.as_str()).collect::<Vec<_>>(), ["CF1", "CF9"]);
+    }
+
+    #[test]
+    fn un_compte_disparu_et_retire_reste_retire() {
+        // Les deux états se cumulent : disparu du fichier ne vaut pas retiré.
+        let mut retiree = ligne_plan("CF9", "R2");
+        retiree.retire = Some(crate::plan::Retrait { le: 1, motif: "clôturé".into() });
+        let out = lignes(&[], &[retiree]);
+        assert_eq!(out[0].appartenance, Appartenance::Retire);
+        assert_eq!(out[0].run, "R2");
     }
 
     #[test]

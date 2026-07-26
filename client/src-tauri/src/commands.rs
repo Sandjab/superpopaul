@@ -1184,7 +1184,8 @@ pub struct Candidat {
     pub pa: String,
     /// Agrégat qui décide du marquage ⚠ : CTC prêt ET PPF utilisable.
     pub eligible: bool,
-    /// Adressage sous forme nue (`0225:…`) quand le schéma s'y prête.
+    /// Adressage sous forme nue — **sans son ICD**, comme en base et dans le
+    /// CSV de sortie — quand le schéma s'y prête ; sinon la forme canonique.
     pub participant: String,
     /// `"ready"` | `"later"` | `"expired"` | `""` — jamais aplati.
     pub ctc_status: String,
@@ -1374,7 +1375,7 @@ pub async fn plan_ajouter(
         let candidats: Vec<crate::plan::CfCandidat> = par_cf
             .values()
             .filter_map(|e| {
-                e.jj_brut.trim().parse::<u8>().ok().filter(|j| (1..=31).contains(j)).map(|jj| {
+                crate::plan::parse_jj(&e.jj_brut).map(|jj| {
                     crate::plan::CfCandidat {
                         cf: e.cf.clone(),
                         participant: e.participant.clone(),
