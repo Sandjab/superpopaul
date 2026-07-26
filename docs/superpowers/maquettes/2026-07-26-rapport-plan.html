@@ -1,0 +1,525 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Plan de charge — clients_juillet.csv</title>
+<style>
+  :root {
+    --bg: #0e1524; --card: #172136; --border: #2b3752;
+    --fg: #eae9e2; --muted: #939cb4;
+    --green: #4cc268; --gold: #d9a83f; --amber: #e0873a; --red: #e5534b;
+    --track: #223050;
+    --green-later: #2f8050; /* prêt plus tard : vert éteint, pris sur le vert */
+    --ppf-l1: #6f6aa8; --ppf-l2: #8a80d4; --ppf-l3: #a892ff; --ppf-l4: #c3b6ff;
+    --sec-1: #3f7d54; --sec-2: #46a862; --sec-3: #5bd07d; --sec-4: #8be0a3;
+    --pa-1: #d9a83f; --pa-2: #4cc268; --pa-3: #a892ff; --pa-4: #e0873a; --pa-5: #5aa9e6;
+    --pa-6: #cf7ab0; --pa-autres: #6b7794; --pa-sans: #3a4460;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+    font: 15px/1.55 -apple-system, "Segoe UI", system-ui, sans-serif; }
+  .page { max-width: 820px; margin: 0 auto; padding: 40px 28px 24px; }
+  header { border-bottom: 2px solid var(--gold); padding-bottom: 18px; margin-bottom: 28px; }
+  .wordmark { color: var(--gold); font-size: 12px; font-weight: 700; letter-spacing: .18em; }
+  h1 { margin: 6px 0 4px; font-size: 26px; font-weight: 600; }
+  .meta { color: var(--muted); font-size: 14px; }
+  .meta b { color: var(--fg); font-weight: 600; }
+  .kpis { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 28px; }
+  .kpi { flex: 1 1 150px; background: var(--card); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px 16px; }
+  .kpi .v { font-size: 27px; font-weight: 700; line-height: 1.15; }
+  .kpi .l { color: var(--muted); font-size: 12.5px; margin-top: 3px; }
+  .kpi .d { color: var(--muted); font-size: 12.5px; }
+  .kpi.gold .v { color: var(--gold); }
+  .kpi.green .v { color: var(--green); }
+  .kpi.amber .v { color: var(--amber); }
+  .kpi.red .v { color: var(--red); }
+  .kpi .proj { color: var(--muted); font-size: 12.5px; margin-top: 6px;
+    padding-top: 6px; border-top: 1px solid var(--border); }
+  .kpi .proj b { color: var(--fg); font-weight: 600; }
+  h2 { font-size: 16px; font-weight: 600; margin: 30px 0 14px; }
+  h2::after { content: ""; display: block; width: 44px; border-bottom: 2px solid var(--gold); margin-top: 5px; }
+  .ring-row { display: flex; gap: 30px; align-items: center; flex-wrap: wrap;
+    background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 20px; }
+  .ring-center { font-size: 30px; font-weight: 700; fill: var(--green); }
+  .ring-sub { font-size: 11px; fill: #939cb4; }
+  .legend { flex: 1; min-width: 300px; font-size: 14px;
+    display: grid; grid-template-columns: auto 1fr max-content max-content;
+    gap: 4px 14px; align-items: center; }
+  .legend .h { color: var(--muted); font-size: 11px; text-transform: uppercase;
+    letter-spacing: .06em; text-align: right; }
+  .dot { width: 10px; height: 10px; border-radius: 5px; }
+  .legend .n { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); white-space: nowrap; }
+  .legend .n b { color: var(--fg); }
+  .pa-legend { flex: 1; min-width: 300px; font-size: 14px;
+    display: grid; grid-template-columns: auto 1fr max-content;
+    gap: 4px 14px; align-items: center; }
+  .pa-legend .n { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); white-space: nowrap; }
+  .pa-legend .n b { color: var(--fg); }
+  .proj-card { background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px 20px; font-variant-numeric: tabular-nums; }
+  .proj-now { font-size: 15px; font-weight: 600; }
+  .proj-now b { color: var(--green); font-size: 17px; }
+  .proj-row { display: flex; gap: 10px; align-items: baseline; font-size: 14px; padding: 3px 0 0 14px; }
+  .proj-row b { color: var(--fg); }
+  .proj-row .plus { color: var(--green-later); font-weight: 700; min-width: 7.5ch; }
+  .proj-row .det { color: var(--muted); font-size: 12.5px; }
+  .proj-foot { color: var(--muted); font-size: 11.5px; margin: 10px 0 0; }
+  .pa { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px; }
+  .pa-row { display: grid; grid-template-columns: 170px 1fr 90px; gap: 12px; align-items: center; padding: 5px 0; font-size: 14px; }
+  .pa-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .bar { height: 10px; border-radius: 5px; background: var(--track); overflow: hidden; }
+  .bar i { display: block; height: 100%; background: var(--gold); border-radius: 5px; }
+  .pa-n { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+  .pa-n b { color: var(--fg); }
+  footer { margin-top: 36px; padding-top: 14px; border-top: 1px solid var(--border);
+    color: var(--muted); font-size: 12px; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 6px; }
+  /* Fond clair à l'écran quand le lecteur a un thème clair (OS/navigateur) —
+     même palette que l'impression, toujours sans JS. */
+  @media (prefers-color-scheme: light) {
+    :root { --bg: #ffffff; --card: #f6f5f1; --border: #d8d5cc; --fg: #1c2333; --muted: #5c6478; --track: #e4e1d8; --ppf-l1: #8b86c4; --ppf-l2: #7a6fd0; --ppf-l3: #6a58c8; --ppf-l4: #5741b0; --sec-1: #6fb589; --sec-2: #4fa06d; --sec-3: #2f8b50; --sec-4: #1a7340; }
+    .ring-sub { fill: #5c6478; }
+  }
+  @media print {
+    :root { --bg: #ffffff; --card: #f6f5f1; --border: #d8d5cc; --fg: #1c2333; --muted: #5c6478; --track: #e4e1d8; --ppf-l1: #8b86c4; --ppf-l2: #7a6fd0; --ppf-l3: #6a58c8; --ppf-l4: #5741b0; --sec-1: #6fb589; --sec-2: #4fa06d; --sec-3: #2f8b50; --sec-4: #1a7340; }
+    .page { padding: 0; }
+    .ring-sub { fill: #5c6478; }
+  }
+  .cov-elig { color: var(--muted); font-size: 13px; margin: 0 0 16px; }
+  .cov-elig b { color: var(--fg); }
+  .cov-row { display: grid; grid-template-columns: 200px 1fr 128px; gap: 12px;
+    align-items: center; padding: 5px 0; font-size: 14px; }
+  .cov-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .cov-name .tag { color: var(--muted); font-size: 11.5px; }
+  .cov-sw { width: 9px; height: 9px; border-radius: 3px; flex: none; }
+  .cov-sub .cov-name { position: relative; padding-left: 20px; color: var(--muted); }
+  .cov-sub .cov-name::before { content: "├"; position: absolute; left: 4px; color: var(--border); }
+  .cov-sub.last .cov-name::before { content: "└"; }
+  .cov-n { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); white-space: nowrap; }
+  .cov-n b { color: var(--fg); }
+  .cov-sub.last .cov-n b { color: var(--ppf-l4); }
+  .cov-gh { color: var(--muted); font-size: 12px; text-transform: uppercase;
+    letter-spacing: .06em; margin: 16px 0 4px; }
+  .unit { color: var(--muted); font-weight: 400; font-size: 12.5px; }
+  .h2sub { color: var(--muted); font-size: 12.5px; margin: 8px 0 14px; }
+  .sec-subh { font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--muted); margin: 18px 0 8px; }
+  .sec-row { display: grid; grid-template-columns: 260px 1fr 110px; gap: 14px; align-items: center;
+    padding: 6px 0; font-size: 14px; }
+  .sec-row .tag { color: var(--muted); font-size: 11.5px; }
+  .kpi.sec .v { color: var(--sec-3); }
+  .kpi.sec.strong .v { color: var(--sec-4); }
+  .kpi .abs { color: var(--muted); font-size: 12.5px; margin-top: 1px; }
+  .kpi .abs b { color: var(--fg); }
+  .compo { color: var(--muted); font-size: 12.5px; margin: 12px 0 0; padding-top: 10px;
+    border-top: 1px solid var(--border); }
+  .compo b { color: var(--fg); }
+
+  /* ==================================================================
+     AJOUTS DU CHANTIER « rapport de plan » — maquette du 26/07/2026.
+     Tout ce qui suit est neuf ; rien au-dessus n'est modifié.
+     ================================================================== */
+
+  /* Bande d'indicateurs secondaire : même carte, ton plus bas. Le contrôle
+     du plan ne doit pas concurrencer la trajectoire du regard. */
+  .kpis.sub { margin-bottom: 8px; }
+  .kpis.sub .kpi { padding: 10px 14px; }
+  .kpis.sub .kpi .v { font-size: 20px; color: var(--muted); }
+  .kpis.sub .kpi.on .v { color: var(--fg); }
+  .kpis.sub .kpi .l { font-size: 11.5px; }
+
+  /* Avertissements : encadré ambre, remonté haut. */
+  .warn { background: var(--card); border: 1px solid var(--border);
+    border-left: 3px solid var(--amber); border-radius: 8px; padding: 14px 18px; }
+  .warn h2 { margin: 0 0 8px; font-size: 13px; text-transform: uppercase;
+    letter-spacing: .08em; color: var(--amber); }
+  .warn h2::after { display: none; }
+  .warn ul { margin: 0; padding-left: 18px; }
+  .warn li { font-size: 13.5px; margin: 4px 0; }
+  .warn li::marker { color: var(--amber); }
+
+  /* Graphes : conteneur commun aux deux SVG. */
+  .chart { background: var(--card); border: 1px solid var(--border);
+    border-radius: 10px; padding: 16px 18px 10px; }
+  .chart svg { display: block; width: 100%; height: auto; }
+  .chart .axis { stroke: var(--border); stroke-width: 1; }
+  .chart .grid { stroke: var(--border); stroke-width: 1; stroke-dasharray: 2 4; }
+  .chart .tick { fill: var(--muted); font-size: 11px; font-family: inherit; }
+  .chart .tick.mid { text-anchor: middle; }
+  .chart .tick.end { text-anchor: end; }
+  .chart .area { fill: var(--gold); fill-opacity: .16; }
+  .chart .line { fill: none; stroke: var(--gold); stroke-width: 2;
+    stroke-linejoin: round; }
+  .chart .mep { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; }
+  .chart .mep-lbl { fill: var(--muted); font-size: 10.5px; text-anchor: middle;
+    font-family: inherit; letter-spacing: .04em; }
+  .chart .b-first { fill: var(--gold); }
+  .chart .b-rec { fill: var(--green-later); }
+  .chart .b-peak { stroke: var(--fg); stroke-width: 1; stroke-dasharray: 3 3; }
+  .chart-legend { display: flex; gap: 18px; flex-wrap: wrap; font-size: 12.5px;
+    color: var(--muted); margin: 2px 0 0 2px; }
+  .chart-legend span { display: flex; align-items: center; gap: 6px; }
+  .chart-legend i { width: 10px; height: 10px; border-radius: 3px; display: block; }
+
+  /* Table : la seule du rapport, pour des données franchement tabulaires. */
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px;
+    font-variant-numeric: tabular-nums; }
+  thead th { text-align: left; color: var(--muted); font-size: 11px;
+    font-weight: 700; text-transform: uppercase; letter-spacing: .07em;
+    padding: 0 10px 7px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  tbody td { padding: 7px 10px; border-bottom: 1px solid var(--border); }
+  tbody tr:last-child td { border-bottom: none; }
+  td.num, th.num { text-align: right; }
+  td.num b { color: var(--fg); font-weight: 600; }
+  .mep-cell { color: var(--muted); }
+  /* Première ligne d'une MEP : on la détache pour que le groupe se lise. */
+  tbody tr.mep-start td { border-top: 1px solid var(--border); }
+  tbody tr.mep-start .mep-cell { color: var(--gold); font-weight: 600; }
+  .tbl { background: var(--card); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px 6px 6px; }
+  .jj { color: var(--muted); font-size: 12.5px; }
+  .frozen { color: var(--muted); font-size: 11px; border: 1px solid var(--border);
+    border-radius: 4px; padding: 1px 5px; margin-left: 6px; white-space: nowrap; }
+
+  /* Répartition : deux barres par plateforme, plan au-dessus du pool. */
+  .dist { background: var(--card); border: 1px solid var(--border);
+    border-radius: 10px; padding: 16px 20px; }
+  .dist-row { display: grid; grid-template-columns: 150px 1fr 132px 62px;
+    gap: 14px; align-items: center; padding: 7px 0; font-size: 14px; }
+  .dist-row + .dist-row { border-top: 1px solid var(--border); }
+  .dist-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .dist-bars { display: grid; gap: 3px; }
+  .bar.pool i { background: var(--pa-autres); }
+  .dist-n { text-align: right; font-variant-numeric: tabular-nums;
+    color: var(--muted); font-size: 12.5px; line-height: 1.45; }
+  .dist-n b { color: var(--fg); font-weight: 600; font-size: 13.5px; }
+  .dist-gap { text-align: right; font-variant-numeric: tabular-nums;
+    font-size: 12.5px; color: var(--muted); }
+  .dist-gap.over { color: var(--gold); }
+  .dist-gap.under { color: var(--amber); }
+  .dist-row.absent .dist-name { color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="page">
+
+<header>
+  <div class="wordmark">SUPER POPAUL</div>
+  <h1>Plan de charge — montée en charge de la facturation</h1>
+  <p class="meta">Fichier <b>clients_juillet.csv</b> · établi le <b>15 septembre 2026</b> ·
+     <b>3 340</b> comptes de facturation sur <b>3</b> mises en production</p>
+</header>
+
+<!-- ① TRAJECTOIRE ------------------------------------------------------ -->
+<section class="kpis">
+  <div class="kpi gold">
+    <div class="v">3 340</div>
+    <div class="l">comptes planifiés</div>
+    <div class="abs">sur <b>8 200</b> éligibles · 40,7 %</div>
+  </div>
+  <div class="kpi">
+    <div class="v">24/11/2026</div>
+    <div class="l">fin de montée en charge</div>
+    <div class="abs">soit <b>4 mois</b> depuis la MEP 1</div>
+  </div>
+  <div class="kpi amber">
+    <div class="v">1 800</div>
+    <div class="l">pic de charge (un run)</div>
+    <div class="abs">run <b>R7</b> le <b>10/11/2026</b></div>
+  </div>
+  <div class="kpi">
+    <div class="v">6 <span class="unit">/ 9</span></div>
+    <div class="l">plateformes couvertes</div>
+    <div class="abs"><b>3</b> sans aucun compte planifié</div>
+  </div>
+</section>
+
+<!-- ② AVERTISSEMENTS --------------------------------------------------- -->
+<section class="warn">
+  <h2>Avertissements</h2>
+  <ul>
+    <li>plateforme <b>Freedz</b> : aucune couverture possible — les jours de cycle de ses
+        comptes (7, 12, 28) ne figurent dans aucun run retenu</li>
+    <li><b>180</b> comptes n'ont pas pu être placés : le stock des jours de cycle couverts
+        est épuisé avant d'atteindre la cible du run R8</li>
+  </ul>
+</section>
+
+<!-- ③ PARC FACTURANT (CUMULÉ) ------------------------------------------ -->
+<h2>Parc facturant</h2>
+<p class="h2sub">Nombre de comptes ayant émis leur première facture, cumulé au fil des runs.
+   Les jalons marquent les mises en production.</p>
+<div class="chart">
+  <svg viewBox="0 0 760 240" role="img" aria-label="Courbe cumulée du parc facturant">
+    <!-- grille + graduations Y -->
+    <line class="grid" x1="52" y1="200" x2="748" y2="200"></line>
+    <line class="grid" x1="52" y1="147.4" x2="748" y2="147.4"></line>
+    <line class="grid" x1="52" y1="94.9" x2="748" y2="94.9"></line>
+    <line class="grid" x1="52" y1="42.3" x2="748" y2="42.3"></line>
+    <text class="tick end" x="44" y="204">0</text>
+    <text class="tick end" x="44" y="151.4">1 000</text>
+    <text class="tick end" x="44" y="98.9">2 000</text>
+    <text class="tick end" x="44" y="46.3">3 000</text>
+
+    <!-- jalons MEP -->
+    <line class="mep" x1="52" y1="16" x2="52" y2="200"></line>
+    <line class="mep" x1="402.9" y1="16" x2="402.9" y2="200"></line>
+    <line class="mep" x1="581.2" y1="16" x2="581.2" y2="200"></line>
+    <text class="mep-lbl" x="62" y="27">MEP 1</text>
+    <text class="mep-lbl" x="402.9" y="27">MEP 2</text>
+    <text class="mep-lbl" x="581.2" y="27">MEP 3</text>
+
+    <!-- aire + ligne en escalier : le parc saute au run, il ne glisse pas -->
+    <path class="area" d="M 52,200 H 109.5 V 177.9 H 190.0 V 157.9 H 270.6 V 125.9
+      H 351.1 V 97.5 H 431.6 V 72.2 H 512.2 V 50.2 H 633.0 V 34.9 H 713.5 V 24.4 H 748 V 200 Z"></path>
+    <path class="line" d="M 52,200 H 109.5 V 177.9 H 190.0 V 157.9 H 270.6 V 125.9
+      H 351.1 V 97.5 H 431.6 V 72.2 H 512.2 V 50.2 H 633.0 V 34.9 H 713.5 V 24.4 H 748"></path>
+
+    <!-- axe X -->
+    <line class="axis" x1="52" y1="200" x2="748" y2="200"></line>
+    <text class="tick mid" x="138.3" y="220">août</text>
+    <text class="tick mid" x="310.8" y="220">septembre</text>
+    <text class="tick mid" x="489.2" y="220">octobre</text>
+    <text class="tick mid" x="661.7" y="220">novembre</text>
+    <text class="tick mid" x="400" y="236">2026</text>
+  </svg>
+</div>
+
+<!-- ④ CHARGE PAR RUN --------------------------------------------------- -->
+<h2>Charge par run</h2>
+<p class="h2sub">Factures émises à chaque run : premières factures des comptes qui démarrent,
+   et récurrences des comptes déjà en production. Un compte facture une fois par mois civil,
+   au premier run du mois couvrant son jour de cycle.</p>
+<div class="chart">
+  <svg viewBox="0 0 760 240" role="img" aria-label="Charge par run, premières factures et récurrences">
+    <line class="grid" x1="52" y1="194" x2="748" y2="194"></line>
+    <line class="grid" x1="52" y1="149.5" x2="748" y2="149.5"></line>
+    <line class="grid" x1="52" y1="105" x2="748" y2="105"></line>
+    <line class="grid" x1="52" y1="60.5" x2="748" y2="60.5"></line>
+    <line class="grid" x1="52" y1="16" x2="748" y2="16"></line>
+    <text class="tick end" x="44" y="198">0</text>
+    <text class="tick end" x="44" y="153.5">500</text>
+    <text class="tick end" x="44" y="109">1 000</text>
+    <text class="tick end" x="44" y="64.5">1 500</text>
+    <text class="tick end" x="44" y="20">2 000</text>
+
+    <!-- R1 -->
+    <rect class="b-first" x="72.5" y="156.6" width="46" height="37.4"></rect>
+    <!-- R2 -->
+    <rect class="b-first" x="159.5" y="160.2" width="46" height="33.8"></rect>
+    <!-- R3 -->
+    <rect class="b-first" x="246.5" y="139.7" width="46" height="54.3"></rect>
+    <rect class="b-rec" x="246.5" y="102.3" width="46" height="37.4"></rect>
+    <!-- R4 -->
+    <rect class="b-first" x="333.5" y="145.9" width="46" height="48.1"></rect>
+    <rect class="b-rec" x="333.5" y="112.1" width="46" height="33.8"></rect>
+    <!-- R5 -->
+    <rect class="b-first" x="420.5" y="151.3" width="46" height="42.7"></rect>
+    <rect class="b-rec" x="420.5" y="59.6" width="46" height="91.7"></rect>
+    <!-- R6 -->
+    <rect class="b-first" x="507.5" y="156.6" width="46" height="37.4"></rect>
+    <rect class="b-rec" x="507.5" y="74.7" width="46" height="81.9"></rect>
+    <!-- R7 : pic -->
+    <rect class="b-first" x="594.5" y="168.2" width="46" height="25.8"></rect>
+    <rect class="b-rec" x="594.5" y="33.8" width="46" height="134.4"></rect>
+    <!-- R8 -->
+    <rect class="b-first" x="681.5" y="176.2" width="46" height="17.8"></rect>
+    <rect class="b-rec" x="681.5" y="56.9" width="46" height="119.3"></rect>
+
+    <!-- repère du pic -->
+    <line class="b-peak" x1="52" y1="33.8" x2="748" y2="33.8"></line>
+    <text class="tick end" x="748" y="29">pic 1 800</text>
+
+    <line class="axis" x1="52" y1="194" x2="748" y2="194"></line>
+    <text class="tick mid" x="95.5" y="212">R1</text>
+    <text class="tick mid" x="95.5" y="226">11/08</text>
+    <text class="tick mid" x="182.5" y="212">R2</text>
+    <text class="tick mid" x="182.5" y="226">25/08</text>
+    <text class="tick mid" x="269.5" y="212">R3</text>
+    <text class="tick mid" x="269.5" y="226">08/09</text>
+    <text class="tick mid" x="356.5" y="212">R4</text>
+    <text class="tick mid" x="356.5" y="226">22/09</text>
+    <text class="tick mid" x="443.5" y="212">R5</text>
+    <text class="tick mid" x="443.5" y="226">06/10</text>
+    <text class="tick mid" x="530.5" y="212">R6</text>
+    <text class="tick mid" x="530.5" y="226">20/10</text>
+    <text class="tick mid" x="617.5" y="212">R7</text>
+    <text class="tick mid" x="617.5" y="226">10/11</text>
+    <text class="tick mid" x="704.5" y="212">R8</text>
+    <text class="tick mid" x="704.5" y="226">24/11</text>
+  </svg>
+  <div class="chart-legend">
+    <span><i style="background:var(--gold)"></i>premières factures</span>
+    <span><i style="background:var(--green-later)"></i>récurrences</span>
+  </div>
+</div>
+
+<!-- ⑤ MEP ET RUNS ------------------------------------------------------ -->
+<h2>Mises en production et Runs de Facturation</h2>
+<p class="h2sub">Le fichier de chaque MEP est <b>cumulatif</b> : il contient aussi les comptes
+   des MEP précédentes.</p>
+<div class="tbl">
+<table>
+  <thead>
+    <tr>
+      <th>MEP</th><th>Date</th><th>Run</th><th>Date du run</th><th>Jours de cycle</th>
+      <th class="num">Comptes</th><th class="num">Cumul</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr class="mep-start">
+      <td class="mep-cell">1</td><td>01/08/2026</td><td>R1</td><td>11/08/2026</td>
+      <td class="jj">1, 5</td><td class="num"><b>420</b></td><td class="num">420</td>
+    </tr>
+    <tr>
+      <td class="mep-cell">1<span class="frozen">gelée</span></td><td>01/08/2026</td><td>R2</td><td>25/08/2026</td>
+      <td class="jj">15, 20</td><td class="num"><b>380</b></td><td class="num">800</td>
+    </tr>
+    <tr class="mep-start">
+      <td class="mep-cell">2</td><td>01/10/2026</td><td>R3</td><td>08/09/2026</td>
+      <td class="jj">1, 5</td><td class="num"><b>610</b></td><td class="num">1 410</td>
+    </tr>
+    <tr>
+      <td class="mep-cell">2</td><td>01/10/2026</td><td>R4</td><td>22/09/2026</td>
+      <td class="jj">15, 20</td><td class="num"><b>540</b></td><td class="num">1 950</td>
+    </tr>
+    <tr>
+      <td class="mep-cell">2</td><td>01/10/2026</td><td>R5</td><td>06/10/2026</td>
+      <td class="jj">1, 5</td><td class="num"><b>480</b></td><td class="num">2 430</td>
+    </tr>
+    <tr class="mep-start">
+      <td class="mep-cell">3</td><td>01/11/2026</td><td>R6</td><td>20/10/2026</td>
+      <td class="jj">15, 20</td><td class="num"><b>420</b></td><td class="num">2 850</td>
+    </tr>
+    <tr>
+      <td class="mep-cell">3</td><td>01/11/2026</td><td>R7</td><td>10/11/2026</td>
+      <td class="jj">1, 5</td><td class="num"><b>290</b></td><td class="num">3 140</td>
+    </tr>
+    <tr>
+      <td class="mep-cell">3</td><td>01/11/2026</td><td>R8</td><td>24/11/2026</td>
+      <td class="jj">15, 20</td><td class="num"><b>200</b></td><td class="num">3 340</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<!-- ⑥ RÉPARTITION PAR PLATEFORME --------------------------------------- -->
+<h2>Répartition par plateforme</h2>
+<p class="h2sub">Part de chaque plateforme dans le plan, comparée à sa part du pool éligible.
+   L'écart en points signale une plateforme sur- ou sous-servie.</p>
+<div class="dist">
+  <div class="chart-legend" style="margin-bottom:10px">
+    <span><i style="background:var(--gold)"></i>part du plan</span>
+    <span><i style="background:var(--pa-autres)"></i>part du pool éligible</span>
+  </div>
+
+  <div class="dist-row">
+    <div class="dist-name">Cegedim</div>
+    <div class="dist-bars">
+      <div class="bar"><i style="width:42.2%"></i></div>
+      <div class="bar pool"><i style="width:37.8%"></i></div>
+    </div>
+    <div class="dist-n"><b>1 410</b> · 42,2 %<br>3 100 · 37,8 %</div>
+    <div class="dist-gap over">+4,4 pt</div>
+  </div>
+
+  <div class="dist-row">
+    <div class="dist-name">SAGE</div>
+    <div class="dist-bars">
+      <div class="bar"><i style="width:26.6%"></i></div>
+      <div class="bar pool"><i style="width:24.6%"></i></div>
+    </div>
+    <div class="dist-n"><b>890</b> · 26,6 %<br>2 020 · 24,6 %</div>
+    <div class="dist-gap over">+2,0 pt</div>
+  </div>
+
+  <div class="dist-row">
+    <div class="dist-name">Docaposte</div>
+    <div class="dist-bars">
+      <div class="bar"><i style="width:15.6%"></i></div>
+      <div class="bar pool"><i style="width:16.3%"></i></div>
+    </div>
+    <div class="dist-n"><b>520</b> · 15,6 %<br>1 340 · 16,3 %</div>
+    <div class="dist-gap under">−0,8 pt</div>
+  </div>
+
+  <div class="dist-row">
+    <div class="dist-name">Esker</div>
+    <div class="dist-bars">
+      <div class="bar"><i style="width:9.3%"></i></div>
+      <div class="bar pool"><i style="width:10.9%"></i></div>
+    </div>
+    <div class="dist-n"><b>310</b> · 9,3 %<br>890 · 10,9 %</div>
+    <div class="dist-gap under">−1,6 pt</div>
+  </div>
+
+  <div class="dist-row">
+    <div class="dist-name">Generix</div>
+    <div class="dist-bars">
+      <div class="bar"><i style="width:4.5%"></i></div>
+      <div class="bar pool"><i style="width:5.9%"></i></div>
+    </div>
+    <div class="dist-n"><b>150</b> · 4,5 %<br>480 · 5,9 %</div>
+    <div class="dist-gap under">−1,4 pt</div>
+  </div>
+
+  <div class="dist-row">
+    <div class="dist-name">Tiime</div>
+    <div class="dist-bars">
+      <div class="bar"><i style="width:1.8%"></i></div>
+      <div class="bar pool"><i style="width:2.6%"></i></div>
+    </div>
+    <div class="dist-n"><b>60</b> · 1,8 %<br>210 · 2,6 %</div>
+    <div class="dist-gap under">−0,8 pt</div>
+  </div>
+
+  <div class="dist-row absent">
+    <div class="dist-name">Freedz</div>
+    <div class="dist-bars">
+      <div class="bar"><i style="width:0%"></i></div>
+      <div class="bar pool"><i style="width:1.2%"></i></div>
+    </div>
+    <div class="dist-n"><b>0</b> · —<br>95 · 1,2 %</div>
+    <div class="dist-gap under">−1,2 pt</div>
+  </div>
+
+  <div class="dist-row absent">
+    <div class="dist-name">Yooz</div>
+    <div class="dist-bars">
+      <div class="bar"><i style="width:0%"></i></div>
+      <div class="bar pool"><i style="width:0.5%"></i></div>
+    </div>
+    <div class="dist-n"><b>0</b> · —<br>45 · 0,5 %</div>
+    <div class="dist-gap under">−0,5 pt</div>
+  </div>
+
+  <div class="dist-row absent">
+    <div class="dist-name">b-process</div>
+    <div class="dist-bars">
+      <div class="bar"><i style="width:0%"></i></div>
+      <div class="bar pool"><i style="width:0.2%"></i></div>
+    </div>
+    <div class="dist-n"><b>0</b> · —<br>20 · 0,2 %</div>
+    <div class="dist-gap under">−0,2 pt</div>
+  </div>
+</div>
+
+<!-- ⑦ CONTRÔLE DU PLAN ------------------------------------------------- -->
+<h2>Contrôle du plan</h2>
+<p class="h2sub">Ce qui a été figé ou repris à la main. Les comptes retirés sont exclus de
+   tous les chiffres ci-dessus.</p>
+<section class="kpis sub">
+  <div class="kpi on"><div class="v">800</div><div class="l">gelés (MEP passée)</div></div>
+  <div class="kpi on"><div class="v">47</div><div class="l">retouches manuelles</div></div>
+  <div class="kpi on"><div class="v">118</div><div class="l">placés pour couverture</div></div>
+  <div class="kpi"><div class="v">23</div><div class="l">retirés</div></div>
+</section>
+
+<footer class="meta">
+  <span>Super Popaul 1.1.0 — plan de charge</span>
+  <span>clients_juillet.csv</span>
+</footer>
+
+</div>
+</body>
+</html>
