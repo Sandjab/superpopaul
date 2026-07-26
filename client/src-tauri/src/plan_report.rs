@@ -477,12 +477,13 @@ mod tests {
         let pool = BTreeMap::from([("Cegedim".to_string(), 10usize), ("Freedz".to_string(), 4)]);
         let jj = BTreeMap::from([(5u8, 14usize)]);
         let html = render(&data(&lignes, &pool, &jj, &runs_test()));
+        let c = corps(&html);
         // Sur la phrase d'alerte, pas sur le seul nom : la table « Répartition
         // par plateforme » liste déjà les plateformes du pool absentes du plan,
         // donc « Freedz » seul serait présent même sans avertissement.
         assert!(
-            html.contains("plateforme « Freedz »"),
-            "la plateforme non servie doit être nommée : {html}"
+            c.contains("plateforme « Freedz »"),
+            "la plateforme non servie doit être nommée : {c}"
         );
     }
 
@@ -493,14 +494,15 @@ mod tests {
         // Le jour 12 pèse 30 comptes mais aucun run retenu ne le couvre.
         let jj = BTreeMap::from([(5u8, 14usize), (12u8, 30usize)]);
         let html = render(&data(&lignes, &pool, &jj, &runs_test()));
+        let c = corps(&html);
         // Sur la phrase d'alerte, pas sur les nombres nus : le CSS inliné
         // contient « 12 » et « 30 » (tailles, marges), qui passeraient toujours.
         assert!(
-            html.contains("jour de cycle 12"),
-            "le jour de cycle orphelin doit être nommé : {html}"
+            c.contains("jour de cycle 12"),
+            "le jour de cycle orphelin doit être nommé : {c}"
         );
         assert!(
-            html.contains("30 comptes hors d&#39;atteinte"),
+            c.contains("30 comptes hors d&#39;atteinte"),
             "son effectif aussi : c'est ce qui rend l'alerte actionnable"
         );
     }
@@ -510,10 +512,26 @@ mod tests {
         let lignes = vec![ligne("CF1", "Cegedim", "2026-08-01", Origine::Auto)];
         let pool = BTreeMap::from([("Cegedim".to_string(), 10usize)]);
         let jj = BTreeMap::from([(5u8, 14usize)]);
+
+        // Témoin : le même plan avec un jour de cycle orphelin DOIT produire la
+        // section. Sans lui, l'assertion négative réussirait aussi bien sur un
+        // rapport devenu incapable de produire quoi que ce soit.
+        let jj_orphelin = BTreeMap::from([(5u8, 14usize), (12u8, 30usize)]);
+        let temoin = render(&data(&lignes, &pool, &jj_orphelin, &runs_test()));
+        assert!(
+            corps(&temoin).contains("class=\"warn\""),
+            "témoin : la section doit exister quand il y a un motif"
+        );
+
+        // Sur le conteneur, pas sur le titre : `class="warn"` n'a qu'un seul
+        // producteur et survit à toute reformulation du <h2>.
         let html = render(&data(&lignes, &pool, &jj, &runs_test()));
-        // Sur le titre balisé, pas sur le mot : le CSS inliné contient déjà un
-        // commentaire « Avertissements » qui rendrait l'assertion ininterprétable.
-        assert!(!html.contains("<h2>Avertissements</h2>"), "pas de section vide : {html}");
+        let c = corps(&html);
+        assert!(
+            !c.contains("class=\"warn\""),
+            "pas de section vide quand le plan couvre tout : {html}"
+        );
+        assert!(!c.contains("<h2>Avertissements</h2>"), "ni son titre");
     }
 
     #[test]
@@ -525,12 +543,13 @@ mod tests {
         ]);
         let jj = BTreeMap::from([(5u8, 14usize)]);
         let html = render(&data(&lignes, &pool, &jj, &runs_test()));
-        assert!(!html.contains("<script>alert"), "injection non échappée");
+        let c = corps(&html);
+        assert!(!c.contains("<script>alert"), "injection non échappée");
         // Dans la phrase d'alerte : la table de répartition échappe déjà ce nom
         // de son côté, l'assertion doit viser l'avertissement lui-même.
         assert!(
-            html.contains("plateforme « &lt;script&gt;alert(1)&lt;/script&gt; »"),
-            "{html}"
+            c.contains("plateforme « &lt;script&gt;alert(1)&lt;/script&gt; »"),
+            "{c}"
         );
     }
 
@@ -543,7 +562,13 @@ mod tests {
         let html = render(&data(&lignes, &pool, &BTreeMap::new(), &runs_test()));
         let c = corps(&html);
         assert!(c.contains("comptes planifiés"));
-        assert!(c.contains("retirés"));
+        // Sur le compteur lui-même, valeur comprise : le sous-titre de
+        // « Contrôle du plan » contient déjà le mot « retirés », si bien qu'un
+        // `contains("retirés")` reste vrai même sans compteur.
+        assert!(
+            c.contains("<div class=\"v\">1</div><div class=\"l\">retirés</div>"),
+            "un compte retiré, compté une fois dans la bande de contrôle : {c}"
+        );
         // Un seul compte actif malgré deux lignes.
         assert!(c.contains(">1</div><div class=\"l\">comptes planifiés"), "{c}");
     }
@@ -554,8 +579,9 @@ mod tests {
         let lignes = vec![ligne("CF1", "<script>alert(1)</script>", "2026-08-01", Origine::Auto)];
         let pool = BTreeMap::new();
         let html = render(&data(&lignes, &pool, &BTreeMap::new(), &runs_test()));
-        assert!(!html.contains("<script>alert"), "injection non échappée");
-        assert!(html.contains("&lt;script&gt;"));
+        let c = corps(&html);
+        assert!(!c.contains("<script>alert"), "injection non échappée");
+        assert!(c.contains("&lt;script&gt;"));
     }
 
     #[test]
@@ -566,8 +592,60 @@ mod tests {
         let lignes = vec![ligne("CF1", "Cegedim", "2026-08-01", Origine::Auto), l2];
         let pool = BTreeMap::from([("Cegedim".to_string(), 5usize)]);
         let html = render(&data(&lignes, &pool, &BTreeMap::new(), &runs_test()));
-        assert!(html.contains("cumulatif"), "le lecteur doit savoir que les fichiers cumulent");
-        assert!(html.contains("<td>R2</td>"));
+        let c = corps(&html);
+        // La prose du sous-titre : c'est son seul producteur.
+        assert!(c.contains("cumulatif"), "le lecteur doit savoir que les fichiers cumulent");
+        assert!(c.contains("<th class=\"num\">Cumul</th>"), "la colonne doit exister : {c}");
+        assert!(c.contains("<td>R2</td>"), "le run de la MEP 2 doit être listé : {c}");
+        // Et la donnée : la MEP 2 apporte 1 compte propre et porte le cumul à 2.
+        // Les cellules « Comptes » portent un <b>, pas celles du cumul — ce
+        // fragment ne peut donc venir que de la colonne Cumul.
+        assert!(
+            c.contains("<td class=\"num\">2</td>"),
+            "la MEP 2 doit porter le cumul à 2, pas répéter son volume propre : {c}"
+        );
+    }
+
+    #[test]
+    fn le_nombre_de_mep_alimente_len_tete_et_les_jalons_du_graphe() {
+        // Deux MEP distinctes : ne retenir que la première laisserait l'en-tête
+        // annoncer « 1 » et le graphe du parc facturant sans jalon MEP 2.
+        let mut l2 = ligne("CF2", "Cegedim", "2026-10-01", Origine::Auto);
+        l2.mep_id = 2;
+        l2.run_num = "R2".into();
+        let lignes = vec![ligne("CF1", "Cegedim", "2026-08-01", Origine::Auto), l2];
+        let pool = BTreeMap::from([("Cegedim".to_string(), 5usize)]);
+        let runs = vec![
+            crate::calendrier::RunFacturation {
+                num: "R1".into(),
+                date: jour("2026-08-11"),
+                jjs: vec![5],
+                exclu: false,
+            },
+            crate::calendrier::RunFacturation {
+                num: "R2".into(),
+                date: jour("2026-10-13"),
+                jjs: vec![5],
+                exclu: false,
+            },
+        ];
+        let html = render(&data(&lignes, &pool, &BTreeMap::new(), &runs));
+        let c = corps(&html);
+        // Le compteur avec sa légende : « 2 » nu se lirait partout ailleurs.
+        assert!(
+            c.contains("sur <b>2</b> mise(s) en production"),
+            "l'en-tête doit annoncer les deux MEP : {c}"
+        );
+        // Les jalons du graphe du parc facturant, produits par
+        // `charts::aire_cumulee` sous la classe `mep-lbl` : le compte exclut
+        // qu'un jalon soit dupliqué, les libellés qu'ils soient confondus.
+        assert_eq!(
+            c.matches("class=\"mep-lbl\"").count(),
+            2,
+            "un jalon par MEP sur la courbe du parc facturant : {c}"
+        );
+        assert!(c.contains(">MEP 1</text>"), "jalon de la MEP 1 : {c}");
+        assert!(c.contains(">MEP 2</text>"), "jalon de la MEP 2 : {c}");
     }
 
     #[test]
