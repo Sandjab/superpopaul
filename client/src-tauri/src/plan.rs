@@ -589,10 +589,11 @@ pub fn allouer(
     let mut report = 0usize;
     for run in runs {
         let Some((mep_id, mep_date)) = crate::calendrier::mep_de(run.date, meps) else {
-            // Un run utilisable a toujours une MEP antérieure ; si ce n'est
-            // pas le cas, le dire plutôt que de produire une ligne bancale.
+            // Un run utilisable a toujours une MEP à sa date ou avant ; si ce
+            // n'est pas le cas, le dire plutôt que de produire une ligne
+            // bancale.
             avertissements.push(format!(
-                "Run de Facturation {} ({}) : aucune MEP antérieure — run ignoré",
+                "Run de Facturation {} ({}) : aucune MEP à cette date ou avant — run ignoré",
                 run.num, run.date
             ));
             continue;
@@ -774,7 +775,7 @@ fn verifier_placement(
     }
     crate::calendrier::mep_de(run.date, meps).ok_or_else(|| {
         format!(
-            "le Run de Facturation {} ({}) n'a aucune MEP antérieure",
+            "le Run de Facturation {} ({}) n'a aucune MEP à cette date ou avant",
             run.num, run.date
         )
     })

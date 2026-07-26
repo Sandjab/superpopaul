@@ -147,11 +147,11 @@ pub fn timeline(
 `DetailRun` : la redondance avec `DetailRun.run_num` / `.jjs` sur les runs
 retenus est assumée, le rendu lit toujours les champs de `RunJour`.
 
-`Ecart::MepNonPassee` couvre deux cas que le filtre `r.date > premiere_mep`
-traite ensemble : un run antérieur à la première MEP, et un run tombant **le
-jour même** de cette MEP. Le libellé retenu — « la première MEP n'est pas
-encore passée » — est juste dans les deux cas, là où « avant la première MEP »
-serait faux pour le second.
+`Ecart::MepNonPassee` porte les runs **strictement antérieurs** à la première
+MEP. Le libellé retenu — « la première MEP n'est pas encore passée » — reste
+juste après l'amendement du 2026-07-26 (voir la spec du plan de charge) : le
+filtre est devenu large (`r.date >= premiere_mep`), un run tombant le jour même
+de la MEP est retenu et ne porte donc plus aucun motif d'écart.
 
 `Ecart::AucuneMep` en est séparé, bien que `runs_utilisables` les traite du
 même geste (retour anticipé quand `meps` est vide). Les deux situations
@@ -247,9 +247,10 @@ Tous les chiffres en `font-variant-numeric: tabular-nums`, comme
 - **Un run hors fenêtre reste visible avec son motif.** Le pourquoi : sans lui,
   la cible non atteinte reste inexplicable — c'est le défaut de la v1 que ce lot
   corrige.
-- **Un run tombant le jour même de la première MEP porte `MepNonPassee`.** Le
-  pourquoi : le filtre est strict (`>`), et c'est le cas limite que le libellé
-  doit couvrir sans mentir.
+- **Un run tombant le jour même de la première MEP est retenu ; celui de la
+  veille porte `MepNonPassee`.** Le pourquoi : le filtre est large (`>=`) depuis
+  l'amendement du 2026-07-26, et il faut poser les deux côtés de la borne — un
+  seul côté laisserait passer sa disparition pure et simple.
 - **Sans aucune MEP, le motif est `AucuneMep`, pas `MepNonPassee`.** Le
   pourquoi : les deux motifs sont lus comme des conseils d'action opposés, et
   c'est l'état initial de l'écran.

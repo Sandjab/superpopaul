@@ -40,8 +40,9 @@ pub enum Jalon {
 pub enum Ecart {
     Exclu,
     HorsFenetre,
-    /// Des MEP existent, mais aucune ne précède ce run : l'action utile est
-    /// de décaler la MEP ou le run.
+    /// Des MEP existent, mais toutes sont postérieures au jour de ce run
+    /// (celle du jour même compterait) : l'action utile est de décaler la MEP
+    /// ou le run.
     MepNonPassee,
     /// Aucune MEP n'est définie — l'état initial normal de l'écran, avant
     /// toute saisie. L'action utile est d'en créer une, pas de décaler une
@@ -102,7 +103,7 @@ fn ecart_de(
     } else {
         match premiere_mep {
             None => Some(Ecart::AucuneMep),
-            Some(p) if r.date <= p => Some(Ecart::MepNonPassee),
+            Some(p) if r.date < p => Some(Ecart::MepNonPassee),
             Some(_) => None,
         }
     }
@@ -292,19 +293,21 @@ mod tests {
     }
 
     #[test]
-    fn run_le_jour_meme_de_la_premiere_mep_est_ecarte() {
-        // Le filtre de runs_utilisables est STRICT (`r.date > premiere`) : un
-        // run tombant le jour de la MEP est écarté lui aussi. C'est ce cas qui
-        // interdit le libellé « avant la première MEP ».
+    fn run_le_jour_meme_de_la_premiere_mep_est_retenu() {
+        // MEP le matin, run de facturation l'après-midi : le filtre de
+        // `runs_utilisables` est LARGE (`r.date >= premiere`), le run du jour
+        // même compte. La veille, elle, porte bien `MepNonPassee`.
         let t = timeline(
-            &[run("3319", "2026-07-08", &[6])],
+            &[run("3318", "2026-07-07", &[5]), run("3319", "2026-07-08", &[6])],
             d("2026-07-01"),
             d("2026-07-20"),
             &[d("2026-07-08")],
             &[],
         );
-        let j = t.iter().find(|j| j.date == "2026-07-08").unwrap();
-        assert_eq!(j.runs[0].ecart, Some(Ecart::MepNonPassee));
+        let veille = t.iter().find(|j| j.date == "2026-07-07").unwrap();
+        assert_eq!(veille.runs[0].ecart, Some(Ecart::MepNonPassee));
+        let jour_mep = t.iter().find(|j| j.date == "2026-07-08").unwrap();
+        assert_eq!(jour_mep.runs[0].ecart, None);
     }
 
     #[test]
@@ -487,23 +490,23 @@ mod tests {
         // pas. Deux implémentations de la même règle vivent donc dans deux
         // modules : sans ce test, déplacer une borne dans `calendrier` ferait
         // afficher « retenu » des runs que le plan a écartés, sans un bruit.
-        // L'échantillon pose un run pile sur la première MEP elle-même (C) et
-        // un pile sur `fin` (E) : ce sont deux des bornes exactes que
-        // `runs_utilisables` compare, et un glissement de l'une resterait
-        // invisible sans un run posé dessus. Le run exclu (B) referme le
-        // quatrième filtre (`!r.exclu`) ; sa priorité sur MepNonPassee est,
-        // elle, vérifiée par un cas dédié dans
+        // L'échantillon pose un run pile sur la première MEP elle-même (C),
+        // un la veille de cette MEP (A) et un pile sur `fin` (E) : ce sont
+        // les bornes exactes que `runs_utilisables` compare, et un glissement
+        // de l'une resterait invisible sans un run posé dessus. Le run exclu
+        // (B) referme le quatrième filtre (`!r.exclu`) ; sa priorité sur
+        // MepNonPassee est, elle, vérifiée par un cas dédié dans
         // `exclusion_manuelle_prime_sur_les_autres_motifs`, pas ici. La borne
         // `debut` ne peut pas rejoindre cet échantillon : elle exigerait une
         // première MEP antérieure à `debut`, incompatible avec C qui doit
         // rester dans la fenêtre — elle est couverte séparément par
         // `le_run_du_debut_de_fenetre_suit_le_moteur`.
-        let mut exclu = run("B", "2026-07-04", &[4]);
+        let mut exclu = run("B", "2026-07-03", &[3]);
         exclu.exclu = true;
         let rs = vec![
-            run("A", "2026-07-03", &[3]),  // avant la première MEP
+            run("A", "2026-07-04", &[4]),  // écarté, veille de la première MEP
             exclu,                          // exclu, dans la fenêtre, avant la MEP
-            run("C", "2026-07-05", &[5]),  // écarté, pile sur la première MEP
+            run("C", "2026-07-05", &[5]),  // retenu, pile sur la première MEP
             run("D", "2026-07-15", &[15]), // retenu, au milieu de la fenêtre
             run("E", "2026-07-20", &[20]), // retenu, pile sur la fin de fenêtre
             run("F", "2026-07-25", &[25]), // hors fenêtre
@@ -532,7 +535,7 @@ mod tests {
         retenus.sort();
 
         assert_eq!(affiches, retenus, "l'écran et le moteur doivent retenir le même ensemble de runs");
-        assert_eq!(affiches, vec!["D", "E"], "D et E sont les deux seuls à passer les trois filtres");
+        assert_eq!(affiches, vec!["C", "D", "E"], "seuls C, D et E passent les trois filtres");
     }
 
     #[test]

@@ -205,13 +205,27 @@ pub struct Rampe {
 
 Règles portées telles quelles de `fut_config` / `fut_plan` :
 
-- **Runs utilisables** : non exclus, dans `[fut_start, fut_end]`, **strictement**
-  postérieurs à la première MEP (un run le jour même d'une MEP n'est pas utilisable).
+- **Runs utilisables** : non exclus, dans `[fut_start, fut_end]`, à partir de la
+  première MEP, **celle-ci incluse** (amendement du 2026-07-26, ci-dessous).
 - **Complétion des MEP** : les dates fournies sont conservées ; complétion jusqu'à
   `mep_count` par équirépartition sur `[fut_start, fut_end)`. Une MEP **auto** sans run
-  utilisable après elle est ramenée à la veille du dernier run candidat ; une MEP
+  utilisable à partir d'elle est ramenée au jour du dernier run candidat ; une MEP
   **fournie** dans ce cas est gardée avec avertissement.
-- **MEP de rattachement** d'un run : la dernière MEP **strictement** antérieure.
+- **MEP de rattachement** d'un run : la dernière MEP qui ne lui est pas postérieure —
+  celle du jour même compte.
+
+> **Amendement du 2026-07-26 — le jour d'une MEP est utilisable.** La règle d'origine,
+> reprise de `fut_plan.py`, écartait un run tombant le jour même d'une MEP (« strictement
+> postérieur »), au motif qu'il ne pouvait pas facturer ce qu'elle venait de déclarer.
+> C'est faux dans l'exploitation réelle : une MEP passe le **matin**, un Run de
+> Facturation tourne l'**après-midi**, donc un run du jour même facture bien le
+> périmètre que la MEP vient d'ouvrir. La journée est la bonne maille. Les quatre
+> comparaisons qui portaient la règle ont été élargies du même geste —
+> `calendrier::runs_utilisables`, `calendrier::mep_de`, le repli des MEP calculées et
+> l'avertissement de `calendrier::completer_meps`, et le motif d'écart de
+> `timeline::ecart_de`. Conséquence à connaître : un run le jour de la MEP *N* est
+> rattaché à la MEP *N*, non plus à la *N-1* — son `mep_id` / `mep_date` change dans le
+> plan et dans l'export.
 
 ### Tables SQLite
 
@@ -478,10 +492,13 @@ sert qu'à figer et livrer — c'est ce qui justifie qu'un seul plan actif suffi
 ## Tests (TDD, Rust)
 
 `calendrier::tests` :
-- runs utilisables : exclusion, bornes de fenêtre, run le jour même d'une MEP écarté ;
-- complétion des MEP : équirépartition, MEP auto ramenée à la veille du dernier run,
-  MEP fournie sans run postérieur → conservée + avertissement ;
-- MEP de rattachement = dernière strictement antérieure ;
+- runs utilisables : exclusion, bornes de fenêtre, run le jour même d'une MEP **retenu**
+  et run de la veille écarté (les deux côtés de la borne, sinon un glissement ne se voit
+  pas) ;
+- complétion des MEP : équirépartition, MEP auto ramenée au jour du dernier run,
+  MEP fournie sans run à partir d'elle → conservée + avertissement, MEP fournie le jour
+  du dernier run → **pas** d'avertissement ;
+- MEP de rattachement = dernière non postérieure, celle du jour même comprise ;
 - parsing `runs.csv` : en-tête absent, date JJ/MM/AAAA invalide, date inexistante
   (31/02), JJ hors 1–31, numéro dupliqué, deux runs même date, erreurs cumulées.
 

@@ -163,9 +163,10 @@ fn parse_jjs(brut: &str) -> Option<Vec<u8>> {
 }
 
 /// Runs éligibles aux premières factures : non exclus, dans `[debut, fin]`, et
-/// **strictement** postérieurs à la première MEP. Le « strictement » n'est pas
-/// un détail : un run qui tombe le jour même d'une MEP ne peut pas facturer ce
-/// qu'elle vient de déclarer.
+/// à partir de la première MEP — celle-ci **incluse**. La journée est la bonne
+/// maille : une MEP passe le matin, un Run de Facturation tourne l'après-midi,
+/// donc un run le jour même d'une MEP facture bien ce qu'elle vient de
+/// déclarer. Seuls les runs strictement antérieurs sont écartés.
 ///
 /// Sans aucune MEP, rien n'est utilisable (il n'y a rien à facturer).
 pub fn runs_utilisables(
@@ -178,7 +179,7 @@ pub fn runs_utilisables(
         return Vec::new();
     };
     runs.iter()
-        .filter(|r| !r.exclu && r.date >= debut && r.date <= fin && r.date > *premiere)
+        .filter(|r| !r.exclu && r.date >= debut && r.date <= fin && r.date >= *premiere)
         .cloned()
         .collect()
 }
@@ -186,8 +187,8 @@ pub fn runs_utilisables(
 /// Complète les MEP fournies jusqu'à `voulu`, par équirépartition sur
 /// `[debut, fin)`. Les dates fournies sont toujours conservées.
 ///
-/// Une MEP **calculée** qui n'aurait aucun run utilisable après elle est
-/// ramenée à la veille du dernier run candidat — sinon elle ne sert à rien.
+/// Une MEP **calculée** qui n'aurait aucun run utilisable à partir d'elle est
+/// ramenée au jour du dernier run candidat — sinon elle ne sert à rien.
 /// Une MEP **fournie** dans ce cas est conservée telle quelle : c'est un choix
 /// de l'utilisateur, on l'avertit sans le corriger.
 ///
@@ -223,10 +224,11 @@ pub fn completer_meps(
             let decalage = (i as i64 * etendue + vise as i64 / 2) / vise as i64;
             let mut s = debut + chrono::Duration::days(decalage);
             if let Some(dr) = dernier_run {
-                if s >= dr {
-                    // Aucune facture possible après cette date : on la ramène
-                    // au dernier jour utile.
-                    s = dr - chrono::Duration::days(1);
+                if s > dr {
+                    // Aucune facture possible à partir de cette date : on la
+                    // ramène au dernier jour utile — le run du jour même de
+                    // la MEP compte, donc c'est le jour du dernier run.
+                    s = dr;
                     if out.contains(&s) || s < debut {
                         continue;
                     }
@@ -250,12 +252,12 @@ pub fn completer_meps(
              Run de Facturation trop proche"
         ));
     }
-    // Les MEP FOURNIES sans run après elles sont conservées (choix de
+    // Les MEP FOURNIES sans run à partir d'elles sont conservées (choix de
     // l'utilisateur) mais signalées une par une.
     for m in &donnees {
-        if dernier_run.is_none_or(|dr| *m >= dr) {
+        if dernier_run.is_none_or(|dr| *m > dr) {
             avertissements.push(format!(
-                "MEP {m} : aucun Run de Facturation utilisable strictement après \
+                "MEP {m} : aucun Run de Facturation utilisable à partir de \
                  cette date dans la fenêtre"
             ));
         }
@@ -266,13 +268,14 @@ pub fn completer_meps(
     (out, avertissements)
 }
 
-/// MEP de rattachement d'un run : la dernière **strictement** antérieure.
-/// Renvoie `(numéro 1-basé, date)`, ou `None` si le run précède toute MEP.
+/// MEP de rattachement d'un run : la dernière qui ne lui est pas postérieure —
+/// celle du jour même compte, comme pour `runs_utilisables`. Renvoie
+/// `(numéro 1-basé, date)`, ou `None` si le run précède toute MEP.
 /// `meps` doit être trié croissant.
 pub fn mep_de(run: NaiveDate, meps: &[NaiveDate]) -> Option<(usize, NaiveDate)> {
     meps.iter()
         .enumerate()
-        .rfind(|(_, m)| **m < run)
+        .rfind(|(_, m)| **m <= run)
         .map(|(i, m)| (i + 1, *m))
 }
 
@@ -364,13 +367,15 @@ mod tests {
     }
 
     #[test]
-    fn utilisables_ecarte_un_run_le_jour_meme_de_la_premiere_mep() {
-        // Le « strictement postérieur » de la spec : un run le jour de la MEP
-        // ne peut pas facturer ce qu'elle vient de déclarer.
-        let rs = runs(&["2026-06-15", "2026-06-16"]);
+    fn utilisables_retient_un_run_le_jour_meme_de_la_premiere_mep() {
+        // La MEP passe le matin, le Run de Facturation tourne l'après-midi :
+        // le même jour civil, le run facture bien ce que la MEP vient de
+        // déclarer. La veille reste écartée — la borne se décale d'un jour,
+        // elle ne disparaît pas.
+        let rs = runs(&["2026-06-14", "2026-06-15", "2026-06-16"]);
         let out = runs_utilisables(&rs, d("2026-06-01"), d("2026-12-31"), &[d("2026-06-15")]);
-        assert_eq!(out.len(), 1);
-        assert_eq!(out[0].date, d("2026-06-16"));
+        let dates: Vec<NaiveDate> = out.iter().map(|r| r.date).collect();
+        assert_eq!(dates, vec![d("2026-06-15"), d("2026-06-16")]);
     }
 
     #[test]
@@ -418,17 +423,29 @@ mod tests {
     }
 
     #[test]
-    fn meps_calculee_sans_run_apres_est_ramenee_a_la_veille_du_dernier_run() {
+    fn meps_calculee_sans_run_apres_est_ramenee_au_jour_du_dernier_run() {
         // Fenêtre 01/06 → 30/06, dernier run le 10/06 : les slots 11/06 et
-        // 20/06 n'ont aucun run après eux, ils sont ramenés au 09/06 — et le
-        // second devient un doublon, donc une MEP manque.
+        // 20/06 n'ont aucun run à partir d'eux, ils sont ramenés au 10/06 —
+        // le run du jour même compte — et le second devient un doublon, donc
+        // une MEP manque.
         let rs = runs(&["2026-06-10"]);
         let (meps, warns) = completer_meps(&rs, d("2026-06-01"), d("2026-06-30"), &[], 3);
-        assert_eq!(meps, vec![d("2026-06-01"), d("2026-06-09")]);
+        assert_eq!(meps, vec![d("2026-06-01"), d("2026-06-10")]);
         assert!(
             warns.iter().any(|w| w.contains("1 MEP")),
             "le manque doit être signalé : {warns:?}"
         );
+    }
+
+    #[test]
+    fn mep_fournie_le_jour_du_dernier_run_n_est_pas_avertie() {
+        // Le run du jour même est utilisable : cette MEP a bien un run à
+        // partir d'elle, l'avertir dirait le contraire de la règle.
+        let rs = runs(&["2026-06-10"]);
+        let (meps, warns) =
+            completer_meps(&rs, d("2026-06-01"), d("2026-12-31"), &[d("2026-06-10")], 0);
+        assert_eq!(meps, vec![d("2026-06-10")]);
+        assert!(warns.is_empty(), "{warns:?}");
     }
 
     #[test]
@@ -460,8 +477,10 @@ mod tests {
 
     #[test]
     fn meps_jamais_a_la_borne_de_fin() {
-        // Invariant [debut, fin) : une MEP le dernier jour n'aurait aucun run
-        // après elle par construction.
+        // Invariant [debut, fin) : une MEP calculée est ramenée au jour du
+        // dernier run, et les slots équirépartis restent en deçà de `fin` —
+        // une MEP posée sur la borne ne servirait qu'à un run tombant pile ce
+        // jour-là, cas que le placement automatique ne vise pas.
         let rs = runs(&["2026-06-20"]);
         let (meps, _) = completer_meps(&rs, d("2026-06-01"), d("2026-06-30"), &[], 5);
         assert!(meps.iter().all(|m| *m < d("2026-06-30")), "{meps:?}");
@@ -487,16 +506,18 @@ mod tests {
     }
 
     #[test]
-    fn mep_de_est_strictement_anterieure() {
+    fn mep_de_rattache_un_run_a_la_mep_du_jour_meme() {
         let meps = vec![d("2026-06-15"), d("2026-08-01")];
-        // Run le jour même d'une MEP : rattaché à la précédente.
-        assert_eq!(mep_de(d("2026-08-01"), &meps), Some((1, d("2026-06-15"))));
+        // MEP le matin, run l'après-midi : le run relève de la MEP du jour,
+        // pas de la précédente — sinon il facturerait sous un périmètre qui
+        // n'est plus celui de sa journée.
+        assert_eq!(mep_de(d("2026-08-01"), &meps), Some((2, d("2026-08-01"))));
     }
 
     #[test]
     fn mep_de_none_avant_toute_mep() {
         let meps = vec![d("2026-06-15")];
-        assert_eq!(mep_de(d("2026-06-15"), &meps), None);
+        assert_eq!(mep_de(d("2026-06-14"), &meps), None, "la veille reste sans MEP");
         assert_eq!(mep_de(d("2026-01-01"), &meps), None);
     }
 

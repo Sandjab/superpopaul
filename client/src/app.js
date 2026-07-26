@@ -1464,7 +1464,7 @@ function renderPlanParam() {
       (n, j) => n + j.runs.filter((r) => !r.ecart).length, 0);
     const totalRuns = a.timeline.reduce((n, j) => n + j.runs.length, 0);
     noeuds.push(h("p", { class: "field-hint" },
-      `${fmtN(retenus)} run(s) retenu(s) sur ${fmtN(totalRuns)} affiché(s) · rattachement à la dernière MEP strictement antérieure. Cocher « exclure » retire le run du plan.`));
+      `${fmtN(retenus)} run(s) retenu(s) sur ${fmtN(totalRuns)} affiché(s) · rattachement à la dernière MEP passée, celle du jour même comprise. Cocher « exclure » retire le run du plan.`));
 
     const tbl = h("table", { class: "plan-tl" },
       h("tr", {}, ...[["Jour", ""], ["Run", ""], ["Jours facturés", ""],
@@ -1486,8 +1486,9 @@ function renderPlanParam() {
       // toutes les deux : un run posé pile sur `fin` est RETENU, donc afficher
       // « fin de fenêtre » au-dessus de lui le montrerait hors fenêtre alors
       // qu'il compte. Symétriquement, « début de fenêtre » doit rester au-dessus.
-      // Une MEP reste au-dessus aussi : les runs de ce jour-là sont écartés par
-      // elle, le motif se lit alors juste sous sa cause.
+      // Une MEP reste au-dessus aussi : elle passe le matin, les runs du jour
+      // tournent après elle et lui sont rattachés — l'ordre d'affichage suit
+      // l'ordre de la journée.
       for (const jl of j.jalons.filter((x) => x.sorte !== "fin_fenetre"))
         tbl.append(ligneJalon(j, jl));
       // Une ligne vide ne sert qu'à porter la date d'un jour sans aucune autre
