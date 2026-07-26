@@ -110,3 +110,55 @@ test("les cases de la fenêtre s'ouvrent décochées", async () => {
   assert.ok(cases.every((c) => !c.checked),
     `aucune sélection n'a été faite, ${cases.filter((c) => c.checked).length} case(s) sont pourtant cochées`);
 });
+
+/** `PlanApercu` minimal : deux runs retenus, un écarté, tel que la timeline
+ *  le reçoit. Les blocs que `renderPlanParam` traverse ensuite (entonnoir,
+ *  stock, plateformes) sont là pour que le rendu aille jusqu'au bout. */
+function apercuTimeline() {
+  const jour = (date, run) => ({
+    date, jour_semaine: "mar", weekend: false, ferie: null, jalons: [], runs: [run],
+  });
+  const detail = { run_num: "", run_date: "", jjs: [], mep_id: 1, mep_date: "2026-08-03",
+                   vise: 40, report_entrant: 0, stock: 999, place: 40, reliquat: 0 };
+  return {
+    funnel: { lignes: 100, cf_distincts: 100, jj_valide: 100, resolus: 100,
+              ctc_ready: 100, ppf_usable: 100, eligibles: 100 },
+    timeline: [
+      jour("2026-08-11", { num: "3320", jjs: [1, 5], exclu: false, ecart: null, detail }),
+      jour("2026-09-10", { num: "3327", jjs: [1, 5], exclu: false, ecart: null, detail }),
+      jour("2026-10-24", { num: "3342", jjs: [20], exclu: true, ecart: "exclu", detail: null }),
+    ],
+    stock_jj: [{ jj: 1, comptes: 700, couvert: true }],
+    plateformes: [], avertissements: [], meps: ["2026-08-03"],
+    cible: 1000, total: 1000, geles: 0, epingles: 0, retires: 0,
+  };
+}
+
+/** Tous les boutons « + Ajouter » de la timeline rendue. */
+function boutonsAjout(noeud, out = []) {
+  if (typeof noeud !== "object" || noeud === null) return out;
+  if (noeud.className === "tl-add-btn") out.push(noeud);
+  for (const enfant of noeud.children ?? []) boutonsAjout(enfant, out);
+  return out;
+}
+
+/** Timeline rendue, avec ou sans plan enregistré. */
+function timeline(genere) {
+  const ctx = chargerApp();
+  const p = ctx.evaluer("plan");
+  p.apercu = ctx.evaluer(`(${JSON.stringify(apercuTimeline())})`);
+  p.genere = genere;
+  ctx.app.renderPlanParam();
+  assert.deepEqual(ctx.plaintes, [], "le rendu de la timeline doit être propre");
+  return boutonsAjout(ctx.$("plan-param"));
+}
+
+test("« + Ajouter » n'apparaît qu'avec un plan enregistré", () => {
+  // `plan_ajouter` retouche le plan PERSISTÉ : sans plan, le bouton est inerte
+  // et l'utilisateur ne récolte qu'un bandeau rouge. Or l'aperçu — donc la
+  // timeline — existe dès la saisie de la fenêtre FUT, bien avant « Générer ».
+  assert.equal(timeline(false).length, 0,
+    "aucun plan enregistré : la timeline ne doit offrir aucune action d'ajout");
+  assert.equal(timeline(true).length, 2,
+    "plan enregistré : une action par run retenu, aucune sur le run écarté");
+});

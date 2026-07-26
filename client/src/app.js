@@ -1602,8 +1602,17 @@ function ligneRun(j, r) {
   const d = r.detail;
   // Le run est le point d'entrée de l'ajout : l'action vit sur sa ligne. Le
   // jour porteur l'accompagne — `RunJour` n'a pas de date, elle vient de lui.
+  // L'action n'a de sens qu'avec un plan ENREGISTRÉ : `plan_ajouter` retouche
+  // le plan persisté et refuse sinon. `plan.genere` est le seul miroir fidèle
+  // de ce que le backend exige (`charger_plan()` rend Some) — `plan.lignes`
+  // est encore l'ancien lot quand `genererPlan` redessine la timeline, et un
+  // plan sans ligne le laisserait vide sans qu'il soit absent. Sans plan, la
+  // cellule reste vide : un bouton grisé sur chaque ligne serait du bruit
+  // permanent, alors qu'on arrive normalement ici sans plan.
   const ajout = h("td", { class: "tl-add" },
-    h("button", { class: "tl-add-btn", onclick: () => ouvrirAjoutRun(r, j) }, "+ Ajouter"));
+    ...(plan.genere
+      ? [h("button", { class: "tl-add-btn", onclick: () => ouvrirAjoutRun(r, j) }, "+ Ajouter")]
+      : []));
   return h("tr", { class: "tl-run" },
     celluleJour(j),
     h("td", {}, r.num),
