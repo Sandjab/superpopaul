@@ -75,10 +75,16 @@ pub fn charge(lignes: &[LignePlan], runs: &[RunFacturation]) -> Vec<ChargeRun> {
             continue;
         };
         out[depart].premieres += 1;
-        // Strictement APRÈS le départ : le mois du démarrage, la facture est
-        // déjà comptée comme première.
+        let mois_depart = (runs[depart].date.year(), runs[depart].date.month());
         if let Some(porteurs) = porteurs_par_jj.get(&l.jj) {
             for &i in porteurs.iter().filter(|&&i| i > depart) {
+                // La règle porte sur le MOIS, pas sur le rang du run : le mois
+                // du démarrage, la facture est déjà comptée comme première —
+                // y compris quand le run de départ ne couvre pas le JJ du
+                // compte, ce qu'un plan relu après édition du runs.csv permet.
+                if (runs[i].date.year(), runs[i].date.month()) == mois_depart {
+                    continue;
+                }
                 out[i].recurrences += 1;
             }
         }
@@ -207,6 +213,24 @@ mod tests {
         assert_eq!(c[1].premieres, 0);
         assert_eq!(c[1].recurrences, 2);
         assert_eq!(c[1].total(), 2);
+    }
+
+    #[test]
+    fn pas_de_seconde_facture_le_mois_du_demarrage() {
+        // Le run de départ ne couvre PAS le jour de cycle du compte — cas atteignable
+        // quand un plan enregistré est relu après édition des jours de cycle du
+        // runs.csv. Le compte ne doit pas facturer deux fois en août pour autant :
+        // la règle porte sur le mois civil, pas sur le rang du run.
+        let runs = vec![
+            run("R1", "2026-08-05", &[3]),
+            run("R2", "2026-08-11", &[5]),
+            run("R3", "2026-09-08", &[5]),
+        ];
+        let lignes = vec![ligne("CF1", 5, "R1")];
+        let c = charge(&lignes, &runs);
+        assert_eq!(c[0].premieres, 1);
+        assert_eq!(c[1].recurrences, 0, "seconde facture dans le mois du démarrage");
+        assert_eq!(c[2].recurrences, 1, "septembre reprend normalement");
     }
 
     #[test]
