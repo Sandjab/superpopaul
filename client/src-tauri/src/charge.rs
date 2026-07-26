@@ -9,11 +9,9 @@
 
 use crate::calendrier::RunFacturation;
 use crate::plan::LignePlan;
-use chrono::NaiveDate;
-// `Datelike` ne sert qu'aux récurrences mensuelles — pas encore à cette tâche.
-#[allow(unused_imports)]
 use chrono::Datelike;
-use std::collections::HashMap;
+use chrono::NaiveDate;
+use std::collections::{HashMap, HashSet};
 
 /// Ce que facture un run : les comptes qui démarrent, et ceux qui reviennent.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,6 +44,20 @@ pub fn charge(lignes: &[LignePlan], runs: &[RunFacturation]) -> Vec<ChargeRun> {
         .map(|(i, r)| (r.num.as_str(), i))
         .collect();
 
+    // Porteur du mois : pour chaque jour de cycle, les index des runs qui
+    // portent sa facture mensuelle — le PREMIER run de chaque mois civil qui
+    // couvre ce jour. Deux runs du même mois couvrant le même jour ne
+    // facturent donc pas deux fois.
+    let mut vu: HashSet<(i32, u32, u8)> = HashSet::new();
+    let mut porteurs_par_jj: HashMap<u8, Vec<usize>> = HashMap::new();
+    for (i, r) in runs.iter().enumerate() {
+        for &jj in &r.jjs {
+            if vu.insert((r.date.year(), r.date.month(), jj)) {
+                porteurs_par_jj.entry(jj).or_default().push(i);
+            }
+        }
+    }
+
     let mut out: Vec<ChargeRun> = runs
         .iter()
         .map(|r| ChargeRun {
@@ -59,8 +71,16 @@ pub fn charge(lignes: &[LignePlan], runs: &[RunFacturation]) -> Vec<ChargeRun> {
     for l in lignes {
         // Un compte placé sur un run non retenu est ignoré, pas replié sur un
         // autre run : le replier inventerait une facture.
-        if let Some(&depart) = index_par_num.get(l.run_num.as_str()) {
-            out[depart].premieres += 1;
+        let Some(&depart) = index_par_num.get(l.run_num.as_str()) else {
+            continue;
+        };
+        out[depart].premieres += 1;
+        // Strictement APRÈS le départ : le mois du démarrage, la facture est
+        // déjà comptée comme première.
+        if let Some(porteurs) = porteurs_par_jj.get(&l.jj) {
+            for &i in porteurs.iter().filter(|&&i| i > depart) {
+                out[i].recurrences += 1;
+            }
         }
     }
     out
@@ -132,5 +152,79 @@ mod tests {
         let c = charge(&lignes, &runs);
         assert_eq!(c[0].premieres, 0);
         assert_eq!(c[0].recurrences, 0);
+    }
+
+    #[test]
+    fn un_compte_ne_facture_quune_fois_par_mois() {
+        // Deux runs de SEPTEMBRE couvrent le jour de cycle 5. Le compte, démarré
+        // en août, ne doit facturer qu'UNE fois en septembre — au premier des deux.
+        let runs = vec![
+            run("R1", "2026-08-11", &[5]),
+            run("R2", "2026-09-08", &[5]),
+            run("R3", "2026-09-22", &[5]),
+        ];
+        let lignes = vec![ligne("CF1", 5, "R1")];
+        let c = charge(&lignes, &runs);
+        assert_eq!(c[0].premieres, 1);
+        assert_eq!(
+            c[1].recurrences, 1,
+            "le premier run de septembre porte la facture"
+        );
+        assert_eq!(
+            c[2].recurrences, 0,
+            "le second run du mois ne refacture pas"
+        );
+    }
+
+    #[test]
+    fn mois_sans_run_couvrant_le_jj_ne_facture_pas() {
+        // Septembre ne couvre que le jour 15 : le compte de jour 5 saute ce mois.
+        // Pas de report silencieux sur octobre : le trou est le fait du calendrier.
+        let runs = vec![
+            run("R1", "2026-08-11", &[5]),
+            run("R2", "2026-09-08", &[15]),
+            run("R3", "2026-10-06", &[5]),
+        ];
+        let lignes = vec![ligne("CF1", 5, "R1")];
+        let c = charge(&lignes, &runs);
+        assert_eq!(
+            c[1].recurrences, 0,
+            "aucun run de septembre ne couvre le jour 5"
+        );
+        assert_eq!(
+            c[2].recurrences, 1,
+            "octobre reprend, sans rattraper septembre"
+        );
+    }
+
+    #[test]
+    fn les_runs_sans_premiere_facture_portent_les_recurrences() {
+        // Régime de croisière : après la dernière MEP, les runs ne démarrent plus
+        // personne mais facturent tout le parc. Ils ne doivent pas disparaître.
+        let runs = vec![run("R1", "2026-08-11", &[5]), run("R2", "2026-09-08", &[5])];
+        let lignes = vec![ligne("CF1", 5, "R1"), ligne("CF2", 5, "R1")];
+        let c = charge(&lignes, &runs);
+        assert_eq!(c[1].premieres, 0);
+        assert_eq!(c[1].recurrences, 2);
+        assert_eq!(c[1].total(), 2);
+    }
+
+    #[test]
+    fn un_compte_place_hors_porteur_recurre_quand_meme() {
+        // Le compte démarre au SECOND run de septembre (le porteur du mois est le
+        // premier). Il ne doit pas être perdu pour les mois suivants.
+        let runs = vec![
+            run("R1", "2026-09-08", &[5]),
+            run("R2", "2026-09-22", &[5]),
+            run("R3", "2026-10-06", &[5]),
+        ];
+        let lignes = vec![ligne("CF1", 5, "R2")];
+        let c = charge(&lignes, &runs);
+        assert_eq!(c[1].premieres, 1, "il démarre bien à son run");
+        assert_eq!(
+            c[0].recurrences, 0,
+            "le porteur de septembre lui est antérieur"
+        );
+        assert_eq!(c[2].recurrences, 1, "octobre le reprend");
     }
 }
