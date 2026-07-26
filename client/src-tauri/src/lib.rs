@@ -14,6 +14,7 @@ pub mod output;
 pub mod pid;
 pub mod plan;
 pub mod plan_report;
+pub mod plan_xlsx;
 pub mod ppf;
 pub mod repartition;
 pub mod resolver;
