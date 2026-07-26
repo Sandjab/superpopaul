@@ -916,7 +916,7 @@ pub async fn plan_preview(
     let input = state.input_path()?;
     let store = state.store.clone();
     tokio::task::spawn_blocking(move || {
-        let (apercu, _) = calculer_plan(&store, &input, &cfg, &params)?;
+        let (apercu, _, _) = calculer_plan(&store, &input, &cfg, &params)?;
         Ok(apercu)
     })
     .await
@@ -924,13 +924,22 @@ pub async fn plan_preview(
 }
 
 /// Cœur partagé par l'aperçu et la génération : construit le pool, régénère,
-/// et rend l'aperçu plus le plan complet.
+/// et rend l'aperçu, le plan complet et les lignes du fichier d'entrée. Ces
+/// dernières remontent pour que la génération écrive le classeur du périmètre
+/// sans relire le CSV ni refaire la jointure de résolution.
 fn calculer_plan(
     store: &Arc<Mutex<Store>>,
     input: &Path,
     cfg: &Config,
     params: &crate::plan::PlanParams,
-) -> Result<(PlanApercu, Vec<crate::plan::LignePlan>), String> {
+) -> Result<
+    (
+        PlanApercu,
+        Vec<crate::plan::LignePlan>,
+        Vec<crate::plan::LigneEntree>,
+    ),
+    String,
+> {
     let now = chrono::Utc::now();
     let aujourdhui = chrono::Local::now().date_naive();
     let (runs, debut, fin, meps_fournies) = params.calendrier()?;
@@ -1002,7 +1011,7 @@ fn calculer_plan(
         epingles: preserves.epinglees.len(),
         retires: a.lignes.iter().filter(|l| l.retiree()).count(),
     };
-    Ok((apercu, a.lignes))
+    Ok((apercu, a.lignes, entrees))
 }
 
 /// Calcule le plan ET l'écrit (lignes + paramètres dans une transaction),
@@ -1016,7 +1025,7 @@ pub async fn plan_generate(
     let input = state.input_path()?;
     let store = state.store.clone();
     tokio::task::spawn_blocking(move || {
-        let (apercu, lignes) = calculer_plan(&store, &input, &cfg, &params)?;
+        let (apercu, lignes, entrees) = calculer_plan(&store, &input, &cfg, &params)?;
         let horodatage = chrono::Utc::now().timestamp();
         let lignes: Vec<crate::plan::LignePlan> = lignes
             .into_iter()
@@ -1038,6 +1047,14 @@ pub async fn plan_generate(
         };
         store.lock().unwrap().ecrire_plan(&lignes, &meta)?;
         let fichiers = ecrire_fichiers_mep(&input, &cfg, &lignes)?;
+        // Le classeur du périmètre part avec les fichiers de livraison : ce
+        // qu'on transmet et ce qui le documente restent ainsi cohérents.
+        // `ecrire_fichiers_mep` a déjà créé le répertoire de sortie.
+        let xlsx = resolved_out_dir(&input, &cfg.output.dir).join(format!(
+            "{}_plan_comptes.xlsx",
+            input.file_stem().unwrap_or_default().to_string_lossy()
+        ));
+        crate::plan_xlsx::ecrire(&xlsx, &crate::plan_xlsx::lignes(&entrees, &lignes))?;
         Ok(PlanGeneration { apercu, fichiers })
     })
     .await

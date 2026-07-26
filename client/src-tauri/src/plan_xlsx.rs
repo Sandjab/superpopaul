@@ -6,6 +6,7 @@
 //! `charts` pour le rapport.
 
 use crate::plan::{LigneEntree, LignePlan};
+use std::path::Path;
 
 /// Rapport d'un compte au plan. Trois états, pas deux : un compte **retiré**
 /// n'est pas un compte jamais placé — ce sont deux décisions opposées.
@@ -74,6 +75,75 @@ pub fn lignes(entrees: &[LigneEntree], plan: &[LignePlan]) -> Vec<LigneExport> {
             }
         })
         .collect()
+}
+
+/// En-têtes du classeur, dans l'ordre des colonnes.
+const ENTETES: [&str; 8] = [
+    "N° de run",
+    "N° de CF",
+    "JJ",
+    "Adressage",
+    "Raison sociale",
+    "Statut CTC",
+    "PPF usable",
+    "Dans le plan",
+];
+
+/// Écrit le classeur : en-tête figé et filtres automatiques, qui sont l'usage
+/// attendu du fichier. Aucune logique métier ici.
+///
+/// **Toutes les valeurs sont écrites en texte**, y compris le JJ : le fichier
+/// documente ce que contenait le CSV, et Excel ne doit réinterpréter aucun
+/// identifiant en nombre ni en notation scientifique.
+pub fn ecrire(chemin: &Path, lignes: &[LigneExport]) -> Result<(), String> {
+    use rust_xlsxwriter::{Format, Workbook};
+
+    let mut classeur = Workbook::new();
+    let feuille = classeur.add_worksheet();
+    feuille
+        .set_name("Comptes")
+        .map_err(|e| format!("classeur : {e}"))?;
+
+    let gras = Format::new().set_bold();
+    for (i, titre) in ENTETES.iter().enumerate() {
+        feuille
+            .write_with_format(0, i as u16, *titre, &gras)
+            .map_err(|e| format!("en-tête : {e}"))?;
+    }
+
+    for (n, l) in lignes.iter().enumerate() {
+        let r = n as u32 + 1;
+        let cellules: [&str; 8] = [
+            &l.run,
+            &l.cf,
+            &l.jj,
+            &l.adressage,
+            &l.raison_sociale,
+            &l.ctc_status,
+            if l.ppf_usable { "true" } else { "false" },
+            l.appartenance.libelle(),
+        ];
+        for (c, v) in cellules.iter().enumerate() {
+            feuille
+                .write(r, c as u16, *v)
+                .map_err(|e| format!("ligne {r} : {e}"))?;
+        }
+    }
+
+    // En-tête figé et filtres : sans eux, le fichier n'est qu'un CSV déguisé.
+    feuille.set_freeze_panes(1, 0).map_err(|e| format!("volets : {e}"))?;
+    feuille
+        .autofilter(0, 0, lignes.len() as u32, ENTETES.len() as u16 - 1)
+        .map_err(|e| format!("filtres : {e}"))?;
+    for (i, largeur) in [12.0, 16.0, 6.0, 30.0, 38.0, 12.0, 12.0, 14.0].iter().enumerate() {
+        feuille
+            .set_column_width(i as u16, *largeur)
+            .map_err(|e| format!("largeur : {e}"))?;
+    }
+
+    classeur
+        .save(chemin)
+        .map_err(|e| format!("écriture du classeur : {e}"))
 }
 
 #[cfg(test)]
@@ -177,5 +247,30 @@ mod tests {
         // Le classeur documente le fichier, il ne le corrige pas.
         let out = lignes(&[entree("CF1", "zzz", "")], &[]);
         assert_eq!(out[0].jj, "zzz");
+    }
+
+    #[test]
+    fn ecrire_produit_un_fichier_lisible() {
+        // On ne relit pas le xlsx (pas de lecteur dans les dépendances) : on
+        // vérifie qu'un fichier non vide est produit et qu'il porte la signature
+        // d'un conteneur ZIP, ce qu'est un .xlsx.
+        let dir = std::env::temp_dir().join("popaul_test_xlsx");
+        std::fs::create_dir_all(&dir).unwrap();
+        let chemin = dir.join("t.xlsx");
+        let l = lignes(&[entree("CF1", "5", "ready")], &[ligne_plan("CF1", "R1")]);
+        ecrire(&chemin, &l).expect("écriture");
+        let octets = std::fs::read(&chemin).expect("relecture");
+        assert!(octets.len() > 1000, "classeur suspect : {} octets", octets.len());
+        assert_eq!(&octets[..2], b"PK", "un .xlsx est un conteneur ZIP");
+        std::fs::remove_file(&chemin).ok();
+    }
+
+    #[test]
+    fn ecrire_un_tableau_vide_ne_panique_pas() {
+        let dir = std::env::temp_dir().join("popaul_test_xlsx");
+        std::fs::create_dir_all(&dir).unwrap();
+        let chemin = dir.join("vide.xlsx");
+        ecrire(&chemin, &[]).expect("un plan sans compte reste un fichier valide");
+        std::fs::remove_file(&chemin).ok();
     }
 }
