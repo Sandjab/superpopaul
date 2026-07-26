@@ -155,6 +155,90 @@ pub(crate) const CSS: &str = r#"
   .compo { color: var(--muted); font-size: 12.5px; margin: 12px 0 0; padding-top: 10px;
     border-top: 1px solid var(--border); }
   .compo b { color: var(--fg); }
+
+  /* ==================================================================
+     AJOUTS DU CHANTIER « rapport de plan » — maquette du 26/07/2026.
+     Tout ce qui suit est neuf ; rien au-dessus n'est modifié.
+     ================================================================== */
+
+  /* Bande d'indicateurs secondaire : même carte, ton plus bas. Le contrôle
+     du plan ne doit pas concurrencer la trajectoire du regard. */
+  .kpis.sub { margin-bottom: 8px; }
+  .kpis.sub .kpi { padding: 10px 14px; }
+  .kpis.sub .kpi .v { font-size: 20px; color: var(--muted); }
+  .kpis.sub .kpi.on .v { color: var(--fg); }
+  .kpis.sub .kpi .l { font-size: 11.5px; }
+
+  /* Avertissements : encadré ambre, remonté haut. */
+  .warn { background: var(--card); border: 1px solid var(--border);
+    border-left: 3px solid var(--amber); border-radius: 8px; padding: 14px 18px; }
+  .warn h2 { margin: 0 0 8px; font-size: 13px; text-transform: uppercase;
+    letter-spacing: .08em; color: var(--amber); }
+  .warn h2::after { display: none; }
+  .warn ul { margin: 0; padding-left: 18px; }
+  .warn li { font-size: 13.5px; margin: 4px 0; }
+  .warn li::marker { color: var(--amber); }
+
+  /* Graphes : conteneur commun aux deux SVG. */
+  .chart { background: var(--card); border: 1px solid var(--border);
+    border-radius: 10px; padding: 16px 18px 10px; }
+  .chart svg { display: block; width: 100%; height: auto; }
+  .chart .axis { stroke: var(--border); stroke-width: 1; }
+  .chart .grid { stroke: var(--border); stroke-width: 1; stroke-dasharray: 2 4; }
+  .chart .tick { fill: var(--muted); font-size: 11px; font-family: inherit; }
+  .chart .tick.mid { text-anchor: middle; }
+  .chart .tick.end { text-anchor: end; }
+  .chart .area { fill: var(--gold); fill-opacity: .16; }
+  .chart .line { fill: none; stroke: var(--gold); stroke-width: 2;
+    stroke-linejoin: round; }
+  .chart .mep { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; }
+  .chart .mep-lbl { fill: var(--muted); font-size: 10.5px; text-anchor: middle;
+    font-family: inherit; letter-spacing: .04em; }
+  .chart .b-first { fill: var(--gold); }
+  .chart .b-rec { fill: var(--green-later); }
+  .chart .b-peak { stroke: var(--fg); stroke-width: 1; stroke-dasharray: 3 3; }
+  .chart-legend { display: flex; gap: 18px; flex-wrap: wrap; font-size: 12.5px;
+    color: var(--muted); margin: 2px 0 0 2px; }
+  .chart-legend span { display: flex; align-items: center; gap: 6px; }
+  .chart-legend i { width: 10px; height: 10px; border-radius: 3px; display: block; }
+
+  /* Table : la seule du rapport, pour des données franchement tabulaires. */
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px;
+    font-variant-numeric: tabular-nums; }
+  thead th { text-align: left; color: var(--muted); font-size: 11px;
+    font-weight: 700; text-transform: uppercase; letter-spacing: .07em;
+    padding: 0 10px 7px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  tbody td { padding: 7px 10px; border-bottom: 1px solid var(--border); }
+  tbody tr:last-child td { border-bottom: none; }
+  td.num, th.num { text-align: right; }
+  td.num b { color: var(--fg); font-weight: 600; }
+  .mep-cell { color: var(--muted); }
+  /* Première ligne d'une MEP : on la détache pour que le groupe se lise. */
+  tbody tr.mep-start td { border-top: 1px solid var(--border); }
+  tbody tr.mep-start .mep-cell { color: var(--gold); font-weight: 600; }
+  .tbl { background: var(--card); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px 6px 6px; }
+  .jj { color: var(--muted); font-size: 12.5px; }
+  .frozen { color: var(--muted); font-size: 11px; border: 1px solid var(--border);
+    border-radius: 4px; padding: 1px 5px; margin-left: 6px; white-space: nowrap; }
+
+  /* Répartition : deux barres par PA, plan au-dessus du pool. */
+  .dist { background: var(--card); border: 1px solid var(--border);
+    border-radius: 10px; padding: 16px 20px; }
+  .dist-row { display: grid; grid-template-columns: 150px 1fr 132px 62px;
+    gap: 14px; align-items: center; padding: 7px 0; font-size: 14px; }
+  .dist-row + .dist-row { border-top: 1px solid var(--border); }
+  .dist-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .dist-bars { display: grid; gap: 3px; }
+  .bar.pool i { background: var(--pa-autres); }
+  .dist-n { text-align: right; font-variant-numeric: tabular-nums;
+    color: var(--muted); font-size: 12.5px; line-height: 1.45; }
+  .dist-n b { color: var(--fg); font-weight: 600; font-size: 13.5px; }
+  .dist-gap { text-align: right; font-variant-numeric: tabular-nums;
+    font-size: 12.5px; color: var(--muted); }
+  .dist-gap.over { color: var(--gold); }
+  .dist-gap.under { color: var(--amber); }
+  .dist-row.absent .dist-name { color: var(--muted); }
 "#;
 
 pub fn render(d: &ReportData) -> String {
@@ -721,6 +805,18 @@ fn ring_segments(s: &Snapshot) -> Vec<(&'static str, f64, f64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn le_css_style_les_classes_du_rapport_de_plan() {
+        // Régression : ces classes étaient émises par plan_report sans qu'aucune
+        // règle ne les définisse — le rapport s'affichait en HTML brut.
+        for sel in [
+            ".kpis.sub", ".warn", ".chart", ".b-first", ".b-rec",
+            "thead th", "tbody td", ".tbl", ".dist-row", ".dist-gap",
+        ] {
+            assert!(CSS.contains(sel), "règle manquante pour « {sel} »");
+        }
+    }
     use crate::coverage::{Coverage, PeppolCoverage, PpfCoverage};
     use crate::telemetry::NamedCount;
     use std::collections::BTreeMap;
