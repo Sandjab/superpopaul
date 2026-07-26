@@ -322,6 +322,26 @@ pub struct InputStats {
     pub coverage: crate::coverage::Coverage,
 }
 
+/// Répartition des adressages du fichier connus de la base : (résolus,
+/// à retenter, périmés). Les jamais-résolus s'en déduisent par soustraction.
+fn counts_from_known(
+    pids: &[String],
+    known: &HashMap<String, crate::store::Resolution>,
+    now: i64,
+    max_age: i64,
+) -> (usize, usize, usize) {
+    let (mut ok, mut failed, mut stale) = (0, 0, 0);
+    for p in pids {
+        match known.get(p) {
+            None => {}
+            Some(r) if crate::modes::a_retenter(r) => failed += 1,
+            Some(r) if r.resolved_at < now - max_age => stale += 1,
+            Some(_) => ok += 1,
+        }
+    }
+    (ok, failed, stale)
+}
+
 /// Compare le fichier d'entrée à la base : alimente la popup de reprise et la
 /// présélection du mode.
 #[tauri::command]
@@ -339,15 +359,7 @@ pub async fn analyze_input(state: State<'_, AppState>) -> Result<InputStats, Str
         drop(store_g);
         let now = chrono::Utc::now().timestamp();
         let max_age = cfg.api.refresh_days as i64 * 86400;
-        let (mut ok, mut failed, mut stale) = (0, 0, 0);
-        for p in &pids {
-            match known.get(p) {
-                None => {}
-                Some(r) if r.api_status != "ok" => failed += 1,
-                Some(r) if r.resolved_at < now - max_age => stale += 1,
-                Some(_) => ok += 1,
-            }
-        }
+        let (ok, failed, stale) = counts_from_known(&pids, &known, now, max_age);
         Ok(InputStats {
             unique: pids.len(),
             resolved_ok: ok,
@@ -1731,6 +1743,57 @@ mod tests_calibration_prerequisites {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn res(
+        pid: &str,
+        exists: Option<bool>,
+        ctc: Option<bool>,
+        status: &str,
+        at: i64,
+    ) -> crate::store::Resolution {
+        crate::store::Resolution {
+            participant: pid.into(),
+            exists_in_peppol: exists,
+            pa_code: None,
+            pa_name: None,
+            pa_country: None,
+            extended_ctc_fr: ctc,
+            api_status: status.into(),
+            resolved_at: at,
+            note: None,
+            ctc_activation: None,
+            ctc_expiration: None,
+        }
+    }
+
+    /// Le pré-run annonce le volume que le mode VA résoudre (`cockpit.js` :
+    /// « Reprise + échecs résoudra missing + failed »). Une résolution
+    /// incomplète — présente sans verdict CTC, catalogue SMP illisible — est
+    /// reprise par `modes::a_retenter` : la compter comme « résolue » ferait
+    /// annoncer 0 à l'IHM avant d'en résoudre des centaines.
+    #[test]
+    fn le_pre_run_compte_lincomplet_avec_les_echecs() {
+        let now = 100 * 86400_i64;
+        let max_age = 30 * 86400_i64;
+        let known: HashMap<String, crate::store::Resolution> = [
+            res("a::ok", Some(true), Some(true), "ok", now - 86400),
+            res("a::sg", Some(true), None, "ok", now - 86400),
+            res("a::ko", None, None, "error:503", now - 86400),
+            res("a::vieux", Some(true), Some(false), "ok", now - 50 * 86400),
+        ]
+        .into_iter()
+        .map(|r| (r.participant.clone(), r))
+        .collect();
+        let pids: Vec<String> = ["a::ok", "a::sg", "a::ko", "a::vieux", "a::jamais"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        assert_eq!(
+            counts_from_known(&pids, &known, now, max_age),
+            (1, 2, 1),
+            "l'incomplet (a::sg) doit rejoindre les échecs, pas les résolus"
+        );
+    }
 
     #[test]
     fn sha256_hex_valeurs_connues() {
