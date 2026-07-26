@@ -114,6 +114,27 @@ l'auteur du plan qui le contrôle avant transmission, un comité de pilotage, le
 14. **Écart en points** dans la répartition (`+4,4 pt` en or si sur-servie,
     `−1,6 pt` en ambre si sous-servie), pour rendre la comparaison actionnable.
 
+### Décision prise pendant la rédaction du plan
+
+15. **Les avertissements sont dérivés par le rapport lui-même.** Constat : le
+    site d'appel passe `avertissements: &[]` (`commands.rs:1461`) et les
+    avertissements produits par l'allocation ne sont **jamais persistés** dans
+    `PlanMeta` — la section existe, elle est testée, et elle ne s'affiche
+    jamais en production. Plutôt que styliser une boîte vide, `render` calcule
+    ses propres avertissements à partir de ce qu'il a déjà :
+
+    - une plateforme du pool sans **aucun** compte planifié ;
+    - un jour de cycle du pool couvert par **aucun** run retenu — les comptes
+      de ce JJ sont hors d'atteinte, quelle que soit la cible.
+
+    Le champ `avertissements` de `PlanReportData` **disparaît** : un champ que
+    seul un `&[]` alimente est un mensonge d'interface. Écarté : persister les
+    avertissements de l'allocation dans `PlanMeta`, qui demanderait une
+    migration et périmerait dès que le pool bouge, alors que le rapport
+    recalcule justement sur des données fraîches. Écarté aussi :
+    l'avertissement « fichier d'entrée différent », déjà porté par l'écran Plan
+    de charge (`commands.rs:1128`).
+
 ## Architecture
 
 Deux modules neufs, purs — aucune DB, aucune UI, aucun accès disque — dans la
@@ -184,7 +205,9 @@ pub struct Point { pub date: NaiveDate, pub valeur: u64 }
 pub struct JalonChart { pub date: NaiveDate, pub label: String }
 
 /// Barres empilées (`bas` = premières factures, `haut` = récurrences).
-pub fn barres_empilees(barres: &[Barre], pic: Option<u64>) -> String;
+/// Le repère du pic est tracé sur le maximum de la série : c'est sa
+/// définition, il n'a pas à être passé en paramètre.
+pub fn barres_empilees(barres: &[Barre]) -> String;
 
 /// Aire cumulée en escalier, avec jalons verticaux.
 pub fn aire_cumulee(points: &[Point], jalons: &[JalonChart],
@@ -219,11 +242,22 @@ déploiement.
 
 ### Données à ajouter à `PlanReportData`
 
-`runs: &[RunFacturation]` (les retenus) suffit : le site d'appel
-(`commands.rs:1435`) dispose déjà de `params`, du pool recalculé, des lignes, et
-peut obtenir le calendrier par `calendrier_du_plan(&meta)` — c'est déjà ce que
-fait `plan_runs_compatibles` (`commands.rs:1416`). Les quatre indicateurs neufs
-se dérivent de là, sans nouvelle requête.
+Deux champs s'ajoutent, un disparaît :
+
+```rust
+pub runs: &'a [RunFacturation],          // AJOUT — les runs RETENUS
+pub pool_par_jj: &'a BTreeMap<u8, usize>, // AJOUT — pool par jour de cycle
+// pub avertissements: &'a [String],      // SUPPRIMÉ — cf. décision 15
+```
+
+Le site d'appel (`commands.rs:1435`) dispose déjà de `params`, du pool
+recalculé et des lignes ; il obtient le calendrier par
+`calendrier_du_plan(&meta)` (`commands.rs:1295`), qui rend précisément les runs
+**utilisables** — c'est déjà ce que fait `plan_ajouter`. `pool_par_jj` se
+construit sur place, comme `pool_par_pa`, en une passe sur le pool
+(`CfCandidat` porte `jj` et `pa`). Les quatre indicateurs neufs et les deux
+avertissements dérivés se calculent de là, sans nouvelle requête ni nouveau
+stockage.
 
 ## Styles ajoutés au CSS partagé
 
@@ -275,6 +309,14 @@ les couleurs passent par les variables déjà redéfinies sous
     d'indicateurs).
 12. Les quatre indicateurs neufs affichent les valeurs attendues.
 13. Les tests d'échappement existants restent verts.
+14. `avertit_sur_une_plateforme_du_pool_sans_compte_planifie` — une PA présente
+    au pool et absente du plan produit un avertissement nommant la PA.
+15. `avertit_sur_un_jour_de_cycle_hors_datteinte` — un JJ du pool qu'aucun run
+    retenu ne couvre produit un avertissement nommant le JJ et l'effectif.
+16. `aucun_avertissement_quand_le_plan_couvre_tout` — pas de section
+    Avertissements dans le HTML, plutôt qu'une section vide.
+17. `les_avertissements_derives_sont_echappes` — le nom de plateforme vient
+    d'un SMP : `<script>` ne doit pas ressortir tel quel.
 
 ### Passe de mutation
 
