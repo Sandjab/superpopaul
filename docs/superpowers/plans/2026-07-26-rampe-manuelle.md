@@ -190,7 +190,7 @@ restaure début, fin, nombre de MEP, cible et seed — jamais la rampe.
       Rust avait laissé survivre un mutant** : `reliquat > 0` muté en `>= 0`,
       `plan.volumes` vide muté en « toujours pré-remplir », `pilote: null` muté
       en passe-plat. Un test qui survit à la mutation ne vaut rien.
-- [ ] Parcours GUI (le seul filet que les tests JS ne remplacent pas) : saisir
+- [x] Parcours GUI (le seul filet que les tests JS ne remplacent pas) : saisir
       des volumes, vérifier la timeline et les barres, enregistrer, fermer,
       rouvrir → tout doit revenir.
 
@@ -202,3 +202,18 @@ restaure début, fin, nombre de MEP, cible et seed — jamais la rampe.
 - Répartir une cible depuis l'UI (voir l'écart assumé, tâche 2).
 - Toute modification de `construire_rampe` : le contrat manuel est déjà celui
   qu'on veut, et il est testé.
+
+---
+
+## Validé en application le 2026-07-26
+
+Parcours fait par l'utilisateur. Trois défauts trouvés à l'usage, tous corrigés
+et poussés le même jour — aucun n'était visible en test avant d'être vécu :
+
+1. le mapping des colonnes, vide après une relance, a été redésigné de travers
+   (adressage en jour de cycle) et l'écran est resté muet → avertissement qui
+   nomme la colonne, et mémorisation du mapping par signature d'en-têtes ;
+2. à la réouverture d'un plan manuel, le panneau latéral n'affichait pas ses
+   champs (il ne suivait pas les aperçus) ;
+3. le panneau central affichait zéro partout (les volumes étaient filtrés sur
+   un aperçu qui n'existe pas encore au premier recalcul).
