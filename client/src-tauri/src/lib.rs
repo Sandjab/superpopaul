@@ -1,5 +1,6 @@
 pub mod api;
 pub mod calendrier;
+pub mod charge;
 pub mod commands;
 pub mod config;
 pub mod coverage;
