@@ -33,6 +33,11 @@ pub struct LigneEntree {
     pub resolu: bool,
     /// `output::ctc_status == "ready"` au moment du calcul.
     pub ctc_ready: bool,
+    /// Statut CTC complet : `"ready"` | `"later"` | `"expired"` | `""`.
+    /// `ctc_ready` en est l'aplatissement et reste consommé par
+    /// `construire_pool` et le funnel ; on conserve la chaîne parce que
+    /// « prêt plus tard » et « expiré » ne s'arbitrent pas de la même façon.
+    pub ctc_status: String,
     pub ppf_usable: bool,
     pub in_directory: bool,
     pub resolved_at: i64,
@@ -1128,6 +1133,7 @@ mod tests {
             pa: pa.into(),
             resolu: true,
             ctc_ready: true,
+            ctc_status: "ready".into(),
             ppf_usable: true,
             in_directory: true,
             resolved_at: 1_700_000_000,
@@ -1189,6 +1195,28 @@ mod tests {
         assert!(pool.is_empty(), "un CF non `ppf_usable` ne doit jamais entrer");
         assert_eq!(f.ctc_ready, 1, "il a bien franchi la marche précédente");
         assert_eq!(f.ppf_usable, 0);
+    }
+
+    #[test]
+    fn le_statut_ctc_nest_pas_aplati_en_booleen() {
+        // « later » et « expired » sont deux situations distinctes qu'un booléen
+        // `ctc_ready == false` confond : on arbitre différemment sur l'une et
+        // sur l'autre.
+        let e = LigneEntree {
+            cf: "CF1".into(),
+            participant: "0225:1".into(),
+            jj_brut: "5".into(),
+            raison_sociale: "ACME".into(),
+            pa: "Cegedim".into(),
+            resolu: true,
+            ctc_ready: false,
+            ctc_status: "later".into(),
+            ppf_usable: true,
+            in_directory: true,
+            resolved_at: 0,
+        };
+        assert_eq!(e.ctc_status, "later");
+        assert!(!e.ctc_ready, "« later » n'est pas « ready »");
     }
 
     #[test]

@@ -813,7 +813,8 @@ fn plan_entrees_from_scan(
         // « Résolu » vaut aussi « avec une plateforme identifiée » : les quotas
         // sont par plateforme, un compte sans PA n'y a pas sa place.
         let resolu = r.map(|r| r.api_status == "ok").unwrap_or(false) && !pa.is_empty();
-        let ctc_ready = r.map(|r| output::ctc_status(r, now) == "ready").unwrap_or(false);
+        let ctc_status = r.map(|r| output::ctc_status(r, now)).unwrap_or("").to_string();
+        let ctc_ready = ctc_status == "ready";
         let (ppf_usable, in_directory) = match crate::directory::parse_0225_value(&participant) {
             Some(v) => (
                 ppf.get(&v).map(|f| f.usable).unwrap_or(false),
@@ -833,6 +834,7 @@ fn plan_entrees_from_scan(
             pa,
             resolu,
             ctc_ready,
+            ctc_status,
             ppf_usable,
             in_directory,
             resolved_at: r.map(|r| r.resolved_at).unwrap_or(0),
