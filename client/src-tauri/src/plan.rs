@@ -1658,6 +1658,36 @@ mod tests {
     }
 
     #[test]
+    fn le_signalement_du_pilote_suit_exactement_le_socle() {
+        // Le seuil est écrit DEUX fois : `construire_rampe` pose le socle quand
+        // `budget >= socle`, `rampe_pilote_infaisable` le prédit par
+        // `cible - p*v < suite*v`. Deux expressions séparées qu'il faut garder
+        // alignées — les cas isolés (25 infaisable, 100 faisable) laissaient la
+        // frontière libre, et un `<=` y aurait annoncé un creux pile à la cible
+        // qui tient (40 : volumes [10, 10, 10, 10]). L'invariant se teste seul :
+        // l'avertissement dit vrai si et seulement si un run de la suite descend
+        // sous le niveau du pilote.
+        let rs = runs_n(4);
+        let r = Rampe {
+            forme: Forme::Plate,
+            pilote: Some(Pilote { runs: 2, cf_par_run: 10 }),
+        };
+        // Depuis 1 : à cible nulle il n'y a pas de plan du tout, et signaler un
+        // pilote infaisable désignerait une cause qui n'agit pas — `cible == 0`
+        // est écarté explicitement par la fonction.
+        for cible in 1..=60 {
+            let v = construire_rampe(cible, &rs, &r);
+            let creux = rs[2..].iter().any(|x| v[&x.num] < 10);
+            assert_eq!(
+                rampe_pilote_infaisable(cible, rs.len(), &r),
+                creux,
+                "cible {cible} : volumes {:?}",
+                vols(&v, &rs)
+            );
+        }
+    }
+
+    #[test]
     fn rampe_pilote_inerte_si_volume_ou_duree_nuls() {
         let rs = runs_n(4);
         for p in [
