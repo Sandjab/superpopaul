@@ -970,6 +970,10 @@ fn calculer_plan(
     // de la colonne désignée.
     avertissements.extend(crate::plan::alerte_colonne_jj(&funnel, &cfg.input.jj_column));
     let utilisables = crate::calendrier::runs_utilisables(&runs, debut, fin, &meps);
+    // Après `runs_utilisables` : ce sont ces runs-là que la rampe doit couvrir.
+    // Une rampe invalide ne produit pas d'erreur en aval, elle produit un plan
+    // faux — d'où le refus ici plutôt qu'un avertissement.
+    params.rampe.valider(utilisables.len())?;
 
     // Plan existant : ce qui doit survivre au re-tirage.
     let ancien = store.lock().unwrap().charger_plan()?;

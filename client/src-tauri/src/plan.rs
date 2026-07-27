@@ -217,10 +217,47 @@ pub struct Rampe {
     pub pilote: Option<Pilote>,
 }
 
+impl Rampe {
+    /// Refuse une rampe dont les poids ne seraient pas exploitables sur
+    /// `n_runs` runs. **Refus fort, pas correction** : deviner la raison qu'un
+    /// utilisateur voulait vaudrait mieux ne rien dire, et un plan faux ne se
+    /// voit pas — il ressemble à un plan.
+    ///
+    /// Seule la forme géométrique est en cause : c'est la seule à porter un
+    /// paramètre continu, et `raison.powi(n_runs - 1)` sort de `f64` bien avant
+    /// les valeurs qu'un champ de saisie peut recevoir. La borne n'est pas un
+    /// nombre choisi mais exactement la précondition de `plus_forts_restes`.
+    pub fn valider(&self, n_runs: usize) -> Result<(), String> {
+        let Forme::Geometrique { raison } = self.forme else {
+            return Ok(());
+        };
+        if !(raison.is_finite() && raison > 0.0) {
+            return Err(format!(
+                "rampe géométrique : la raison doit être un nombre strictement positif \
+                 (reçu {raison})"
+            ));
+        }
+        let plus_grand = raison.powi(n_runs.saturating_sub(1) as i32);
+        if !plus_grand.is_finite() {
+            return Err(format!(
+                "rampe géométrique : la raison {raison} est trop grande pour {n_runs} \
+                 Runs de Facturation — les volumes ne sont plus calculables (réduis la \
+                 raison)"
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// Répartit `total` proportionnellement aux poids, par plus forts restes.
 /// La somme rendue est **exactement** `total`. Départage déterministe : reste
 /// fractionnaire décroissant, puis clé croissante — sans quoi deux exécutions
 /// identiques pourraient produire deux plans différents.
+///
+/// Le contrat de somme suppose des poids **finis et positifs** : un poids
+/// négatif sature les parts entières à zéro, un poids infini les rend toutes
+/// `NaN`, et la boucle des restes ne rattrape alors qu'une unité par clé.
+/// C'est `Rampe::valider` qui garantit cette précondition en amont.
 pub fn plus_forts_restes(total: usize, poids: &BTreeMap<String, f64>) -> BTreeMap<String, usize> {
     let somme: f64 = poids.values().sum();
     let mut out: BTreeMap<String, usize> = poids.keys().map(|k| (k.clone(), 0)).collect();
@@ -1441,6 +1478,57 @@ mod tests {
         let rs = runs_n(4);
         let v = construire_rampe(100, &rs, &rampe(Forme::Plate));
         assert_eq!(vols(&v, &rs), vec![25, 25, 25, 25]);
+    }
+
+    #[test]
+    fn valider_accepte_une_raison_usuelle() {
+        assert!(rampe(Forme::Geometrique { raison: 1.55 }).valider(12).is_ok());
+        assert!(rampe(Forme::Geometrique { raison: 1.0 }).valider(12).is_ok());
+    }
+
+    #[test]
+    fn valider_refuse_une_raison_non_positive() {
+        // Une raison négative alterne le signe des poids : `plus_forts_restes`
+        // sature les parts à zéro et rend un plan VIDE, sans un mot. Le champ de
+        // l'écran porte un `min`, mais un attribut HTML n'empêche aucune saisie.
+        for mauvaise in [-2.0, 0.0] {
+            let e = rampe(Forme::Geometrique { raison: mauvaise })
+                .valider(4)
+                .expect_err("une raison non positive doit être refusée");
+            assert!(e.contains("raison"), "message : {e}");
+        }
+    }
+
+    #[test]
+    fn valider_refuse_une_raison_qui_deborde() {
+        // `raison.powi(n-1)` sort de f64 : la somme des poids devient infinie,
+        // les parts `NaN`, et la rampe ne place plus qu'un compte par run.
+        let e = rampe(Forme::Geometrique { raison: 1e300 })
+            .valider(6)
+            .expect_err("une raison qui déborde doit être refusée");
+        assert!(e.contains("6"), "le message doit nommer le nombre de runs : {e}");
+    }
+
+    #[test]
+    fn valider_ne_juge_que_la_forme_geometrique() {
+        // Les autres formes n'ont aucun paramètre continu : rien à refuser.
+        assert!(rampe(Forme::Plate).valider(4).is_ok());
+        assert!(rampe(Forme::Lineaire).valider(4).is_ok());
+        assert!(rampe(Forme::Manuelle { volumes: BTreeMap::new() }).valider(4).is_ok());
+    }
+
+    #[test]
+    fn une_rampe_validee_tient_le_contrat_de_somme() {
+        // Le POURQUOI de `valider` : ce qu'elle laisse passer doit répartir la
+        // cible exactement. Les valeurs refusées plus haut donnaient 0 et 6
+        // pour une cible de 100.
+        for raison in [1.0, 1.55, 3.0, 50.0] {
+            let rs = runs_n(6);
+            let r = rampe(Forme::Geometrique { raison });
+            r.valider(rs.len()).expect("raison acceptée");
+            let somme: usize = construire_rampe(100, &rs, &r).values().sum();
+            assert_eq!(somme, 100, "raison {raison}");
+        }
     }
 
     #[test]
