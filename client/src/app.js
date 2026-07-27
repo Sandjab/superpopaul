@@ -2376,14 +2376,19 @@ function planShowTab(t) {
   $("plan-recap").classList.toggle("hidden", t !== "recap");
 }
 
-async function ouvrirPlan() {
-  $("plan-screen").classList.remove("hidden");
-  $("plan-sub").textContent = state.inputPath
-    ? state.inputPath.split(/[\\/]/).pop() : "";
-  // Le mapping a pu changer depuis l'entrée dans l'étape Run (profil chargé,
-  // étape Format revisitée) : on resynchronise avant tout calcul.
-  await pousserConfig();
-  // État persisté : paramètres et calendrier du plan enregistré.
+/** Le plan enregistré n'est relu qu'UNE fois par session. Fermer l'écran ne
+ *  fait que le masquer : tout son état vit encore en mémoire, et le relire à
+ *  chaque ouverture écrasait en silence une saisie que l'utilisateur n'avait
+ *  pas encore générée. C'est l'arrêt de l'application qui fait repartir de la
+ *  dernière génération, pas un aller-retour sur l'écran.
+ *
+ *  Le drapeau est posé AVANT la lecture : une lecture en échec est annoncée
+ *  par son bandeau, et la réessayer à l'ouverture suivante risquerait
+ *  d'effacer ce qui aurait été saisi entre-temps. */
+let planRelu = false;
+
+/** Restaure paramètres et calendrier du plan enregistré. */
+async function hydraterPlan() {
   try {
     const enr = await invoke("plan_load");
     if (enr) {
@@ -2423,7 +2428,19 @@ async function ouvrirPlan() {
     renderPlanAside();
     planBanner("warn", String(e));
   }
-  planShowTab("param");
+}
+
+async function ouvrirPlan() {
+  $("plan-screen").classList.remove("hidden");
+  $("plan-sub").textContent = state.inputPath
+    ? state.inputPath.split(/[\\/]/).pop() : "";
+  // Le mapping a pu changer depuis l'entrée dans l'étape Run (profil chargé,
+  // étape Format revisitée) : on resynchronise avant tout calcul.
+  await pousserConfig();
+  if (!planRelu) { planRelu = true; await hydraterPlan(); }
+  // L'onglet où on était, pas « Paramètres » d'office : revenir sur l'écran
+  // n'est pas le rouvrir.
+  planShowTab(plan.tab);
   await rechargerRecap();
   planRecalc();
 }
