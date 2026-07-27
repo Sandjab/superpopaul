@@ -1832,8 +1832,18 @@ function lignesFiltrees() {
   return out;
 }
 
+/** Champ de recherche du récapitulatif, remplacé à chaque rendu — mémorisé pour
+ *  savoir s'il avait le focus avant de l'être. */
+let champRecherche = null;
+
 function renderPlanRecap() {
   const box = $("plan-recap");
+  // La recherche déclenche elle-même le rendu qui détruit son champ. Le panneau
+  // latéral règle le cas en ne se reconstruisant pas pendant une saisie
+  // (`suivreApercuDansLePanneau`) ; ici c'est impossible, le rendu EST le
+  // filtrage. On rend donc le focus au champ reconstruit : sans lui, la lettre
+  // suivante tombe dans le vide et la recherche repart de zéro à chaque frappe.
+  const cherchait = champRecherche !== null && document.activeElement === champRecherche;
   if (!plan.lignes.length) {
     box.replaceChildren(h("p", { class: "muted" }, "Aucun plan enregistré. Génère-le depuis l'onglet Paramétrage."));
     return;
@@ -1851,7 +1861,8 @@ function renderPlanRecap() {
     selectFiltre("pa", "Toutes les plateformes", uniques("pa")),
     selectFiltre("origine", "Toutes origines", ["auto", "couverture", "manuel"]),
     selectFiltre("etat", "Tous états", ["eligible", "ctc_non_pret", "ppf_non_utilisable", "absent_du_fichier", "retire"]),
-    h("input", { class: "grow", type: "search", placeholder: "Rechercher un compte, un adressage, une raison sociale…",
+    champRecherche = h("input", { class: "grow", type: "search", value: plan.filtres.q,
+      placeholder: "Rechercher un compte, un adressage, une raison sociale…",
       oninput: (e) => { plan.filtres.q = e.target.value; renderPlanRecap(); } }));
 
   const visibles = lignesFiltrees();
@@ -1921,6 +1932,7 @@ function renderPlanRecap() {
     noeuds.push(h("p", { class: "muted", style: "text-align:center;font-size:12.5px" },
       `… ${fmtN(visibles.length - PLAFOND)} ligne(s) supplémentaire(s) non affichée(s) — affine les filtres.`));
   box.replaceChildren(...noeuds);
+  if (cherchait) champRecherche.focus();
 }
 
 // --- Modales de retouche -----------------------------------------------------
