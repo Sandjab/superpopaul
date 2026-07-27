@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Maquette — annulation du retrait &amp; traitement en cours</title>
+<style>
+/* Palette « Bleu nuit & or » — reprise à l'identique des maquettes précédentes
+   et de styles.css. Aucun ton nouveau n'est introduit par ce lot. */
+:root {
+  --bg: #0e1524; --card: #172136; --border: #2b3752;
+  --fg: #eae9e2; --muted: #939cb4;
+  --green: #4cc268; --gold: #d9a83f; --gold-hover: #e6bb5c; --on-gold: #241a02;
+  --amber: #e0873a; --red: #e5534b;
+  --pid: #e8e4d8;
+  --green-later: #2f8050;
+  --btn2: #1b2740; --track: #223050;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 14px/1.5 -apple-system, "Segoe UI", system-ui, sans-serif;
+  padding: 28px 32px 64px;
+}
+h1 { font-size: 20px; font-weight: 600; margin: 0 0 4px; }
+h2 {
+  font-size: 15px; font-weight: 600; margin: 38px 0 6px;
+  padding-top: 18px; border-top: 1px solid var(--border);
+}
+h3 { font-size: 13px; font-weight: 600; margin: 20px 0 8px; color: var(--muted); }
+p.intro { color: var(--muted); margin: 0 0 8px; max-width: 76ch; }
+p.note {
+  color: var(--muted); font-size: 12.5px; margin: 8px 0 0; max-width: 82ch;
+  border-left: 2px solid var(--border); padding-left: 12px;
+}
+p.note b { color: var(--fg); }
+
+button {
+  background: var(--btn2); color: var(--fg); border: 1px solid var(--border);
+  border-radius: 6px; padding: 5px 14px; cursor: pointer; font: inherit;
+}
+button:hover:not(:disabled) { border-color: var(--gold); }
+button:disabled { opacity: .45; cursor: default; }
+.btn-primary { background: var(--gold); border-color: var(--gold-hover); color: var(--on-gold); font-weight: 600; }
+.btn-primary:disabled { background: var(--btn2); color: var(--muted); border-color: var(--border); }
+.btn-danger { border-color: var(--red); color: var(--red); }
+.btn-ghost { background: transparent; border-color: transparent; color: var(--muted); }
+input, select, textarea {
+  background: var(--bg); color: var(--fg); border: 1px solid var(--border);
+  border-radius: 6px; padding: 5px 8px; font: inherit;
+}
+
+/* --- classes reprises telles quelles de styles.css ------------------------ */
+.plan-selbar {
+  display: flex; gap: 8px; align-items: center; background: var(--card);
+  border: 1px solid var(--border); border-radius: 8px; padding: 7px 12px;
+  margin-bottom: 10px; font-size: 13px;
+}
+.plan-selbar b { color: var(--gold); }
+.plan-selbar .spacer { flex: 1; }
+table.plan-data { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 13px; }
+table.plan-data th { font-size: 12px; color: var(--muted); font-weight: 600; text-align: left; padding: 4px 8px; }
+table.plan-data td { padding: 4px 8px; border-top: 1px solid var(--border); }
+table.plan-data td.n { text-align: right; }
+table.plan-data td.addr { color: var(--pid); }
+table.plan-data tr.sel { background: rgba(217, 168, 63, .09); }
+table.plan-data tr.removed { opacity: .55; }
+table.plan-data tr.removed td.cf { text-decoration: line-through; }
+.tag {
+  font-size: 10.5px; font-weight: 600; letter-spacing: .3px; text-transform: uppercase;
+  border-radius: 20px; padding: 1px 8px; border: 1px solid var(--border);
+  color: var(--muted); white-space: nowrap;
+}
+.tag.frozen  { color: var(--green-later); border-color: var(--green-later); }
+.tag.pinned  { color: var(--pid);         border-color: var(--pid); }
+.tag.removed { color: var(--red);         border-color: var(--red); }
+.motif { color: var(--muted); font-style: italic; font-size: 11.5px; }
+.danger-note { background: #331518; color: var(--red); border-radius: 8px; padding: 9px 12px; font-size: 12.5px; margin: 10px 0; }
+.field-hint { color: var(--muted); font-size: 12.5px; margin: 6px 0; }
+.modal {
+  background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+  padding: 18px 20px; max-width: 460px;
+}
+.modal h4 { margin: 0 0 10px; font-size: 15px; font-weight: 600; }
+.modal .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
+#plan-foot {
+  display: flex; gap: 12px; align-items: center; border-top: 1px solid var(--border);
+  font-size: 12.5px; padding: 10px 0 0; color: var(--muted);
+}
+#plan-foot .spacer { flex: 1; }
+.plan-kv { display: flex; gap: 6px 22px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); margin-bottom: 10px; }
+.plan-kv b { color: var(--fg); font-size: 14px; margin-right: 4px; }
+
+/* --- NOUVEAU dans ce lot -------------------------------------------------- */
+/* Aperçu en recalcul : les chiffres affichés ne correspondent plus à la saisie.
+   L'atténuation le DIT, là où une barre de progression laisserait croire
+   qu'ils sont à jour. Transition longue à l'aller, instantanée au retour :
+   l'arrivée des vrais chiffres doit être franche. */
+.perime { opacity: .42; transition: opacity .18s ease-in; }
+/* Le mot d'attente du pied, discret et à place fixe — il ne pousse rien. */
+.calcul { color: var(--gold); }
+.calcul::after {
+  content: "…"; display: inline-block; width: 1.1em; text-align: left;
+  animation: points 1.1s steps(4, end) infinite;
+}
+@keyframes points { 0% { content: "" } 25% { content: "." } 50% { content: ".." } 75% { content: "…" } }
+
+/* --- échafaudage de la maquette (jamais livré) ---------------------------- */
+.scene { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px; margin: 10px 0; }
+.duo { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }
+.duo > div > .lbl { font-size: 11px; text-transform: uppercase; letter-spacing: .4px; color: var(--muted); margin-bottom: 6px; }
+@media (max-width: 900px) { .duo { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+
+<h1>Annulation du retrait &amp; traitement en cours</h1>
+<p class="intro">
+  Maquette de deux lots indépendants sur l'écran Plan de charge. Aucune couleur ni
+  aucun composant nouveau : tout reprend la palette et les conventions déjà en place.
+  Les états « avant / pendant » sont montrés côte à côte.
+</p>
+
+<!-- ==================================================================== -->
+<h2>1 · Réactiver un compte retiré</h2>
+<p class="intro">
+  La fenêtre de retrait promet « Le retrait est annulable », mais aucune action ne
+  l'annule : la commande existe côté moteur et n'est appelée nulle part.
+  Elle rejoint Déplacer et Retirer dans la barre de sélection.
+</p>
+
+<h3>Barre de sélection — sélection entièrement retirée</h3>
+<div class="scene">
+  <div class="plan-selbar">
+    <span><b>3</b> compte(s) sélectionné(s)</span>
+    <span class="spacer"></span>
+    <button>Déplacer vers un run…</button>
+    <button class="btn-danger">Retirer…</button>
+    <button>Réactiver 3 retiré(s)…</button>
+    <button class="btn-ghost">Tout désélectionner</button>
+  </div>
+  <table class="plan-data">
+    <tr><th></th><th>Compte</th><th>Adressage</th><th class="n">JJ</th><th>MEP</th><th>Origine</th><th>État</th></tr>
+    <tr class="removed sel"><td><input type="checkbox" checked></td><td class="cf">40218855</td><td class="addr">552100554</td><td class="n">5</td><td>2</td><td><span class="tag">allouée</span></td>
+      <td><span class="tag removed">retiré</span><div class="motif">migration PDP repoussée par le client</div></td></tr>
+    <tr class="removed sel"><td><input type="checkbox" checked></td><td class="cf">40219003</td><td class="addr">443061841</td><td class="n">5</td><td>2</td><td><span class="tag">allouée</span></td>
+      <td><span class="tag removed">retiré</span><div class="motif">compte clôturé</div></td></tr>
+    <tr class="removed sel"><td><input type="checkbox" checked></td><td class="cf">40219117</td><td class="addr">380129866</td><td class="n">12</td><td>1</td><td><span class="tag pinned">📌 manuelle</span></td>
+      <td><span class="tag removed">retiré</span><div class="motif">incident connu, à retenter</div></td></tr>
+  </table>
+</div>
+
+<h3>Sélection mixte — le libellé compte ce sur quoi l'action portera</h3>
+<div class="scene">
+  <div class="plan-selbar">
+    <span><b>5</b> compte(s) sélectionné(s)</span>
+    <span class="spacer"></span>
+    <button>Déplacer vers un run…</button>
+    <button class="btn-danger">Retirer…</button>
+    <button>Réactiver 2 retiré(s)…</button>
+    <button class="btn-ghost">Tout désélectionner</button>
+  </div>
+  <p class="note">
+    Cinq comptes sélectionnés, deux seulement sont retirés. Le bouton n'agit que sur
+    ces deux-là et <b>le dit dans son libellé</b> plutôt que de refuser la sélection :
+    filtrer sur « retiré » n'est pas toujours le geste, et proposer une action qui
+    échoue ensuite serait hostile. <b>Aucun retiré dans la sélection ⇒ pas de bouton</b>,
+    comme la barre entière disparaît sans sélection.
+  </p>
+</div>
+
+<h3>Confirmation</h3>
+<div class="duo">
+  <div>
+    <div class="lbl">Cas courant</div>
+    <div class="modal">
+      <h4>Réactiver 2 compte(s)</h4>
+      <p class="field-hint">
+        Ils redeviennent livrables et repartiront dans les fichiers de leur MEP.
+        Une régénération pourra les replacer sur un autre run.
+      </p>
+      <p class="field-hint">⚠ Le motif du retrait sera perdu.</p>
+      <div class="actions">
+        <button class="btn-ghost">Annuler</button>
+        <button class="btn-primary">Réactiver</button>
+      </div>
+    </div>
+  </div>
+  <div>
+    <div class="lbl">Une MEP déjà livrée est touchée</div>
+    <div class="modal">
+      <h4>Réactiver 2 compte(s)</h4>
+      <p class="field-hint">
+        Ils redeviennent livrables et repartiront dans les fichiers de leur MEP.
+        Une régénération pourra les replacer sur un autre run.
+      </p>
+      <div class="danger-note">
+        ⚠ 1 compte(s) appartiennent à une MEP gelée (2026-09-01). Son fichier a déjà
+        été transmis : il changera au prochain enregistrement.
+      </div>
+      <p class="field-hint">⚠ Le motif du retrait sera perdu.</p>
+      <div class="actions">
+        <button class="btn-ghost">Annuler</button>
+        <button class="btn-primary">Réactiver</button>
+      </div>
+    </div>
+  </div>
+</div>
+<p class="note">
+  Même avertissement que la fenêtre de retrait, mot pour mot : les deux gestes
+  changent un fichier déjà transmis, ils doivent le dire de la même façon. La
+  confirmation est <b>toujours</b> présentée, même sans MEP gelée — un seul chemin,
+  et c'est l'occasion de prévenir que le motif disparaît, ce qui rend l'action
+  moins réversible qu'elle n'en a l'air.
+</p>
+
+<!-- ==================================================================== -->
+<h2>2 · Traitement en cours</h2>
+
+<h3>Actions explicites — le bouton parle et se désactive</h3>
+<div class="duo">
+  <div>
+    <div class="lbl">Au repos</div>
+    <div class="scene">
+      <button class="btn-primary" style="width:100%">Générer le plan</button>
+      <p class="field-hint">Conservés à l'identique : MEP gelées, retouches manuelles et comptes retirés.</p>
+    </div>
+  </div>
+  <div>
+    <div class="lbl">Pendant le traitement</div>
+    <div class="scene">
+      <button class="btn-primary" style="width:100%" disabled>Génération en cours<span class="calcul" style="color:inherit"></span></button>
+      <p class="field-hint">Conservés à l'identique : MEP gelées, retouches manuelles et comptes retirés.</p>
+    </div>
+  </div>
+</div>
+<p class="note">
+  C'est exactement la convention déjà en place pour l'API (« test en cours… »,
+  « calibration en cours… »). L'indication est <b>là où le regard vient de cliquer</b>,
+  et le bouton désactivé sert de garde de ré-entrance : plus de double génération.
+  Même traitement pour <b>Rapport du plan</b>, <b>Ajouter au run</b>, <b>Déplacer</b>,
+  <b>Retirer</b> et <b>Réactiver</b>. Le bouton revient à son libellé quoi qu'il arrive,
+  succès comme erreur.
+</p>
+
+<h3>Aperçu automatique — les chiffres se marquent périmés</h3>
+<div class="duo">
+  <div>
+    <div class="lbl">Chiffres à jour</div>
+    <div class="scene">
+      <div class="plan-kv">
+        <span><b>1 000</b> planifiés</span><span><b>4 812</b> éligibles</span>
+        <span><b>0</b> gelés</span><span><b>3</b> épinglés</span>
+      </div>
+      <table class="plan-data">
+        <tr><th>Run</th><th>Date</th><th class="n">Visé</th><th class="n">Stock</th><th class="n">Placés</th></tr>
+        <tr><td>3320</td><td>11/08</td><td class="n">40</td><td class="n">712</td><td class="n">40</td></tr>
+        <tr><td>3327</td><td>10/09</td><td class="n">80</td><td class="n">689</td><td class="n">80</td></tr>
+      </table>
+      <div id="plan-foot">
+        <button class="btn-ghost">← Retour au Run</button>
+        <span class="spacer"></span>
+        <span>Plan enregistré depuis brm2607.csv</span>
+      </div>
+    </div>
+  </div>
+  <div>
+    <div class="lbl">Recalcul en cours</div>
+    <div class="scene">
+      <div class="plan-kv perime">
+        <span><b>1 000</b> planifiés</span><span><b>4 812</b> éligibles</span>
+        <span><b>0</b> gelés</span><span><b>3</b> épinglés</span>
+      </div>
+      <table class="plan-data perime">
+        <tr><th>Run</th><th>Date</th><th class="n">Visé</th><th class="n">Stock</th><th class="n">Placés</th></tr>
+        <tr><td>3320</td><td>11/08</td><td class="n">40</td><td class="n">712</td><td class="n">40</td></tr>
+        <tr><td>3327</td><td>10/09</td><td class="n">80</td><td class="n">689</td><td class="n">80</td></tr>
+      </table>
+      <div id="plan-foot">
+        <button class="btn-ghost">← Retour au Run</button>
+        <span class="spacer"></span>
+        <span class="calcul">calcul</span>
+        <span>Plan enregistré depuis brm2607.csv</span>
+      </div>
+    </div>
+  </div>
+</div>
+<p class="note">
+  L'aperçu refait un scan CSV complet et une jointure SQLite <b>à chaque changement de
+  paramètre</b> (anti-rebond de 250 ms). Le problème n'est pas qu'une tâche tourne,
+  c'est que <b>les chiffres lus ne correspondent plus à ce qu'on vient de saisir</b> :
+  l'atténuation le dit, une barre de progression laisserait croire l'inverse.
+</p>
+<p class="note">
+  Ce que l'atténuation <b>ne touche pas</b> : les champs de saisie du panneau latéral.
+  C'est la frappe qui déclenche le recalcul — griser ce qu'on est en train de régler
+  serait absurde, et la saisie ne doit jamais être interrompue.
+  Le mot « calcul… » occupe une place fixe du pied : il n'apparaît et ne disparaît
+  sans rien pousser.
+</p>
+
+<!-- ==================================================================== -->
+<h2>Ce que cette maquette n'introduit pas</h2>
+<p class="note">
+  Aucune couleur nouvelle, aucun composant nouveau, aucun voile bloquant.
+  Pas de barre de progression sur l'écran du plan : contrairement à l'annuaire et au
+  PPF, aucune de ces commandes n'émet d'avancement — une barre y serait décorative.
+  Pas d'historique des retraits : réactiver efface le motif, et le conserver
+  demanderait une table que rien ne réclame aujourd'hui.
+</p>
+
+</body>
+</html>
