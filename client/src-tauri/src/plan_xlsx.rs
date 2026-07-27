@@ -45,6 +45,9 @@ pub struct LigneExport {
     pub raison_sociale: String,
     pub ctc_status: String,
     pub ppf_usable: bool,
+    /// Plateforme. Portée par le plan autant que par le fichier : un compte
+    /// planifié que le fichier ne contient plus garde donc la sienne.
+    pub pa: String,
     pub appartenance: Appartenance,
 }
 
@@ -84,6 +87,7 @@ pub fn lignes(entrees: &[LigneEntree], plan: &[LignePlan]) -> Vec<LigneExport> {
                 raison_sociale: e.raison_sociale.clone(),
                 ctc_status: e.ctc_status.clone(),
                 ppf_usable: e.ppf_usable,
+                pa: e.pa.clone(),
                 appartenance,
             }
         })
@@ -105,13 +109,14 @@ pub fn lignes(entrees: &[LigneEntree], plan: &[LignePlan]) -> Vec<LigneExport> {
         raison_sociale: String::new(),
         ctc_status: String::new(),
         ppf_usable: false,
+        pa: l.pa.clone(),
         appartenance: appartenance_de(l),
     }));
     out
 }
 
 /// En-têtes du classeur, dans l'ordre des colonnes.
-const ENTETES: [&str; 8] = [
+const ENTETES: [&str; 9] = [
     "N° de run",
     "N° de CF",
     "JJ",
@@ -119,6 +124,7 @@ const ENTETES: [&str; 8] = [
     "Raison sociale",
     "Statut CTC",
     "PPF usable",
+    "Plateforme",
     "Dans le plan",
 ];
 
@@ -146,7 +152,7 @@ pub fn ecrire(chemin: &Path, lignes: &[LigneExport]) -> Result<(), String> {
 
     for (n, l) in lignes.iter().enumerate() {
         let r = n as u32 + 1;
-        let cellules: [&str; 8] = [
+        let cellules: [&str; 9] = [
             &l.run,
             &l.cf,
             &l.jj,
@@ -154,6 +160,7 @@ pub fn ecrire(chemin: &Path, lignes: &[LigneExport]) -> Result<(), String> {
             &l.raison_sociale,
             &l.ctc_status,
             if l.ppf_usable { "true" } else { "false" },
+            &l.pa,
             l.appartenance.libelle(),
         ];
         for (c, v) in cellules.iter().enumerate() {
@@ -168,7 +175,7 @@ pub fn ecrire(chemin: &Path, lignes: &[LigneExport]) -> Result<(), String> {
     feuille
         .autofilter(0, 0, lignes.len() as u32, ENTETES.len() as u16 - 1)
         .map_err(|e| format!("filtres : {e}"))?;
-    for (i, largeur) in [12.0, 16.0, 6.0, 30.0, 38.0, 12.0, 12.0, 14.0].iter().enumerate() {
+    for (i, largeur) in [12.0, 16.0, 6.0, 30.0, 38.0, 12.0, 12.0, 18.0, 14.0].iter().enumerate() {
         feuille
             .set_column_width(i as u16, *largeur)
             .map_err(|e| format!("largeur : {e}"))?;
@@ -203,8 +210,8 @@ mod tests {
         }
     }
 
-    /// Décode le classeur en cellules texte, en-tête compris, huit colonnes par
-    /// ligne. Les valeurs d'un `.xlsx` ne vivent pas dans la feuille mais dans
+    /// Décode le classeur en cellules texte, en-tête compris, une colonne par
+    /// en-tête. Les valeurs d'un `.xlsx` ne vivent pas dans la feuille mais dans
     /// `xl/sharedStrings.xml` : `sheet1.xml` ne porte que des index, et une
     /// cellule vide n'y est pas écrite du tout. Sans ce décodage, un test ne
     /// peut pas voir qu'une colonne a changé de place.
@@ -243,7 +250,7 @@ mod tests {
                 let mut cols = vec![String::new(); ENTETES.len()];
                 for bloc in ligne.split("<c r=\"").skip(1) {
                     let (reference, reste) = bloc.split_once('"').expect("référence de cellule");
-                    // Huit colonnes : la référence tient sur une lettre (A..H).
+                    // Neuf colonnes : la référence tient sur une lettre (A..I).
                     let col = reference.as_bytes()[0] as usize - b'A' as usize;
                     let index: usize = reste
                         .split_once("<v>")
@@ -444,13 +451,41 @@ mod tests {
         assert_eq!(table[0], ENTETES, "colonnes dans l'ordre annoncé");
         assert_eq!(
             table[1],
-            ["R1", "CF1", "5", "12345678900012", "ACME", "ready", "true", "oui"]
+            ["R1", "CF1", "5", "12345678900012", "ACME", "ready", "true", "Cegedim", "oui"]
         );
         assert_eq!(
             table[2],
-            ["R2", "CF2", "12", "12345678900012", "ACME", "later", "true", "retiré"]
+            ["R2", "CF2", "12", "12345678900012", "ACME", "later", "true", "Cegedim", "retiré"]
         );
         std::fs::remove_file(&chemin).ok();
+    }
+
+    #[test]
+    fn la_plateforme_suit_le_compte_meme_hors_du_plan() {
+        // Le classeur sert à recouper la répartition par plateforme du rapport.
+        // Un compte du fichier écarté du plan doit donc porter SA plateforme —
+        // sans quoi le total par plateforme du classeur ne tombe jamais juste.
+        let mut hors_plan = entree("CF9", "5", "ready");
+        hors_plan.pa = "Esker".into();
+
+        let l = lignes(&[hors_plan], &[]);
+
+        assert_eq!(l[0].pa, "Esker", "la plateforme vient de la ligne d'entrée");
+        assert_eq!(l[0].appartenance, Appartenance::Non, "montage du test");
+    }
+
+    #[test]
+    fn un_compte_absent_du_fichier_garde_la_plateforme_du_plan() {
+        // Ses colonnes issues du FICHIER restent vides — il n'y a plus rien à en
+        // dire. La plateforme, elle, est portée par le plan lui-même, au même
+        // titre que son run : l'effacer perdrait une information qu'on a.
+        let mut planifiee = ligne_plan("CF7", "R3");
+        planifiee.pa = "Freedz".into();
+
+        let l = lignes(&[], &[planifiee]);
+
+        assert_eq!(l[0].pa, "Freedz", "la plateforme du plan doit survivre");
+        assert_eq!(l[0].raison_sociale, "", "montage : les colonnes du fichier restent vides");
     }
 
     #[test]
