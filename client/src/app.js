@@ -1266,6 +1266,18 @@ function planBanner(kind, texte) {
 
 function fmtN(n) { return (n ?? 0).toLocaleString("fr-FR"); }
 
+/** Annonce les fichiers d'une génération précédente retirés du répertoire de
+ *  livraison. Le backend fait le ménage — un fichier de MEP périmé peut être
+ *  transmis par erreur — mais ce qu'on efface d'un répertoire de livraison ne
+ *  s'efface pas en silence. Seul le nom est montré : le chemin complet
+ *  noierait le message, et le répertoire est celui qu'on vient d'écrire. */
+function signalerObsoletes(obsoletes) {
+  const noms = (obsoletes ?? []).map((c) => c.split(/[/\\]/).pop());
+  if (!noms.length) return;
+  planBanner("info",
+    `${noms.length} fichier(s) d'une génération précédente supprimé(s) : ${noms.join(", ")}`);
+}
+
 /** Paramètres envoyés au moteur. Forme exacte de PlanParams (plan.rs). */
 function planParams() {
   const forme = $("plan-forme")?.value ?? "plate";
@@ -1962,8 +1974,8 @@ async function ouvrirDeplacer() {
       h("button", { class: "btn-ghost", onclick: closeModal }, "Annuler"),
       h("button", { class: "btn-primary", onclick: async () => {
         try {
-          await invoke("plan_deplacer", { cfs, runNum: sel.value });
-          closeModal(); plan.sel.clear(); await rechargerRecap();
+          const obsoletes = await invoke("plan_deplacer", { cfs, runNum: sel.value });
+          closeModal(); plan.sel.clear(); signalerObsoletes(obsoletes); await rechargerRecap();
         } catch (e) { planBanner("error", String(e)); closeModal(); }
       } }, "Déplacer")));
 }
@@ -1975,8 +1987,8 @@ function ouvrirRetrait() {
     placeholder: "Ex. : migration PDP repoussée par le client, compte clôturé, incident connu…" });
   const btn = h("button", { class: "btn-danger", onclick: async () => {
     try {
-      await invoke("plan_retirer", { cfs, motif: zone.value });
-      closeModal(); plan.sel.clear(); await rechargerRecap();
+      const obsoletes = await invoke("plan_retirer", { cfs, motif: zone.value });
+      closeModal(); plan.sel.clear(); signalerObsoletes(obsoletes); await rechargerRecap();
     } catch (e) { planBanner("error", String(e)); closeModal(); }
   } }, `Retirer ${cfs.length} compte(s)`);
   btn.disabled = true;
@@ -2152,8 +2164,8 @@ async function ouvrirAjoutRun(run, jour) {
       h("button", { class: "btn-primary", onclick: async () => {
         if (!choisis.size) return;
         try {
-          await invoke("plan_ajouter", { cfs: [...choisis], runNum: run.num });
-          closeModal(); await rechargerRecap();
+          const obsoletes = await invoke("plan_ajouter", { cfs: [...choisis], runNum: run.num });
+          closeModal(); signalerObsoletes(obsoletes); await rechargerRecap();
         } catch (e) { planBanner("error", String(e)); closeModal(); }
       } }, `Ajouter au run ${run.num}`)));
 
@@ -2203,6 +2215,7 @@ async function genererPlan() {
     plan.fichiers = r.fichiers;
     plan.genere = true;
     planBanner(null);
+    signalerObsoletes(r.obsoletes);
     renderPlanAside();
     renderPlanParam();
     await rechargerRecap();

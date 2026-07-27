@@ -1074,7 +1074,7 @@ pub async fn plan_generate(
             params_yaml: params.vers_yaml()?,
         };
         store.lock().unwrap().ecrire_plan(&lignes, &meta)?;
-        let fichiers = ecrire_fichiers_mep(&input, &cfg, &lignes)?;
+        let (fichiers, obsoletes) = ecrire_fichiers_mep(&input, &cfg, &lignes)?;
         // Le classeur du périmètre part avec les fichiers de livraison : ce
         // qu'on transmet et ce qui le documente restent ainsi cohérents.
         // `ecrire_fichiers_mep` a déjà créé le répertoire de sortie.
@@ -1082,7 +1082,7 @@ pub async fn plan_generate(
             &chemin_classeur(&input, &cfg.output.dir),
             &crate::plan_xlsx::lignes(&entrees, &lignes),
         )?;
-        Ok(PlanGeneration { apercu, fichiers })
+        Ok(PlanGeneration { apercu, fichiers, obsoletes })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1092,6 +1092,10 @@ pub async fn plan_generate(
 pub struct PlanGeneration {
     pub apercu: PlanApercu,
     pub fichiers: Vec<FichierMep>,
+    /// Fichiers d'une génération précédente supprimés au passage. Remontés
+    /// plutôt qu'effacés en silence : ce qu'on retire d'un répertoire de
+    /// livraison se dit.
+    pub obsoletes: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -1101,14 +1105,41 @@ pub struct FichierMep {
     pub comptes: usize,
 }
 
+/// Fichiers par MEP d'une génération précédente : ceux qui portent le motif de
+/// CETTE souche sans faire partie du lot qu'on vient d'écrire.
+///
+/// Le motif est délibérément strict — préfixe `<souche>_plan_mep_` ET
+/// extension `.txt`. Il épargne les autres livrables du plan, qui partagent la
+/// souche et le mot « plan » (`_plan_comptes.xlsx`, `_plan.html`), ainsi que
+/// les fichiers d'une autre souche livrés dans le même répertoire. Décider ici,
+/// sur des noms, plutôt qu'au fil de la boucle d'écriture : ce qu'on efface se
+/// prouve sans toucher au disque.
+fn fichiers_obsoletes<'a>(
+    presents: &'a [String],
+    ecrits: &HashSet<String>,
+    souche: &str,
+) -> Vec<&'a str> {
+    let prefixe = format!("{souche}_plan_mep_");
+    presents
+        .iter()
+        .filter(|n| n.starts_with(&prefixe) && n.ends_with(".txt") && !ecrits.contains(*n))
+        .map(String::as_str)
+        .collect()
+}
+
 /// Un fichier par MEP, **cumulatif** (MEP 1..n), comptes nus triés, un par
 /// ligne. Les lignes retirées sont exclues de TOUS les fichiers, y compris sur
 /// une MEP gelée — c'est l'objet même du retrait.
+///
+/// Rend les fichiers écrits et **les obsolètes supprimés** : un fichier de
+/// livraison périmé dans un répertoire de livraison est un piège actif, il peut
+/// être transmis. Ils ne portent jamais une MEP livrée — `plan::regenerer`
+/// refuse toute régénération où une MEP gelée aurait disparu ou changé de date.
 fn ecrire_fichiers_mep(
     input: &Path,
     cfg: &Config,
     lignes: &[crate::plan::LignePlan],
-) -> Result<Vec<FichierMep>, String> {
+) -> Result<(Vec<FichierMep>, Vec<String>), String> {
     let dir = resolved_out_dir(input, &cfg.output.dir);
     std::fs::create_dir_all(&dir).map_err(|e| format!("création {dir:?} : {e}"))?;
     let souche = input
@@ -1125,6 +1156,7 @@ fn ecrire_fichiers_mep(
     meps.dedup();
 
     let mut out = Vec::new();
+    let mut ecrits: HashSet<String> = HashSet::new();
     for (mep_id, mep_date) in meps {
         let mut comptes: Vec<&str> = lignes
             .iter()
@@ -1133,17 +1165,33 @@ fn ecrire_fichiers_mep(
             .collect();
         comptes.sort_unstable();
         comptes.dedup();
-        let chemin = dir.join(format!("{souche}_plan_mep_{mep_id}_{mep_date}.txt"));
+        let nom = format!("{souche}_plan_mep_{mep_id}_{mep_date}.txt");
+        let chemin = dir.join(&nom);
         let mut contenu = comptes.join("\n");
         contenu.push('\n');
         std::fs::write(&chemin, contenu).map_err(|e| format!("écriture {chemin:?} : {e}"))?;
+        ecrits.insert(nom);
         out.push(FichierMep {
             chemin: chemin.display().to_string(),
             mep_id,
             comptes: comptes.len(),
         });
     }
-    Ok(out)
+
+    // Ménage APRÈS écriture : si une écriture échoue, on s'arrête sans avoir
+    // rien effacé — mieux vaut un répertoire encombré qu'un répertoire amputé.
+    let presents: Vec<String> = std::fs::read_dir(&dir)
+        .map_err(|e| format!("lecture {dir:?} : {e}"))?
+        .filter_map(|e| Some(e.ok()?.file_name().to_string_lossy().into_owned()))
+        .collect();
+    let mut supprimes = Vec::new();
+    for nom in fichiers_obsoletes(&presents, &ecrits, &souche) {
+        let chemin = dir.join(nom);
+        std::fs::remove_file(&chemin).map_err(|e| format!("suppression {chemin:?} : {e}"))?;
+        supprimes.push(chemin.display().to_string());
+    }
+    supprimes.sort();
+    Ok((out, supprimes))
 }
 
 #[derive(Serialize)]
@@ -1362,15 +1410,18 @@ fn charger_pour_retouche(
 /// d'avant la retouche est pire que pas de classeur. Il oblige à relire le
 /// fichier d'entrée : `plan_xlsx::lignes` le parcourt DANS SON ORDRE, que la
 /// table de hachage d'`entrees_par_cf` ne conserve pas.
+/// Rend les fichiers d'une génération précédente supprimés au passage : un
+/// retrait ou un déplacement peut vider une MEP, et son fichier n'a alors plus
+/// lieu d'être.
 fn sauver_apres_retouche(
     store: &Arc<Mutex<Store>>,
     input: &Path,
     cfg: &Config,
     lignes: &[crate::plan::LignePlan],
     meta: &crate::store::PlanMeta,
-) -> Result<(), String> {
+) -> Result<Vec<String>, String> {
     store.lock().unwrap().ecrire_plan(lignes, meta)?;
-    ecrire_fichiers_mep(input, cfg, lignes)?;
+    let (_, obsoletes) = ecrire_fichiers_mep(input, cfg, lignes)?;
     let entrees = {
         let s = store.lock().unwrap();
         plan_entrees_from_scan(&s, input, cfg, chrono::Utc::now())?
@@ -1378,7 +1429,8 @@ fn sauver_apres_retouche(
     crate::plan_xlsx::ecrire(
         &chemin_classeur(input, &cfg.output.dir),
         &crate::plan_xlsx::lignes(&entrees, lignes),
-    )
+    )?;
+    Ok(obsoletes)
 }
 
 /// Runs et MEP du plan enregistré, tels que la retouche doit les voir.
@@ -1398,7 +1450,7 @@ pub async fn plan_ajouter(
     state: State<'_, AppState>,
     cfs: Vec<String>,
     run_num: String,
-) -> Result<(), String> {
+) -> Result<Vec<String>, String> {
     let cfg = state.current_config()?;
     let input = state.input_path()?;
     let store = state.store.clone();
@@ -1447,7 +1499,7 @@ pub async fn plan_deplacer(
     state: State<'_, AppState>,
     cfs: Vec<String>,
     run_num: String,
-) -> Result<(), String> {
+) -> Result<Vec<String>, String> {
     let cfg = state.current_config()?;
     let input = state.input_path()?;
     let store = state.store.clone();
@@ -1470,7 +1522,7 @@ pub async fn plan_retirer(
     state: State<'_, AppState>,
     cfs: Vec<String>,
     motif: String,
-) -> Result<(), String> {
+) -> Result<Vec<String>, String> {
     let cfg = state.current_config()?;
     let input = state.input_path()?;
     let store = state.store.clone();
@@ -1487,7 +1539,7 @@ pub async fn plan_retirer(
 pub async fn plan_annuler_retrait(
     state: State<'_, AppState>,
     cfs: Vec<String>,
-) -> Result<(), String> {
+) -> Result<Vec<String>, String> {
     let cfg = state.current_config()?;
     let input = state.input_path()?;
     let store = state.store.clone();
@@ -1851,6 +1903,54 @@ mod tests {
             chemin_classeur(Path::new("/data/brm2607.csv"), "/livraison"),
             Path::new("/livraison/brm2607_plan_comptes.xlsx")
         );
+    }
+
+    #[test]
+    fn les_fichiers_du_lot_ne_sont_pas_obsoletes() {
+        let ecrits: HashSet<String> = ["brm_plan_mep_1_2026-09-01.txt".into()].into();
+        let presents = vec!["brm_plan_mep_1_2026-09-01.txt".to_string()];
+        assert!(fichiers_obsoletes(&presents, &ecrits, "brm").is_empty());
+    }
+
+    #[test]
+    fn un_fichier_mep_hors_du_lot_est_obsolete() {
+        // Le cas vécu : `mep_count` réduit, ou une date de MEP décalée. L'ancien
+        // fichier reste, indiscernable des nouveaux — et il porte des comptes
+        // qu'on ne livre plus.
+        let ecrits: HashSet<String> = ["brm_plan_mep_1_2026-09-01.txt".into()].into();
+        let presents = vec![
+            "brm_plan_mep_1_2026-09-01.txt".to_string(),
+            "brm_plan_mep_2_2026-10-01.txt".to_string(),
+        ];
+        assert_eq!(
+            fichiers_obsoletes(&presents, &ecrits, "brm"),
+            ["brm_plan_mep_2_2026-10-01.txt"]
+        );
+    }
+
+    #[test]
+    fn les_autres_livrables_du_plan_sont_epargnes() {
+        // LE test qui empêche la catastrophe : le classeur et le rapport
+        // partagent la souche et le mot « plan ». Les balayer en même temps
+        // détruirait les livrables qu'on vient d'écrire.
+        let presents = vec![
+            "brm_plan_comptes.xlsx".to_string(),
+            "brm_plan.html".to_string(),
+            "brm_enrichi.csv".to_string(),
+            "brm.csv".to_string(),
+        ];
+        assert!(fichiers_obsoletes(&presents, &HashSet::new(), "brm").is_empty());
+    }
+
+    #[test]
+    fn les_fichiers_dune_autre_souche_sont_epargnes() {
+        // Deux fichiers d'entrée peuvent livrer dans le même répertoire : le
+        // plan de l'un ne doit pas emporter celui de l'autre.
+        let presents = vec![
+            "autre_plan_mep_1_2026-09-01.txt".to_string(),
+            "brm2607_plan_mep_1_2026-09-01.txt".to_string(),
+        ];
+        assert!(fichiers_obsoletes(&presents, &HashSet::new(), "brm").is_empty());
     }
 
     /// Un run couvrant les jours de cycle 1 et 5.
