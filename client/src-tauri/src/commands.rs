@@ -678,6 +678,16 @@ fn resolved_out_dir(input: &Path, dir: &str) -> PathBuf {
     }
 }
 
+/// Chemin du classeur du périmètre. **Un seul endroit décide de ce nom** : la
+/// génération et les retouches doivent réécrire LE classeur, pas en semer deux
+/// dont l'un serait périmé sans le dire.
+fn chemin_classeur(input: &Path, dir: &str) -> PathBuf {
+    resolved_out_dir(input, dir).join(format!(
+        "{}_plan_comptes.xlsx",
+        input.file_stem().unwrap_or_default().to_string_lossy()
+    ))
+}
+
 #[tauri::command]
 pub async fn generate_output(state: State<'_, AppState>) -> Result<String, String> {
     let cfg = state.current_config()?;
@@ -1068,11 +1078,10 @@ pub async fn plan_generate(
         // Le classeur du périmètre part avec les fichiers de livraison : ce
         // qu'on transmet et ce qui le documente restent ainsi cohérents.
         // `ecrire_fichiers_mep` a déjà créé le répertoire de sortie.
-        let xlsx = resolved_out_dir(&input, &cfg.output.dir).join(format!(
-            "{}_plan_comptes.xlsx",
-            input.file_stem().unwrap_or_default().to_string_lossy()
-        ));
-        crate::plan_xlsx::ecrire(&xlsx, &crate::plan_xlsx::lignes(&entrees, &lignes))?;
+        crate::plan_xlsx::ecrire(
+            &chemin_classeur(&input, &cfg.output.dir),
+            &crate::plan_xlsx::lignes(&entrees, &lignes),
+        )?;
         Ok(PlanGeneration { apercu, fichiers })
     })
     .await
@@ -1345,8 +1354,14 @@ fn charger_pour_retouche(
         .ok_or_else(|| "aucun plan enregistré à retoucher".to_string())
 }
 
-/// Réécrit plan ET fichiers. Les deux vont ensemble : laisser les fichiers en
-/// arrière les ferait diverger de la base en silence.
+/// Réécrit plan ET fichiers. Les trois vont ensemble : laisser un livrable en
+/// arrière le ferait diverger de la base en silence.
+///
+/// Le classeur du périmètre en fait partie, au même titre que les fichiers par
+/// MEP — il documente ce qu'on transmet, et un classeur qui décrit le plan
+/// d'avant la retouche est pire que pas de classeur. Il oblige à relire le
+/// fichier d'entrée : `plan_xlsx::lignes` le parcourt DANS SON ORDRE, que la
+/// table de hachage d'`entrees_par_cf` ne conserve pas.
 fn sauver_apres_retouche(
     store: &Arc<Mutex<Store>>,
     input: &Path,
@@ -1356,7 +1371,14 @@ fn sauver_apres_retouche(
 ) -> Result<(), String> {
     store.lock().unwrap().ecrire_plan(lignes, meta)?;
     ecrire_fichiers_mep(input, cfg, lignes)?;
-    Ok(())
+    let entrees = {
+        let s = store.lock().unwrap();
+        plan_entrees_from_scan(&s, input, cfg, chrono::Utc::now())?
+    };
+    crate::plan_xlsx::ecrire(
+        &chemin_classeur(input, &cfg.output.dir),
+        &crate::plan_xlsx::lignes(&entrees, lignes),
+    )
 }
 
 /// Runs et MEP du plan enregistré, tels que la retouche doit les voir.
@@ -1810,6 +1832,24 @@ mod tests {
         assert_eq!(
             sha256_hex(b"abc"),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    #[test]
+    fn le_classeur_a_un_seul_chemin_quel_que_soit_le_producteur() {
+        // La génération et la retouche doivent réécrire LE classeur, pas en
+        // semer deux. Un seul endroit décide de son nom, et ce test le fige :
+        // sans lui, un `format!` recopié de travers laisserait un classeur
+        // périmé à côté du bon, indiscernables l'un de l'autre.
+        let p = chemin_classeur(Path::new("/data/brm2607.csv"), "sortie");
+        assert_eq!(p, Path::new("/data/sortie/brm2607_plan_comptes.xlsx"));
+    }
+
+    #[test]
+    fn le_classeur_suit_le_repertoire_de_sortie_absolu() {
+        assert_eq!(
+            chemin_classeur(Path::new("/data/brm2607.csv"), "/livraison"),
+            Path::new("/livraison/brm2607_plan_comptes.xlsx")
         );
     }
 
