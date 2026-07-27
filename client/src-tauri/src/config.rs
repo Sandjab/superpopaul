@@ -585,7 +585,7 @@ pub fn from_yaml(s: &str) -> Result<Config, String> {
 
 /// Écriture atomique : fichier temporaire du même répertoire puis rename,
 /// pour ne jamais corrompre le fichier existant en cas de crash.
-fn atomic_write(path: &Path, contents: &str) -> Result<(), String> {
+pub(crate) fn atomic_write(path: &Path, contents: &str) -> Result<(), String> {
     let tmp = path.with_extension("yaml.tmp");
     std::fs::write(&tmp, contents).map_err(|e| format!("écriture {tmp:?} : {e}"))?;
     std::fs::rename(&tmp, path).map_err(|e| format!("écriture {path:?} : {e}"))

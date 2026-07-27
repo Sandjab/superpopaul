@@ -1204,6 +1204,35 @@ pub struct PlanEnregistre {
     pub autre_fichier: bool,
 }
 
+/// Enregistre un jeu de paramètres dans un fichier choisi par l'utilisateur.
+/// Même format que `plan_meta.params_yaml` — le lot ne crée pas un format, il
+/// lui donne une porte. Écriture atomique, comme un profil : un jeu à moitié
+/// écrit se rechargerait un jour sans qu'on sache ce qu'il lui manque.
+#[tauri::command]
+pub fn plan_params_save(path: String, params: crate::plan::PlanParams) -> Result<(), String> {
+    crate::config::atomic_write(Path::new(&path), &params.vers_yaml()?)
+}
+
+/// Relit un jeu de paramètres. Aucun contrôle de compatibilité avec le fichier
+/// ouvert : un jeu ne parle pas de colonnes, il porte un calendrier et des
+/// réglages, valables sur n'importe quel fichier — c'est l'objet même du geste.
+#[tauri::command]
+pub fn plan_params_load(path: String) -> Result<crate::plan::PlanParams, String> {
+    let chemin = Path::new(&path);
+    let yaml =
+        std::fs::read_to_string(chemin).map_err(|e| format!("lecture {chemin:?} : {e}"))?;
+    crate::plan::PlanParams::depuis_yaml(&yaml)
+}
+
+/// Jette les lignes du plan en gardant ses paramètres — « repartir de zéro ».
+#[tauri::command]
+pub async fn plan_reset(state: State<'_, AppState>) -> Result<(), String> {
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || store.lock().unwrap().effacer_lignes_plan())
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 /// État persisté, au retour sur l'écran de plan.
 #[tauri::command]
 pub async fn plan_load(state: State<'_, AppState>) -> Result<Option<PlanEnregistre>, String> {
@@ -2131,5 +2160,80 @@ mod tests {
         // Un JJ hors bornes ou non numérique ne correspond à aucun run.
         let entrees = vec![entree("CF1", "zzz", "ready", true), entree("CF2", "99", "ready", true)];
         assert!(candidats_du_run(&entrees, &run_test(), &HashSet::new()).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod tests_jeu_de_parametres {
+    use super::*;
+
+    /// Jeu complet : calendrier, fenêtre, MEP, cible, exclusions, et une rampe
+    /// MANUELLE — ses volumes sont indexés par n° de run, donc c'est elle qui
+    /// prouve que le calendrier voyage avec les réglages.
+    fn jeu() -> crate::plan::PlanParams {
+        crate::plan::PlanParams {
+            runs: vec![crate::plan::RunParam {
+                num: "3320".into(),
+                date: "2026-08-11".into(),
+                jjs: vec![1, 5],
+                exclu: false,
+            }],
+            debut: "2026-08-01".into(),
+            fin: "2026-11-30".into(),
+            meps: vec!["2026-09-01".into()],
+            mep_count: 2,
+            cible: Some(500),
+            seed: 7,
+            pa_exclues: vec!["Esker".into()],
+            rampe: crate::plan::Rampe {
+                forme: crate::plan::Forme::Manuelle {
+                    volumes: [("3320".to_string(), 42usize)].into_iter().collect(),
+                },
+                pilote: None,
+            },
+        }
+    }
+
+    fn dossier(nom: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(nom);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn un_jeu_enregistre_puis_recharge_rend_les_memes_parametres() {
+        // L'aller-retour YAML est déjà couvert dans `plan` ; ce qui manque est
+        // le passage par le DISQUE — le seul chemin qu'emprunte l'utilisateur.
+        let chemin = dossier("popaul_test_jeu_ok").join("fut.yaml");
+        let p = jeu();
+
+        plan_params_save(chemin.to_string_lossy().into_owned(), p.clone()).expect("écriture");
+        let relu = plan_params_load(chemin.to_string_lossy().into_owned()).expect("lecture");
+
+        assert_eq!(relu, p, "calendrier et volumes de rampe doivent survivre au disque");
+        std::fs::remove_file(&chemin).ok();
+    }
+
+    #[test]
+    fn un_jeu_illisible_est_refuse_en_nommant_la_cause() {
+        // Refus sec : l'appelant ne modifie rien. Un jeu à moitié appliqué
+        // produirait un plan que personne ne saurait expliquer.
+        let chemin = dossier("popaul_test_jeu_ko").join("pas-un-jeu.yaml");
+        std::fs::write(&chemin, "ceci n'est pas un jeu de paramètres\n").unwrap();
+
+        let e = plan_params_load(chemin.to_string_lossy().into_owned()).unwrap_err();
+
+        assert!(e.contains("paramètres illisibles"), "la cause doit être nommée : {e}");
+        std::fs::remove_file(&chemin).ok();
+    }
+
+    #[test]
+    fn un_jeu_absent_le_dit_avec_son_chemin() {
+        let chemin = dossier("popaul_test_jeu_absent").join("jamais-ecrit.yaml");
+        std::fs::remove_file(&chemin).ok();
+
+        let e = plan_params_load(chemin.to_string_lossy().into_owned()).unwrap_err();
+
+        assert!(e.contains("jamais-ecrit"), "le fichier fautif doit être nommé : {e}");
     }
 }

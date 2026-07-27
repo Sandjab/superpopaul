@@ -637,6 +637,19 @@ impl Store {
         tx.commit().map_err(|e| e.to_string())
     }
 
+    /// Jette les lignes du plan en **gardant** `plan_meta` : les décisions
+    /// (gelées, épinglées, retirées) disparaissent, les paramètres qui les ont
+    /// produites restent. `charger_plan` s'appuie sur la méta, pas sur les
+    /// lignes — un plan sans ligne rend donc bien ses paramètres.
+    ///
+    /// C'est l'inverse exact de `ecrire_plan`, qui remplace les deux ensemble.
+    pub fn effacer_lignes_plan(&self) -> Result<(), String> {
+        self.conn
+            .execute("DELETE FROM plan_cf", [])
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
     /// Relit le plan enregistré, `None` s'il n'y en a aucun. Les adressages
     /// sont rendus en forme longue (`from_stored`).
     pub fn charger_plan(&self) -> Result<Option<(Vec<LignePlan>, PlanMeta)>, String> {
@@ -1352,6 +1365,33 @@ mod tests {
             genere_le: 1_800_000_000,
             params_yaml: "seed: 42\n".into(),
         }
+    }
+
+    #[test]
+    fn effacer_les_lignes_du_plan_conserve_ses_parametres() {
+        // « Repartir de zéro » : les décisions prises sur le plan sont jetées,
+        // les paramètres qui l'ont produit restent. C'est tout l'intérêt du
+        // geste — rejouer la même fenêtre sur un autre fichier sans traîner les
+        // gelées, épinglées et retirées du précédent.
+        let s = Store::open_in_memory().unwrap();
+        s.ecrire_plan(&[ligne("CF1", PID_LONG)], &meta()).unwrap();
+
+        s.effacer_lignes_plan().unwrap();
+
+        let (lignes, m) = s
+            .charger_plan()
+            .unwrap()
+            .expect("les paramètres doivent survivre à l'effacement des lignes");
+        assert!(lignes.is_empty(), "aucune ligne ne doit rester : {lignes:?}");
+        assert_eq!(m, meta(), "la méta, paramètres compris, reste intacte");
+    }
+
+    #[test]
+    fn effacer_les_lignes_sans_plan_ne_casse_rien() {
+        // Le bouton existe avant toute génération : il ne doit pas échouer.
+        let s = Store::open_in_memory().unwrap();
+        s.effacer_lignes_plan().unwrap();
+        assert!(s.charger_plan().unwrap().is_none());
     }
 
     #[test]
