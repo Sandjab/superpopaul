@@ -1319,6 +1319,24 @@ function signalerObsoletes(obsoletes) {
     `${noms.length} fichier(s) d'une génération précédente supprimé(s) : ${noms.join(", ")}`);
 }
 
+// Bornes reprises de `plan.rs::ANNEES_PLAUSIBLES` — à garder alignées.
+const ANNEE_MIN = 2000, ANNEE_MAX = 2100;
+
+/** Vrai tant qu'une date est en train d'être tapée. Un champ date n'a pas de
+ *  valeur tant qu'il est incomplet — sauf l'année, qui vaut dès son premier
+ *  chiffre : taper « 2026 » notifie l'an 2, l'an 20, l'an 202, puis 2026, et
+ *  chacun est une date entière aux yeux du navigateur. Agir dessus déclenchait
+ *  un calcul par chiffre, sur une fenêtre partant de l'an 2 que la timeline
+ *  parcourt un jour civil à la fois.
+ *
+ *  Un champ VIDE n'est pas une frappe en cours : c'est un effacement, et il
+ *  doit continuer de retirer les chiffres de l'écran. */
+function saisieEnCours(v) {
+  if (!v) return false;
+  const an = Number(v.slice(0, 4));
+  return an < ANNEE_MIN || an > ANNEE_MAX;
+}
+
 /** Paramètres envoyés au moteur. Forme exacte de PlanParams (plan.rs). */
 function planParams() {
   const forme = $("plan-forme")?.value ?? "plate";
@@ -1505,6 +1523,11 @@ function renderPlanAside() {
     h("label", {}, "Ajouter une MEP"),
     h("input", { type: "date", id: "plan-mepadd", onchange: (e) => {
       const v = e.target.value;
+      // Le geste de fin — vider le champ et reconstruire le panneau — détruit
+      // le champ en cours de saisie : il n'appartient qu'à la date achevée.
+      // Sans cette garde, taper une MEP créait quatre MEP et vidait le champ
+      // dès le premier chiffre de l'année.
+      if (saisieEnCours(v)) return;
       if (v && !plan.meps.includes(v)) { plan.meps.push(v); plan.meps.sort(); }
       e.target.value = ""; renderPlanAside(); planRecalc();
     } }),
@@ -2286,6 +2309,10 @@ function planRecalc() {
   clearTimeout(planRecalcTimer);
   planRecalcTimer = setTimeout(async () => {
     const p = planParams();
+    // Frappe en cours : ne rien calculer ET ne rien effacer. Les chiffres de la
+    // dernière fenêtre complète restent, plutôt que de clignoter à chaque
+    // chiffre d'année. Le moteur refuse de son côté ces dates-là.
+    if (saisieEnCours(p.debut) || saisieEnCours(p.fin)) return;
     if (!p.runs.length || !p.debut || !p.fin) { plan.apercu = null; renderPlanParam(); return; }
     marquerRecalcul(true);
     try {
