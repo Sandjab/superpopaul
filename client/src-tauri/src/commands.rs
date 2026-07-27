@@ -1074,7 +1074,7 @@ pub async fn plan_generate(
             params_yaml: params.vers_yaml()?,
         };
         store.lock().unwrap().ecrire_plan(&lignes, &meta)?;
-        let (fichiers, obsoletes) = ecrire_fichiers_mep(&input, &cfg, &lignes)?;
+        let (fichiers, obsoletes) = ecrire_fichiers_mep(&input, &cfg.output.dir, &lignes)?;
         // Le classeur du périmètre part avec les fichiers de livraison : ce
         // qu'on transmet et ce qui le documente restent ainsi cohérents.
         // `ecrire_fichiers_mep` a déjà créé le répertoire de sortie.
@@ -1137,10 +1137,10 @@ fn fichiers_obsoletes<'a>(
 /// refuse toute régénération où une MEP gelée aurait disparu ou changé de date.
 fn ecrire_fichiers_mep(
     input: &Path,
-    cfg: &Config,
+    dir: &str,
     lignes: &[crate::plan::LignePlan],
 ) -> Result<(Vec<FichierMep>, Vec<String>), String> {
-    let dir = resolved_out_dir(input, &cfg.output.dir);
+    let dir = resolved_out_dir(input, dir);
     std::fs::create_dir_all(&dir).map_err(|e| format!("création {dir:?} : {e}"))?;
     let souche = input
         .file_stem()
@@ -1421,7 +1421,7 @@ fn sauver_apres_retouche(
     meta: &crate::store::PlanMeta,
 ) -> Result<Vec<String>, String> {
     store.lock().unwrap().ecrire_plan(lignes, meta)?;
-    let (_, obsoletes) = ecrire_fichiers_mep(input, cfg, lignes)?;
+    let (_, obsoletes) = ecrire_fichiers_mep(input, &cfg.output.dir, lignes)?;
     let entrees = {
         let s = store.lock().unwrap();
         plan_entrees_from_scan(&s, input, cfg, chrono::Utc::now())?
@@ -1951,6 +1951,94 @@ mod tests {
             "brm2607_plan_mep_1_2026-09-01.txt".to_string(),
         ];
         assert!(fichiers_obsoletes(&presents, &HashSet::new(), "brm").is_empty());
+    }
+
+    /// Une ligne de plan sur la MEP `mep_id`, datée pour que le nom du fichier
+    /// soit prévisible.
+    fn ligne_mep(cf: &str, mep_id: usize, mep_date: &str) -> crate::plan::LignePlan {
+        crate::plan::LignePlan {
+            cf: cf.into(),
+            participant: format!("0225:{cf}"),
+            jj: 5,
+            raison_sociale: "ACME".into(),
+            pa: "Cegedim".into(),
+            mep_id,
+            mep_date: chrono::NaiveDate::parse_from_str(mep_date, "%Y-%m-%d").unwrap(),
+            run_num: "R1".into(),
+            run_date: chrono::NaiveDate::parse_from_str("2026-09-10", "%Y-%m-%d").unwrap(),
+            origine: crate::plan::Origine::Auto,
+            in_directory: true,
+            resolved_at: 0,
+            planned_at: 0,
+            retire: None,
+        }
+    }
+
+    /// Ce que le ménage fait VRAIMENT sur un disque : `fichiers_obsoletes`
+    /// décide sur des noms, mais c'est `remove_file` qui efface. Une fonction
+    /// destructive se prouve là où elle détruit.
+    #[test]
+    fn le_menage_efface_les_meps_disparues_et_rien_d_autre() {
+        let tmp = tempfile::tempdir().unwrap();
+        let input = tmp.path().join("brm.csv");
+        std::fs::write(&input, "x").unwrap();
+        let dir = tmp.path().to_string_lossy().into_owned();
+
+        // Première génération : deux MEP.
+        let plan = vec![
+            ligne_mep("CF1", 1, "2026-09-01"),
+            ligne_mep("CF2", 2, "2026-10-01"),
+        ];
+        let (ecrits, supprimes) = ecrire_fichiers_mep(&input, &dir, &plan).unwrap();
+        assert_eq!(ecrits.len(), 2);
+        assert!(supprimes.is_empty(), "rien à nettoyer au premier passage");
+
+        // Des voisins qui ne doivent JAMAIS être touchés : les autres livrables
+        // du plan, et le plan d'une autre souche livré au même endroit.
+        for voisin in [
+            "brm_plan_comptes.xlsx",
+            "brm_plan.html",
+            "brm_enrichi.csv",
+            "autre_plan_mep_1_2026-09-01.txt",
+        ] {
+            std::fs::write(tmp.path().join(voisin), "à conserver").unwrap();
+        }
+
+        // Seconde génération : la MEP 2 a disparu du plan.
+        let (_, supprimes) =
+            ecrire_fichiers_mep(&input, &dir, &[ligne_mep("CF1", 1, "2026-09-01")]).unwrap();
+        assert_eq!(supprimes.len(), 1, "{supprimes:?}");
+        assert!(supprimes[0].ends_with("brm_plan_mep_2_2026-10-01.txt"), "{supprimes:?}");
+
+        assert!(!tmp.path().join("brm_plan_mep_2_2026-10-01.txt").exists());
+        assert!(tmp.path().join("brm_plan_mep_1_2026-09-01.txt").exists());
+        for voisin in [
+            "brm_plan_comptes.xlsx",
+            "brm_plan.html",
+            "brm_enrichi.csv",
+            "autre_plan_mep_1_2026-09-01.txt",
+            "brm.csv",
+        ] {
+            assert!(tmp.path().join(voisin).exists(), "{voisin} a été effacé à tort");
+        }
+    }
+
+    #[test]
+    fn une_mep_qui_change_de_date_ne_laisse_pas_son_ancien_fichier() {
+        // Le nom porte la date : décaler une MEP en crée un nouveau et rendait
+        // l'ancien orphelin, avec les mêmes comptes sous une date fausse.
+        let tmp = tempfile::tempdir().unwrap();
+        let input = tmp.path().join("brm.csv");
+        std::fs::write(&input, "x").unwrap();
+        let dir = tmp.path().to_string_lossy().into_owned();
+
+        ecrire_fichiers_mep(&input, &dir, &[ligne_mep("CF1", 1, "2026-09-01")]).unwrap();
+        let (_, supprimes) =
+            ecrire_fichiers_mep(&input, &dir, &[ligne_mep("CF1", 1, "2026-09-15")]).unwrap();
+
+        assert_eq!(supprimes.len(), 1, "{supprimes:?}");
+        assert!(!tmp.path().join("brm_plan_mep_1_2026-09-01.txt").exists());
+        assert!(tmp.path().join("brm_plan_mep_1_2026-09-15.txt").exists());
     }
 
     /// Un run couvrant les jours de cycle 1 et 5.
