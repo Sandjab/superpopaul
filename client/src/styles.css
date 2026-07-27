@@ -3,6 +3,11 @@
    réservé au succès/progression, orange aux avertissements (distinct de l'or),
    rouge aux erreurs. */
 :root {
+  /* L'application n'a qu'un thème, sombre : on le DIT au navigateur, sinon il
+     dessine ses propres contrôles en schéma clair — le bouton du calendrier
+     d'un champ date devenait un glyphe sombre invisible sur bleu nuit, et les
+     listes déroulantes, ascenseurs et cases s'ouvraient en blanc. */
+  color-scheme: dark;
   --bg: #0e1524; --card: #172136; --border: #2b3752;
   --fg: #eae9e2; --muted: #939cb4;
   --green: #4cc268; --gold: #d9a83f; --gold-hover: #e6bb5c; --on-gold: #241a02;
