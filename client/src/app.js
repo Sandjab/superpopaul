@@ -2565,6 +2565,30 @@ function appliquerParams(params) {
   }
 }
 
+/** Ce que l'écran dit du rapport entre le plan enregistré et le fichier ouvert.
+ *  Clés de `RapportAuFichier` (commands.rs) — à garder alignées.
+ *
+ *  « Même nom, contenu changé » n'est PAS « ce n'est pas le même fichier » :
+ *  c'en est un, mis à jour. Ce qui est en cause n'est pas son identité mais
+ *  l'âge de ce que le plan affirme, d'où le libellé. */
+const MESSAGES_FICHIER = {
+  identique: { pied: "", bandeau: null },
+  contenu_different: {
+    pied: " — ⚠ son contenu a changé depuis",
+    bandeau: (f) => `Le fichier ouvert porte le même nom que celui qui a produit le plan `
+      + `(« ${f} ») mais son contenu a changé : les lignes gelées décrivent des comptes `
+      + `tels qu'ils étaient, pas tels qu'ils sont.`,
+  },
+  autre_fichier: {
+    pied: " — ⚠ le fichier ouvert est différent",
+    bandeau: (f) => `Le plan enregistré a été produit depuis « ${f} », différent du `
+      + `fichier ouvert : les lignes gelées peuvent ne plus correspondre.`,
+  },
+  // Fichier absent ou illisible : on ne conclut pas. Prétendre « fichier
+  // différent » serait une affirmation que rien n'étaye.
+  inconnu: { pied: " — vérification impossible", bandeau: null },
+};
+
 /** Restaure paramètres et calendrier du plan enregistré. */
 async function hydraterPlan() {
   try {
@@ -2572,11 +2596,11 @@ async function hydraterPlan() {
     if (enr) {
       plan.genere = true;
       appliquerParams(enr.params);
-      $("plan-foot-info").textContent =
-        `Plan enregistré depuis ${enr.fichier}` + (enr.autre_fichier ? " — ⚠ le fichier ouvert est différent" : "");
-      if (enr.autre_fichier)
-        planBanner("warn",
-          `Le plan enregistré a été produit depuis « ${enr.fichier} », différent du fichier ouvert : les lignes gelées peuvent ne plus correspondre.`);
+      // Un état que ce frontend ne connaît pas se rabat sur « inconnu », jamais
+      // sur le silence : une absence d'avertissement se lit « tout va bien ».
+      const m = MESSAGES_FICHIER[enr.rapport] ?? MESSAGES_FICHIER.inconnu;
+      $("plan-foot-info").textContent = `Plan enregistré depuis ${enr.fichier}${m.pied}`;
+      if (m.bandeau) planBanner("warn", m.bandeau(enr.fichier));
     } else {
       renderPlanAside();
     }

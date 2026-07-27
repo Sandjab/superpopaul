@@ -1199,9 +1199,42 @@ pub struct PlanEnregistre {
     pub params: crate::plan::PlanParams,
     pub fichier: String,
     pub genere_le: i64,
-    /// Vrai si le fichier d'entrée courant n'est pas celui qui a produit le
-    /// plan : les lignes gelées peuvent alors ne plus correspondre.
-    pub autre_fichier: bool,
+    pub rapport: RapportAuFichier,
+}
+
+/// Ce que le fichier ouvert est, par rapport à celui qui a produit le plan.
+/// **Quatre états, pas un booléen** : « même nom, contenu changé » est le cas
+/// dangereux — les lignes gelées y décrivent des comptes tels qu'ils étaient —
+/// et il se confondait jusqu'ici avec « même fichier », faute de comparer autre
+/// chose que le nom.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RapportAuFichier {
+    Identique,
+    ContenuDifferent,
+    AutreFichier,
+    /// Fichier absent, illisible, ou plan sans nom de fichier : on ne conclut
+    /// pas. Prétendre « fichier différent » serait une affirmation que rien
+    /// n'étaye, et ne rien dire se lirait comme « tout va bien ».
+    Inconnu,
+}
+
+/// `courant` : nom et empreinte du fichier ouvert, `None` s'il est illisible.
+/// PURE — c'est ce qui la rend éprouvable sans disque.
+fn rapport_au_fichier(
+    meta: &crate::store::PlanMeta,
+    courant: Option<(&str, &str)>,
+) -> RapportAuFichier {
+    let (Some((nom, empreinte)), false) = (courant, meta.fichier.is_empty()) else {
+        return RapportAuFichier::Inconnu;
+    };
+    if meta.fichier != nom {
+        RapportAuFichier::AutreFichier
+    } else if meta.hash != empreinte {
+        RapportAuFichier::ContenuDifferent
+    } else {
+        RapportAuFichier::Identique
+    }
 }
 
 /// Enregistre un jeu de paramètres dans un fichier choisi par l'utilisateur.
@@ -1242,13 +1275,20 @@ pub async fn plan_load(state: State<'_, AppState>) -> Result<Option<PlanEnregist
         let Some((_, meta)) = store.lock().unwrap().charger_plan()? else {
             return Ok(None);
         };
-        let courant = input
-            .as_ref()
-            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
-            .unwrap_or_default();
+        // Le nom ne suffit pas : une extraction hebdomadaire le garde. On relit
+        // donc le fichier pour en refaire l'empreinte — une fois par session,
+        // là où l'écran fait déjà un scan CSV complet à chaque aperçu.
+        let courant = input.as_ref().and_then(|p| {
+            let nom = p.file_name()?.to_string_lossy().into_owned();
+            Some((nom, sha256_hex(&std::fs::read(p).ok()?)))
+        });
+        let rapport = rapport_au_fichier(
+            &meta,
+            courant.as_ref().map(|(n, e)| (n.as_str(), e.as_str())),
+        );
         Ok(Some(PlanEnregistre {
             params: crate::plan::PlanParams::depuis_yaml(&meta.params_yaml)?,
-            autre_fichier: !meta.fichier.is_empty() && meta.fichier != courant,
+            rapport,
             fichier: meta.fichier,
             genere_le: meta.genere_le,
         }))
@@ -2235,5 +2275,66 @@ mod tests_jeu_de_parametres {
         let e = plan_params_load(chemin.to_string_lossy().into_owned()).unwrap_err();
 
         assert!(e.contains("jamais-ecrit"), "le fichier fautif doit être nommé : {e}");
+    }
+}
+
+#[cfg(test)]
+mod tests_rapport_au_fichier {
+    use super::*;
+
+    fn meta(fichier: &str, hash: &str) -> crate::store::PlanMeta {
+        crate::store::PlanMeta {
+            fichier: fichier.into(),
+            hash: hash.into(),
+            genere_le: 0,
+            params_yaml: String::new(),
+        }
+    }
+
+    #[test]
+    fn meme_nom_meme_empreinte_est_le_meme_fichier() {
+        assert_eq!(
+            rapport_au_fichier(&meta("brm.csv", "abc"), Some(("brm.csv", "abc"))),
+            RapportAuFichier::Identique
+        );
+    }
+
+    #[test]
+    fn meme_nom_empreinte_differente_est_un_contenu_change() {
+        // LE cas que ce lot ouvre : une extraction hebdomadaire garde son nom.
+        // Les lignes gelées décrivent alors des comptes tels qu'ils étaient, et
+        // rien ne le disait — l'application ne comparait que le nom.
+        assert_eq!(
+            rapport_au_fichier(&meta("brm.csv", "abc"), Some(("brm.csv", "def"))),
+            RapportAuFichier::ContenuDifferent
+        );
+    }
+
+    #[test]
+    fn un_nom_different_reste_un_autre_fichier() {
+        // Le nom prime : même à contenu identique, on ne prétend pas que c'est
+        // le fichier du plan. Comportement d'aujourd'hui, délibérément conservé.
+        assert_eq!(
+            rapport_au_fichier(&meta("brm.csv", "abc"), Some(("autre.csv", "abc"))),
+            RapportAuFichier::AutreFichier
+        );
+    }
+
+    #[test]
+    fn sans_fichier_lisible_on_ne_conclut_pas() {
+        // Aujourd'hui ce cas produit « le fichier ouvert est différent » — une
+        // affirmation que rien n'étaye.
+        assert_eq!(
+            rapport_au_fichier(&meta("brm.csv", "abc"), None),
+            RapportAuFichier::Inconnu
+        );
+    }
+
+    #[test]
+    fn un_plan_sans_nom_de_fichier_ne_conclut_pas_non_plus() {
+        assert_eq!(
+            rapport_au_fichier(&meta("", "abc"), Some(("brm.csv", "abc"))),
+            RapportAuFichier::Inconnu
+        );
     }
 }

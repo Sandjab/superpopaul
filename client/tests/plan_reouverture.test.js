@@ -21,7 +21,7 @@ const ENREGISTRE = {
     mep_count: 1, cible: 500, seed: 7, pa_exclues: [],
     rampe: { forme: "plate", pilote: null },
   },
-  fichier: "comptes.csv", genere_le: 0, autre_fichier: false,
+  fichier: "comptes.csv", genere_le: 0, rapport: "identique",
 };
 
 /** Contexte dont le backend rend un plan enregistré, et rien d'autre. */

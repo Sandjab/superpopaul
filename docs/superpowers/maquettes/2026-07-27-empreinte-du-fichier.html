@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Maquette — le plan reconnaît son fichier à son contenu</title>
+<style>
+/* Palette « Bleu nuit & or » — reprise à l'identique de styles.css. Aucun ton
+   nouveau n'est introduit par ce lot. */
+:root {
+  color-scheme: dark;
+  --bg: #0e1524; --card: #172136; --border: #2b3752;
+  --fg: #eae9e2; --muted: #939cb4;
+  --green: #4cc268; --gold: #d9a83f; --amber: #e0873a; --red: #e5534b;
+  --btn2: #1b2740;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 14px/1.5 -apple-system, "Segoe UI", system-ui, sans-serif;
+  padding: 28px 32px 64px;
+}
+h1 { font-size: 20px; font-weight: 600; margin: 0 0 4px; }
+h2 {
+  font-size: 15px; font-weight: 600; margin: 34px 0 6px;
+  padding-top: 16px; border-top: 1px solid var(--border);
+}
+p.intro { color: var(--muted); margin: 0 0 8px; max-width: 78ch; }
+p.note {
+  color: var(--muted); font-size: 12.5px; margin: 8px 0 0; max-width: 84ch;
+  border-left: 2px solid var(--border); padding-left: 12px;
+}
+p.note b { color: var(--fg); }
+
+/* Repris de styles.css */
+.banner { border-radius: 8px; padding: 8px 12px; font-size: 12.5px; margin: 8px 0; }
+.banner.warn  { background: #33240f; color: var(--amber); }
+.banner.error { background: #331518; color: var(--red); }
+#plan-foot {
+  display: flex; gap: 12px; align-items: center; border-top: 1px solid var(--border);
+  font-size: 12.5px; padding: 10px 0 0; color: var(--muted);
+}
+#plan-foot .spacer { flex: 1; }
+
+/* --- échafaudage de la maquette (jamais livré) ---------------------------- */
+.scene { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 14px 18px; margin: 8px 0 4px; }
+.lbl { font-size: 11px; text-transform: uppercase; letter-spacing: .4px; color: var(--muted); margin: 16px 0 4px; }
+.lbl.ok { color: var(--green); }
+.lbl.ko { color: var(--red); }
+.lbl.att { color: var(--amber); }
+.rien { color: var(--muted); font-style: italic; font-size: 12.5px; }
+table.cas { border-collapse: collapse; font-size: 12.5px; margin: 10px 0; }
+table.cas th { text-align: left; color: var(--muted); font-weight: 600; padding: 4px 14px 4px 0; }
+table.cas td { padding: 4px 14px 4px 0; border-top: 1px solid var(--border); }
+</style>
+</head>
+<body>
+
+<h1>Le plan reconnaît son fichier à son contenu</h1>
+<p class="intro">
+  À la génération, l'application note le <b>nom</b> du fichier de comptes et une
+  <b>empreinte</b> de son contenu (SHA-256 de tous ses octets). Au retour sur
+  l'écran, elle ne compare que le nom : l'empreinte est écrite, relue, et jamais
+  regardée.
+</p>
+<p class="note">
+  Conséquence : une extraction hebdomadaire qui garde le même nom passe pour le
+  même fichier. Or les <b>lignes gelées</b> — celles des MEP déjà transmises —
+  sont conservées telles quelles à la régénération. Si un compte a changé de
+  jour de cycle, de plateforme, ou a disparu, le plan continue de l'affirmer.
+</p>
+
+<table class="cas">
+  <tr><th>Nom</th><th>Contenu</th><th>Aujourd'hui</th><th>Proposé</th></tr>
+  <tr><td>identique</td><td>identique</td><td>rien</td><td>rien</td></tr>
+  <tr><td>identique</td><td><b>changé</b></td><td><b>rien</b> — le cas dangereux</td><td>avertissement</td></tr>
+  <tr><td>différent</td><td>—</td><td>avertissement</td><td>avertissement (inchangé)</td></tr>
+  <tr><td colspan="2">fichier illisible</td><td>« fichier différent »</td><td>on dit qu'on ne sait pas</td></tr>
+</table>
+
+<!-- ==================================================================== -->
+<h2>Les quatre états, en pied d'écran et en bandeau</h2>
+
+<div class="lbl ok">1 · Même fichier — rien ne change</div>
+<div class="scene">
+  <div id="plan-foot"><span>Plan enregistré depuis brm2607.csv</span><span class="spacer"></span></div>
+  <p class="rien">Aucun bandeau.</p>
+</div>
+
+<div class="lbl att">2 · Même nom, contenu changé — nouveau</div>
+<div class="scene">
+  <div id="plan-foot"><span>Plan enregistré depuis brm2607.csv — ⚠ son contenu a changé depuis</span><span class="spacer"></span></div>
+  <div class="banner warn">
+    Le fichier ouvert porte le même nom que celui qui a produit le plan
+    (« brm2607.csv ») mais son contenu a changé : les lignes gelées décrivent des
+    comptes tels qu'ils étaient, pas tels qu'ils sont.
+  </div>
+</div>
+<p class="note">
+  Le message ne dit pas « ce n'est pas le même fichier » — c'en est un, mis à
+  jour. Ce qui est en cause n'est pas l'identité du fichier mais <b>l'âge de ce
+  que le plan affirme</b>. D'où « décrivent des comptes tels qu'ils étaient ».
+</p>
+
+<div class="lbl ko">3 · Fichier différent — inchangé</div>
+<div class="scene">
+  <div id="plan-foot"><span>Plan enregistré depuis brm2607.csv — ⚠ le fichier ouvert est différent</span><span class="spacer"></span></div>
+  <div class="banner warn">
+    Le plan enregistré a été produit depuis « brm2607.csv », différent du fichier
+    ouvert : les lignes gelées peuvent ne plus correspondre.
+  </div>
+</div>
+<p class="note">
+  Texte actuel, repris mot pour mot. Un nom différent reste un nom différent :
+  ce cas-là marchait déjà, on n'y touche pas.
+</p>
+
+<div class="lbl">4 · Fichier illisible — nouveau</div>
+<div class="scene">
+  <div id="plan-foot"><span>Plan enregistré depuis brm2607.csv — vérification impossible</span><span class="spacer"></span></div>
+  <p class="rien">Aucun bandeau : l'écran a d'autres moyens de dire qu'un fichier manque.</p>
+</div>
+<p class="note">
+  Aujourd'hui, un fichier absent ou illisible produit « le fichier ouvert est
+  différent » — une affirmation que rien n'étaye. On préfère dire qu'on ne sait
+  pas. Ne rien dire du tout serait pire : l'absence d'avertissement se lit comme
+  « tout va bien ».
+</p>
+
+<!-- ==================================================================== -->
+<h2>Ce que cette maquette n'introduit pas</h2>
+<p class="note">
+  Aucun élément, aucune couleur, aucune disposition nouvelle : le pied d'écran et
+  le bandeau existent, seuls leurs textes changent et un quatrième cas apparaît.
+  Aucun blocage non plus — l'avertissement informe, il n'empêche pas de
+  régénérer. Et aucune détection de <b>ce qui</b> a changé dans le fichier : on
+  dit que le contenu diffère, pas en quoi.
+</p>
+<p class="note">
+  <b>Coût assumé :</b> vérifier l'empreinte oblige à relire le fichier de comptes
+  en entier à l'ouverture de l'écran. Une fois par session — l'écran fait déjà un
+  scan CSV complet à chaque aperçu de plan.
+</p>
+
+</body>
+</html>

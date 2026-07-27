@@ -246,7 +246,7 @@ async function rouvrirAvec(rampe) {
   ctx.evaluer("plan").apercu = ctx.evaluer(`(${JSON.stringify(apercu(TROIS_RUNS))})`);
   // `plan_load` est la seule commande dont la réponse compte ici.
   ctx.repondreAux((cmd) =>
-    cmd === "plan_load" ? { params, fichier: "clients.csv", autre_fichier: false } : null);
+    cmd === "plan_load" ? { params, fichier: "clients.csv", rapport: "identique" } : null);
   await ctx.app.ouvrirPlan();
   return ctx;
 }
@@ -309,7 +309,7 @@ test("les champs de volumes apparaissent dès l'arrivée du premier aperçu", as
     rampe: { forme: "manuelle", pilote: null, volumes: { 3320: 40, 3327: 80, 3331: 120 } },
   };
   ctx.repondreAux((cmd) => {
-    if (cmd === "plan_load") return { params, fichier: "brm2607.csv", autre_fichier: false };
+    if (cmd === "plan_load") return { params, fichier: "brm2607.csv", rapport: "identique" };
     if (cmd === "plan_preview") return ctx.evaluer(`(${JSON.stringify(apercu(TROIS_RUNS))})`);
     // `plan_lignes` rend un Vec, jamais null : une doublure qui répond null
     // ferait porter au code un état que le moteur ne produit pas.
@@ -339,7 +339,7 @@ test("le premier aperçu part avec les volumes restaurés", async () => {
     rampe: { forme: "manuelle", pilote: null, volumes: { 3320: 40, 3327: 80, 3331: 120 } },
   };
   ctx.repondreAux((cmd) => {
-    if (cmd === "plan_load") return { params, fichier: "brm2607.csv", autre_fichier: false };
+    if (cmd === "plan_load") return { params, fichier: "brm2607.csv", rapport: "identique" };
     if (cmd === "plan_preview") return ctx.evaluer(`(${JSON.stringify(apercu(TROIS_RUNS))})`);
     // `plan_lignes` rend un Vec, jamais null : une doublure qui répond null
     // ferait porter au code un état que le moteur ne produit pas.
