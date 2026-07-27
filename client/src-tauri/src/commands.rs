@@ -978,7 +978,9 @@ fn calculer_plan(
         None => crate::plan::Preserves::default(),
     };
 
-    let cible = params.cible.unwrap_or(pool.len() + preserves.consomme());
+    let cible = params
+        .cible
+        .unwrap_or_else(|| crate::plan::cible_auto(&pool, &preserves));
     let a = crate::plan::regenerer(
         &pool,
         &utilisables,

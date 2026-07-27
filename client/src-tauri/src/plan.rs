@@ -1096,6 +1096,26 @@ impl Preserves {
     }
 }
 
+/// Cible par défaut, quand l'utilisateur n'en saisit aucune : « tout ce qui est
+/// atteignable ».
+///
+/// Ce n'est PAS `pool.len() + preserves.consomme()` : une ligne préservée dont
+/// le compte est encore au pool y occupe déjà une place, et l'additionner
+/// réclamerait des comptes qui n'existent pas — « cible non atteinte » sur un
+/// plan pourtant complet. Seules les préservées **absentes du pool** (forcées à
+/// la main, ou devenues inéligibles) ajoutent une place que le pool ne fournit
+/// pas.
+pub fn cible_auto(pool: &[CfCandidat], preserves: &Preserves) -> usize {
+    let au_pool: HashSet<&str> = pool.iter().map(|c| c.cf.as_str()).collect();
+    let hors_pool = preserves
+        .gelees
+        .iter()
+        .chain(&preserves.epinglees)
+        .filter(|l| !au_pool.contains(l.cf.as_str()))
+        .count();
+    pool.len() + hors_pool
+}
+
 /// Vrai si un pilote est demandé mais que la cible ne permet pas de tenir son
 /// niveau sur tous les runs suivants : le socle est alors impossible et
 /// `construire_rampe` bascule sur la forme pure, avec un creux sous V.
@@ -2025,6 +2045,68 @@ mod tests {
         assert!(p.gelees.is_empty(), "un compte retiré n'est pas à livrer");
         assert_eq!(p.retirees.len(), 1);
         assert_eq!(p.consomme(), 0, "une ligne retirée ne consomme pas la cible");
+    }
+
+    #[test]
+    fn cible_auto_sans_preservees_est_le_pool() {
+        let pool: Vec<CfCandidat> = (0..5).map(|i| cand(&format!("CF{i}"), 5, "PA")).collect();
+        assert_eq!(cible_auto(&pool, &Preserves::default()), 5);
+    }
+
+    #[test]
+    fn cible_auto_ne_compte_pas_deux_fois_une_preservee_du_pool() {
+        // LE test de la correction : une ligne épinglée dont le compte est
+        // TOUJOURS au pool occupe une place que le pool fournit déjà. L'ajouter
+        // gonflait la cible d'autant, et `regenerer` réclamait ensuite des
+        // comptes qui n'existaient pas — « cible non atteinte » sur un plan
+        // pourtant complet. Un compteur faux fait mentir tout l'écran.
+        let pool: Vec<CfCandidat> = (0..5).map(|i| cand(&format!("CF{i}"), 5, "PA")).collect();
+        let p = Preserves {
+            epinglees: vec![lp("CF0", 5, "PA", "2026-12-01", Origine::Manuel)],
+            ..Preserves::default()
+        };
+        assert_eq!(cible_auto(&pool, &p), 5, "CF0 est déjà compté par le pool");
+    }
+
+    #[test]
+    fn cible_auto_ajoute_une_preservee_absente_du_pool() {
+        // Cas symétrique : un compte forcé à la main sans être éligible, ou
+        // devenu inéligible depuis. Le pool ne le fournit pas, il occupe
+        // pourtant une place — sans lui, la cible sous-estimerait le plan.
+        let pool: Vec<CfCandidat> = (0..5).map(|i| cand(&format!("CF{i}"), 5, "PA")).collect();
+        let p = Preserves {
+            epinglees: vec![lp("HORS", 5, "PA", "2026-12-01", Origine::Manuel)],
+            ..Preserves::default()
+        };
+        assert_eq!(cible_auto(&pool, &p), 6);
+    }
+
+    #[test]
+    fn cible_auto_ignore_les_retirees() {
+        // Un retrait est une place qu'on a décidé de ne pas occuper : il ne
+        // gonfle pas la cible, exactement comme dans `consomme()`.
+        let pool: Vec<CfCandidat> = (0..5).map(|i| cand(&format!("CF{i}"), 5, "PA")).collect();
+        let mut retiree = lp("HORS", 5, "PA", "2026-12-01", Origine::Manuel);
+        retiree.retire = Some(Retrait { le: 0, motif: "clôturé".into() });
+        let p = Preserves { retirees: vec![retiree], ..Preserves::default() };
+        assert_eq!(cible_auto(&pool, &p), 5);
+    }
+
+    #[test]
+    fn cible_auto_laisse_la_regeneration_sans_avertissement() {
+        // Le symptôme vécu, de bout en bout : tout le pool est plaçable, une
+        // ligne épinglée en fait partie — aucun compte ne manque, donc aucun
+        // avertissement ne doit sortir.
+        let pool: Vec<CfCandidat> = (0..5).map(|i| cand(&format!("CF{i}"), 5, "PA")).collect();
+        let p = Preserves {
+            epinglees: vec![lp("CF0", 5, "PA", "2026-12-01", Origine::Manuel)],
+            ..Preserves::default()
+        };
+        let rs = runs_jj(2, &[5]);
+        let a = regenerer(&pool, &rs, &meps1(), 42, cible_auto(&pool, &p), &rampe(Forme::Plate), &p)
+            .unwrap();
+        assert!(a.avertissements.is_empty(), "{:?}", a.avertissements);
+        assert_eq!(a.lignes.len(), 5, "les cinq comptes du pool sont au plan");
     }
 
     #[test]
