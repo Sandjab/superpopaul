@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Maquette — saisie des dates du plan de charge</title>
+<style>
+/* Palette « Bleu nuit & or » — reprise à l'identique de styles.css et des
+   maquettes précédentes. Aucun ton nouveau n'est introduit par ce lot. */
+:root {
+  --bg: #0e1524; --card: #172136; --border: #2b3752;
+  --fg: #eae9e2; --muted: #939cb4;
+  --green: #4cc268; --gold: #d9a83f; --gold-hover: #e6bb5c; --on-gold: #241a02;
+  --amber: #e0873a; --red: #e5534b;
+  --pid: #e8e4d8;
+  --green-later: #2f8050;
+  --btn2: #1b2740; --track: #223050;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 14px/1.5 -apple-system, "Segoe UI", system-ui, sans-serif;
+  padding: 28px 32px 64px;
+}
+h1 { font-size: 20px; font-weight: 600; margin: 0 0 4px; }
+h2 {
+  font-size: 15px; font-weight: 600; margin: 38px 0 6px;
+  padding-top: 18px; border-top: 1px solid var(--border);
+}
+h3 { font-size: 13px; font-weight: 600; margin: 20px 0 8px; color: var(--muted); }
+p.intro { color: var(--muted); margin: 0 0 8px; max-width: 76ch; }
+p.note {
+  color: var(--muted); font-size: 12.5px; margin: 8px 0 0; max-width: 82ch;
+  border-left: 2px solid var(--border); padding-left: 12px;
+}
+p.note b { color: var(--fg); }
+
+button {
+  background: var(--btn2); color: var(--fg); border: 1px solid var(--border);
+  border-radius: 6px; padding: 5px 14px; cursor: pointer; font: inherit;
+}
+button:hover:not(:disabled) { border-color: var(--gold); }
+button:disabled { opacity: .45; cursor: default; }
+.btn-primary { background: var(--gold); border-color: var(--gold-hover); color: var(--on-gold); font-weight: 600; }
+.btn-ghost { background: transparent; border-color: transparent; color: var(--muted); }
+/* Règle telle quelle de styles.css — c'est le point de départ du lot. */
+input, select {
+  background: var(--bg); color: var(--fg); border: 1px solid var(--border);
+  border-radius: 6px; padding: 5px 8px; font: inherit;
+}
+.field-hint { color: var(--muted); font-size: 12.5px; margin: 6px 0; }
+.chip {
+  display: inline-flex; align-items: center; gap: 4px; font-size: 12px;
+  border: 1px solid var(--border); border-radius: 20px; padding: 2px 4px 2px 10px;
+  margin: 0 4px 4px 0;
+}
+.chip.faux { border-color: var(--red); color: var(--red); }
+
+/* Bandeau de l'écran Plan — repris de styles.css. */
+.banner { border-radius: 8px; padding: 8px 12px; font-size: 12.5px; margin: 8px 0; }
+.banner.warn  { background: #33240f; color: var(--amber); }
+
+/* --- CE QUE LE LOT PROPOSE ------------------------------------------------ */
+/* Option A : on DÉCLARE que l'interface est sombre. Sans cette ligne, le moteur
+   dessine ses propres contrôles (calendrier, listes, ascenseurs, cases) en
+   schéma clair — glyphes sombres sur bleu nuit. */
+.optionA { color-scheme: dark; }
+/* Option B : on repeint le seul bouton du calendrier, et rien d'autre. */
+.optionB input[type=date]::-webkit-calendar-picker-indicator { filter: invert(1); }
+
+/* --- échafaudage de la maquette (jamais livré) ---------------------------- */
+.scene { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px; margin: 10px 0; }
+.trio { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; align-items: start; }
+.duo  { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }
+.lbl { font-size: 11px; text-transform: uppercase; letter-spacing: .4px; color: var(--muted); margin-bottom: 8px; }
+.lbl.ko { color: var(--red); }
+.lbl.ok { color: var(--green); }
+.rangee { display: flex; flex-direction: column; gap: 10px; }
+.rangee label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); }
+.defil { height: 62px; overflow-y: scroll; border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; font-size: 12px; }
+pre.journal {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+  padding: 8px 10px; font-size: 12px; margin: 8px 0 0; min-height: 92px;
+  font-family: ui-monospace, Menlo, Consolas, monospace; white-space: pre-wrap;
+}
+pre.journal .ko { color: var(--red); }
+pre.journal .ok { color: var(--green); }
+pre.journal .skip { color: var(--muted); }
+@media (max-width: 980px) { .trio, .duo { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+
+<h1>Saisie des dates du plan de charge</h1>
+<p class="intro">
+  Deux défauts constatés sur Windows : le champ date ne montre pas son calendrier,
+  et la saisie au clavier ne fonctionne pas. Cette maquette montre ce qui est
+  proposé pour chacun. Aucune couleur ni aucun composant nouveau.
+</p>
+<p class="note">
+  <b>À ouvrir sous Windows</b> pour juger : ce que dessine le moteur du navigateur
+  (calendrier, listes déroulantes, ascenseurs, cases) diffère entre WebView2 et
+  WebKit. C'est précisément ce que ce lot corrige, donc c'est là que ça se voit.
+</p>
+
+<!-- ==================================================================== -->
+<h2>1 · Le calendrier existe déjà — il est invisible</h2>
+<p class="intro">
+  Le bouton du sélecteur de date est bien présent : le moteur le dessine en
+  <b>schéma clair</b>, faute qu'on lui ait dit que l'interface est sombre.
+  Glyphe sombre sur fond bleu nuit. Idem pour les listes déroulantes, les
+  ascenseurs et les cases à cocher, tous rendus en clair aujourd'hui.
+</p>
+
+<div class="scene">
+  <div class="trio">
+    <div>
+      <div class="lbl ko">Aujourd'hui — rien de déclaré</div>
+      <div class="rangee">
+        <label>Début <input type="date" value="2026-07-27"></label>
+        <label>Forme
+          <select><option>Plate (équirépartie)</option><option>Linéaire (croissance douce)</option><option>Géométrique</option></select>
+        </label>
+        <label>Nombre total visé <input type="number" value="3" style="width:90px"></label>
+        <label style="flex-direction:row;align-items:center;gap:6px"><input type="checkbox" checked> Pilote prudent</label>
+        <div class="defil">Ascenseur<br>de la<br>liste<br>des runs<br>et du récapitulatif</div>
+      </div>
+    </div>
+    <div class="optionA">
+      <div class="lbl ok">Option A — <code>color-scheme: dark</code></div>
+      <div class="rangee">
+        <label>Début <input type="date" value="2026-07-27"></label>
+        <label>Forme
+          <select><option>Plate (équirépartie)</option><option>Linéaire (croissance douce)</option><option>Géométrique</option></select>
+        </label>
+        <label>Nombre total visé <input type="number" value="3" style="width:90px"></label>
+        <label style="flex-direction:row;align-items:center;gap:6px"><input type="checkbox" checked> Pilote prudent</label>
+        <div class="defil">Ascenseur<br>de la<br>liste<br>des runs<br>et du récapitulatif</div>
+      </div>
+    </div>
+    <div class="optionB">
+      <div class="lbl">Option B — glyphe repeint seul</div>
+      <div class="rangee">
+        <label>Début <input type="date" value="2026-07-27"></label>
+        <label>Forme
+          <select><option>Plate (équirépartie)</option><option>Linéaire (croissance douce)</option><option>Géométrique</option></select>
+        </label>
+        <label>Nombre total visé <input type="number" value="3" style="width:90px"></label>
+        <label style="flex-direction:row;align-items:center;gap:6px"><input type="checkbox" checked> Pilote prudent</label>
+        <div class="defil">Ascenseur<br>de la<br>liste<br>des runs<br>et du récapitulatif</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<p class="note">
+  <b>Ouvre les trois listes déroulantes et le calendrier</b> avant de trancher :
+  en A, le panneau déroulant et le calendrier s'ouvrent eux aussi en sombre ;
+  en B, seul le petit glyphe change — la liste et le calendrier restent blancs.
+</p>
+<p class="note">
+  <b>Recommandation : option A.</b> Une ligne, <code>color-scheme: dark</code> sur
+  <code>:root</code>, qui dit une vérité déjà vraie — l'application n'a qu'un
+  thème, sombre. L'option B repeint un symptôme et laisse les quatre autres
+  contrôles en clair. Le prix de A est qu'elle touche <b>toute</b> l'application,
+  pas seulement l'écran du plan : c'est le point à valider ici.
+</p>
+
+<!-- ==================================================================== -->
+<h2>2 · Ce que la frappe produit réellement</h2>
+<p class="intro">
+  Un champ date n'a pas de valeur tant qu'il est incomplet — sauf l'année, qui
+  vaut dès son premier chiffre. Taper <code>2026</code> fait donc passer la
+  valeur par l'an 2, l'an 20, puis l'an 202, et chacun de ces états est notifié
+  à l'application comme une date valide.
+</p>
+
+<h3>Tape <code>27</code> <code>07</code> <code>2026</code> dans chacun des deux champs</h3>
+<div class="scene">
+  <div class="duo">
+    <div>
+      <div class="lbl ko">Aujourd'hui — chaque état déclenche un calcul</div>
+      <label style="font-size:12px;color:var(--muted)">Début</label>
+      <input type="date" id="d-avant">
+      <pre class="journal" id="j-avant">(le journal s'écrit ici)</pre>
+    </div>
+    <div class="optionA">
+      <div class="lbl ok">Proposé — une année à quatre chiffres, ou rien</div>
+      <label style="font-size:12px;color:var(--muted)">Début</label>
+      <input type="date" id="d-apres">
+      <pre class="journal" id="j-apres">(le journal s'écrit ici)</pre>
+    </div>
+  </div>
+</div>
+
+<p class="note">
+  Sur la fenêtre FUT, l'état « an 2 » n'est pas rejeté par le moteur : la seule
+  règle est que la fin suive le début. La timeline étant construite
+  <b>un jour civil à la fois</b>, une fenêtre qui part de l'an 2 produit
+  <b>739 409 jours</b> — 66 Mo à transmettre, autant de lignes de tableau à
+  dessiner. C'est ce qui fige l'application en cours de frappe.
+</p>
+
+<h3>« Ajouter une MEP » — le champ se vide sous les doigts</h3>
+<p class="intro">
+  Ce champ-là ajoute la date <em>et reconstruit le panneau</em> à chaque
+  notification. Taper une MEP au clavier crée donc quatre MEP et remet le champ
+  à vide dès le premier chiffre de l'année : la saisie est impossible, et la
+  puce à l'an 2 fige le plan tant qu'on ne l'a pas retirée à la main.
+</p>
+<div class="scene">
+  <div class="duo">
+    <div>
+      <div class="lbl ko">Aujourd'hui</div>
+      <div>
+        <span class="chip faux">0002-09-01 <button class="btn-ghost">✕</button></span>
+        <span class="chip faux">0020-09-01 <button class="btn-ghost">✕</button></span>
+        <span class="chip faux">0202-09-01 <button class="btn-ghost">✕</button></span>
+        <span class="chip">2026-09-01 <button class="btn-ghost">✕</button></span>
+      </div>
+      <p class="field-hint">Une seule MEP a été saisie.</p>
+    </div>
+    <div class="optionA">
+      <div class="lbl ok">Proposé</div>
+      <div>
+        <span class="chip">2026-09-01 <button class="btn-ghost">✕</button></span>
+      </div>
+      <p class="field-hint">La MEP n'est retenue qu'une fois la date complète.</p>
+    </div>
+  </div>
+</div>
+
+<!-- ==================================================================== -->
+<h2>3 · Le refus côté moteur</h2>
+<p class="intro">
+  Le garde-fou de l'interface évite l'aller-retour ; il n'est pas la règle.
+  Un plan enregistré à la main, un <code>runs.csv</code> avec une année fautive,
+  passent à côté. Le moteur refuse donc toute date hors d'une plage plausible —
+  et le dit, plutôt que de calculer deux millénaires en silence.
+</p>
+<div class="scene">
+  <div class="banner warn">fenêtre FUT : le début (0002-07-27) sort des années plausibles (2000-2100)</div>
+  <div class="banner warn">run 3326 : la date (0202-11-04) sort des années plausibles (2000-2100)</div>
+</div>
+<p class="note">
+  Plage proposée : <b>2000-2100</b>. Assez large pour n'écarter aucun usage réel,
+  assez étroite pour couper net les états de frappe. Elle s'applique au même
+  endroit pour les quatre sortes de dates du plan — début, fin, runs, MEP.
+</p>
+
+<!-- ==================================================================== -->
+<h2>Ce que cette maquette n'introduit pas</h2>
+<p class="note">
+  Aucun changement de disposition, aucun libellé nouveau à l'écran du plan, aucune
+  couleur nouvelle. Le calendrier n'est pas remplacé par un composant maison :
+  c'est celui du navigateur, rendu visible. La limite d'étendue de la timeline
+  (nombre maximal de jours affichables) n'est <b>pas</b> traitée ici — la plage
+  d'années suffit à écarter les saisies fautives ; une fenêtre légitime de
+  plusieurs années reste permise.
+</p>
+
+<script>
+// Échafaudage de démonstration — ne préjuge pas du code livré, il illustre
+// seulement ce que le navigateur notifie et ce que le garde-fou laisserait passer.
+function journaliser(idChamp, idJournal, avecGarde) {
+  const champ = document.getElementById(idChamp);
+  const journal = document.getElementById(idJournal);
+  journal.textContent = "";
+  champ.addEventListener("input", () => {
+    const v = champ.value;
+    const ligne = document.createElement("div");
+    if (!v) {
+      ligne.className = "skip";
+      ligne.textContent = "(vide) — rien à calculer";
+    } else if (avecGarde && Number(v.slice(0, 4)) < 2000) {
+      ligne.className = "skip";
+      ligne.textContent = v + "  → ignoré, année incomplète";
+    } else {
+      ligne.className = avecGarde ? "ok" : (Number(v.slice(0, 4)) < 2000 ? "ko" : "ok");
+      ligne.textContent = v + "  → plan recalculé";
+    }
+    journal.appendChild(ligne);
+  });
+}
+journaliser("d-avant", "j-avant", false);
+journaliser("d-apres", "j-apres", true);
+</script>
+
+</body>
+</html>
