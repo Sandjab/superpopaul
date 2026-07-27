@@ -66,6 +66,14 @@ test("une retouche annonce aussi les fichiers supprimés", () => {
 
   ctx.app.ouvrirRetrait();
   const modale = ctx.$("modal");
+  const zone = (function chercherZone(n) {
+    if (typeof n !== "object" || n === null) return null;
+    if (n.tagName === "textarea") return n;
+    for (const e of n.children ?? []) { const t = chercherZone(e); if (t) return t; }
+    return null;
+  })(modale);
+  zone.value = "compte clôturé";
+  zone.listeners.input();   // sans motif, le bouton reste inerte
   const bouton = (function chercher(n) {
     if (typeof n !== "object" || n === null) return null;
     if (n.tagName === "button" && String(n.children[0] ?? "").startsWith("Retirer ")) return n;
@@ -74,7 +82,7 @@ test("une retouche annonce aussi les fichiers supprimés", () => {
   })(modale);
   assert.ok(bouton, "le bouton de retrait doit exister");
 
-  return bouton.listeners.click().then(() => {
+  return bouton.click().then(() => {
     assert.match(bandeau(ctx.$).texte, /brm_plan_mep_4_2026-12-01\.txt/);
   });
 });

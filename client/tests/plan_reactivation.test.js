@@ -82,7 +82,7 @@ test("seuls les comptes retirés partent au moteur", async () => {
   ctx.repondreAux((cmd) => (cmd === "plan_lignes" ? ctx.evaluer("[]") : ctx.evaluer("[]")));
 
   boutonSel(ctx.$, "Réactiver").listeners.click();
-  await boutonModale(ctx.$, "Réactiver").listeners.click();
+  await boutonModale(ctx.$, "Réactiver").click();
 
   const appel = ctx.invocations.find(([c]) => c === "plan_annuler_retrait");
   assert.notEqual(appel, undefined, "la commande doit être appelée");

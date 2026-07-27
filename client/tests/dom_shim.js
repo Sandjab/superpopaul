@@ -31,14 +31,15 @@ function creerDocument() {
   function createElement(tag) {
     const el = {
       tagName: tag,
-      className: "",
       attrs: {},
       listeners: {},
       children: [],
-      textContent: "",
       style: {},
+      // Booléen dès le départ, comme dans un vrai DOM : laissé à `undefined`,
+      // il rendait « bouton rouvert » indiscernable de « jamais touché ».
+      disabled: false,
       dataset: {},
-      classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
+      _classes: [],
       setAttribute(k, v) {
         this.attrs[k] = String(v);
         if (k === "id") parId.set(String(v), this);
@@ -55,7 +56,42 @@ function creerDocument() {
         return this.children.some((c) => typeof c === "object" && c !== null && c.contains?.(autre));
       },
       focus() { document.activeElement = this; },
-      click() {}, remove() {},
+      /** Déclenche le clic AVEC un événement, comme le vrai DOM : un écouteur
+       *  qui lit `ev.currentTarget` (pour agir sur le bouton cliqué) explosait
+       *  quand un test appelait `listeners.click()` à la main. Rend ce que
+       *  l'écouteur rend, pour que les tests puissent l'attendre. */
+      click() { return this.listeners.click?.({ target: this, currentTarget: this }); },
+      remove() {},
+    };
+    // `textContent` est la vue texte des enfants, comme dans un vrai DOM :
+    // `h(tag, {}, "libellé")` empile une chaîne, et `el.textContent = "…"` la
+    // remplace. En faire un champ indépendant rendait les deux écritures
+    // invisibles l'une à l'autre — un libellé posé par `h()` restait illisible.
+    Object.defineProperty(el, "textContent", {
+      get() {
+        return this.children
+          .map((c) => (typeof c === "string" ? c : c?.textContent ?? ""))
+          .join("");
+      },
+      set(v) { this.children = [String(v)]; },
+    });
+    // `className` et `classList` sont deux vues du MÊME état, comme dans un
+    // vrai DOM : `app.js` pose l'un (via `h()`) et lit l'autre (`toggle`,
+    // `contains`). Les stuber vides rendait indiscernables « la classe est
+    // posée » et « elle ne l'est pas ».
+    Object.defineProperty(el, "className", {
+      get() { return this._classes.join(" "); },
+      set(v) { this._classes = String(v).split(/\s+/).filter(Boolean); },
+    });
+    el.classList = {
+      add(...cs) { for (const c of cs) if (!el._classes.includes(c)) el._classes.push(c); },
+      remove(...cs) { el._classes = el._classes.filter((x) => !cs.includes(x)); },
+      toggle(c, force) {
+        const poser = force === undefined ? !el._classes.includes(c) : !!force;
+        if (poser) el.classList.add(c); else el.classList.remove(c);
+        return poser;
+      },
+      contains: (c) => el._classes.includes(c),
     };
     Object.defineProperty(el, "value", {
       get() {

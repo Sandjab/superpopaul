@@ -552,6 +552,21 @@ table.ppf-files { border-collapse: collapse; width: 100%; margin: 6px 0 0; font-
 }
 #plan-head { border-bottom: 1px solid var(--border); }
 #plan-foot { border-top: 1px solid var(--border); font-size: 12.5px; }
+
+/* Aperçu en recalcul : les chiffres affichés ne correspondent plus à la saisie.
+   L'atténuation le DIT, là où une barre de progression laisserait croire qu'ils
+   sont à jour. Le panneau latéral n'est jamais touché — c'est la frappe qui
+   déclenche le calcul. */
+#plan-main.recalcul #plan-param, #plan-main.recalcul #plan-recap { opacity: .42; }
+#plan-main #plan-param, #plan-main #plan-recap { transition: opacity .18s ease-in; }
+#plan-attente { color: var(--gold); }
+#plan-attente::after {
+  content: "…"; display: inline-block; width: 1.1em; text-align: left;
+  animation: attente-points 1.1s steps(4, end) infinite;
+}
+@keyframes attente-points {
+  0% { content: "" } 25% { content: "." } 50% { content: ".." } 75% { content: "…" }
+}
 #plan-foot .spacer { flex: 1; }
 #plan-title { flex: 1; text-align: center; font-weight: 600; }
 #plan-sub { font-weight: 400; font-size: 12.5px; }

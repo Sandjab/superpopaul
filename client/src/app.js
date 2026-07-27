@@ -1266,6 +1266,47 @@ function planBanner(kind, texte) {
 
 function fmtN(n) { return (n ?? 0).toLocaleString("fr-FR"); }
 
+/** Fait parler un bouton pendant un traitement, et le rétablit QUOI QU'IL
+ *  ARRIVE — sans le `finally`, une génération qui échoue laisse un bouton mort
+ *  et interdit de réessayer.
+ *
+ *  Deux effets pour un geste : l'indication est là où le regard vient de
+ *  cliquer, et le bouton désactivé fait garde de ré-entrance. Aucune de ces
+ *  commandes n'émet d'avancement — une barre de progression y serait
+ *  décorative, contrairement à celles de l'annuaire et du PPF. */
+async function occupe(bouton, pendant, travail) {
+  // La garde ne lit PAS `disabled` : ce drapeau sert déjà de validation de
+  // formulaire (le bouton « Retirer » reste inerte tant que le motif est vide),
+  // et les deux sens se confondraient. `dataset.occupe` ne dit qu'une chose.
+  if (!bouton || bouton.dataset.occupe) return;
+  const repos = bouton.textContent;
+  const inerte = bouton.disabled;
+  bouton.dataset.occupe = "1";
+  bouton.disabled = true;
+  bouton.textContent = pendant;
+  try {
+    return await travail();
+  } finally {
+    delete bouton.dataset.occupe;
+    // On rend l'état de départ, pas « actif » : un bouton soumis à validation
+    // ne doit pas s'ouvrir parce qu'une action a échoué.
+    bouton.disabled = inerte;
+    bouton.textContent = repos;
+  }
+}
+
+/** Marque les chiffres de l'écran comme périmés le temps d'un recalcul.
+ *
+ *  Le problème n'est pas qu'une tâche tourne, c'est que ce qui est affiché ne
+ *  correspond plus à ce qu'on vient de saisir : l'atténuation le dit, une barre
+ *  de progression laisserait croire l'inverse. Le panneau latéral en est
+ *  exclu — c'est la frappe qui déclenche le recalcul, griser ce qu'on règle
+ *  serait absurde. */
+function marquerRecalcul(actif) {
+  $("plan-main").classList.toggle("recalcul", actif);
+  $("plan-attente").classList.toggle("hidden", !actif);
+}
+
 /** Annonce les fichiers d'une génération précédente retirés du répertoire de
  *  livraison. Le backend fait le ménage — un fichier de MEP périmé peut être
  *  transmis par erreur — mais ce qu'on efface d'un répertoire de livraison ne
@@ -1623,7 +1664,10 @@ function ligneRun(j, r) {
   // permanent, alors qu'on arrive normalement ici sans plan.
   const ajout = h("td", { class: "tl-add" },
     ...(plan.genere
-      ? [h("button", { class: "tl-add-btn", onclick: () => ouvrirAjoutRun(r, j) }, "+ Ajouter")]
+      ? [h("button", { class: "tl-add-btn", onclick: (ev) =>
+          // `plan_candidats_run` part AVANT que la fenêtre n'apparaisse : sans
+          // cela, le clic reste sans effet visible le temps du scan.
+          occupe(ev.currentTarget, "…", () => ouvrirAjoutRun(r, j)) }, "+ Ajouter")]
       : []));
   return h("tr", { class: "tl-run" },
     celluleJour(j),
@@ -1807,15 +1851,14 @@ function renderPlanParam() {
         ul.append(h("li", {}, h("code", {}, fi.chemin), ` — ${fmtN(fi.comptes)} comptes`));
       r.append(ul);
       r.append(h("div", { class: "actions" },
-        h("button", { onclick: async (ev) => {
-          const b = ev.currentTarget, lbl = b.textContent;
-          b.disabled = true; b.textContent = "…";
-          try {
-            const p = await invoke("plan_rapport");
-            window.__TAURI__.opener?.revealItemInDir(p);
-          } catch (e) { planBanner("error", String(e)); }
-          b.disabled = false; b.textContent = lbl;
-        } }, "Rapport du plan…")));
+        h("button", { onclick: (ev) =>
+          occupe(ev.currentTarget, "Rapport en cours…", async () => {
+            try {
+              const p = await invoke("plan_rapport");
+              window.__TAURI__.opener?.revealItemInDir(p);
+            } catch (e) { planBanner("error", String(e)); }
+          }),
+        }, "Rapport du plan…")));
       noeuds.push(r);
     }
     box.replaceChildren(...noeuds);
@@ -1979,12 +2022,17 @@ async function ouvrirDeplacer() {
     h("p", {}, h("label", {}, "Run de Facturation "), sel),
     h("div", { class: "actions" },
       h("button", { class: "btn-ghost", onclick: closeModal }, "Annuler"),
-      h("button", { class: "btn-primary", onclick: async () => {
-        try {
-          const obsoletes = await invoke("plan_deplacer", { cfs, runNum: sel.value });
-          closeModal(); plan.sel.clear(); signalerObsoletes(obsoletes); await rechargerRecap();
-        } catch (e) { planBanner("error", String(e)); closeModal(); }
-      } }, "Déplacer")));
+      h("button", { class: "btn-primary", onclick: (ev) =>
+        occupe(ev.currentTarget, "Déplacement en cours…", async () => {
+          try {
+            const obsoletes = await invoke("plan_deplacer", { cfs, runNum: sel.value });
+            plan.sel.clear(); signalerObsoletes(obsoletes); await rechargerRecap();
+          } catch (e) { planBanner("error", String(e)); }
+          // Après le rechargement, pas avant : fermer d'abord laisserait
+          // l'écran figé sans rien pour l'expliquer.
+          closeModal();
+        }),
+      }, "Déplacer")));
 }
 
 function ouvrirRetrait() {
@@ -1992,12 +2040,15 @@ function ouvrirRetrait() {
   const geles = plan.lignes.filter((l) => cfs.includes(l.cf) && l.gelee);
   const zone = h("textarea", { rows: "3", style: "width:100%",
     placeholder: "Ex. : migration PDP repoussée par le client, compte clôturé, incident connu…" });
-  const btn = h("button", { class: "btn-danger", onclick: async () => {
-    try {
-      const obsoletes = await invoke("plan_retirer", { cfs, motif: zone.value });
-      closeModal(); plan.sel.clear(); signalerObsoletes(obsoletes); await rechargerRecap();
-    } catch (e) { planBanner("error", String(e)); closeModal(); }
-  } }, `Retirer ${cfs.length} compte(s)`);
+  const btn = h("button", { class: "btn-danger", onclick: (ev) =>
+    occupe(ev.currentTarget, "Retrait en cours…", async () => {
+      try {
+        const obsoletes = await invoke("plan_retirer", { cfs, motif: zone.value });
+        plan.sel.clear(); signalerObsoletes(obsoletes); await rechargerRecap();
+      } catch (e) { planBanner("error", String(e)); }
+      closeModal();
+    }),
+  }, `Retirer ${cfs.length} compte(s)`);
   btn.disabled = true;
   zone.addEventListener("input", () => { btn.disabled = zone.value.trim() === ""; });
 
@@ -2050,12 +2101,15 @@ function ouvrirReactivation() {
     h("p", { class: "field-hint" }, "⚠ Le motif du retrait sera perdu."),
     h("div", { class: "actions" },
       h("button", { class: "btn-ghost", onclick: closeModal }, "Annuler"),
-      h("button", { class: "btn-primary", onclick: async () => {
-        try {
-          const obsoletes = await invoke("plan_annuler_retrait", { cfs });
-          closeModal(); plan.sel.clear(); signalerObsoletes(obsoletes); await rechargerRecap();
-        } catch (e) { planBanner("error", String(e)); closeModal(); }
-      } }, `Réactiver ${cfs.length} compte(s)`)));
+      h("button", { class: "btn-primary", onclick: (ev) =>
+        occupe(ev.currentTarget, "Réactivation en cours…", async () => {
+          try {
+            const obsoletes = await invoke("plan_annuler_retrait", { cfs });
+            plan.sel.clear(); signalerObsoletes(obsoletes); await rechargerRecap();
+          } catch (e) { planBanner("error", String(e)); }
+          closeModal();
+        }),
+      }, `Réactiver ${cfs.length} compte(s)`)));
   modal(...noeuds);
 }
 
@@ -2209,12 +2263,15 @@ async function ouvrirAjoutRun(run, jour) {
     corps,
     h("div", { class: "add-foot" }, pied, h("span", { class: "spacer" }),
       h("button", { class: "btn-ghost", onclick: closeModal }, "Annuler"),
-      h("button", { class: "btn-primary", onclick: async () => {
+      h("button", { class: "btn-primary", onclick: (ev) => {
         if (!choisis.size) return;
-        try {
-          const obsoletes = await invoke("plan_ajouter", { cfs: [...choisis], runNum: run.num });
-          closeModal(); signalerObsoletes(obsoletes); await rechargerRecap();
-        } catch (e) { planBanner("error", String(e)); closeModal(); }
+        return occupe(ev.currentTarget, "Ajout en cours…", async () => {
+          try {
+            const obsoletes = await invoke("plan_ajouter", { cfs: [...choisis], runNum: run.num });
+            signalerObsoletes(obsoletes); await rechargerRecap();
+          } catch (e) { planBanner("error", String(e)); }
+          closeModal();
+        });
       } }, `Ajouter au run ${run.num}`)));
 
   // La fenêtre porte un tableau : #modal plafonne à 460px, il lui faut sa
@@ -2230,12 +2287,17 @@ function planRecalc() {
   planRecalcTimer = setTimeout(async () => {
     const p = planParams();
     if (!p.runs.length || !p.debut || !p.fin) { plan.apercu = null; renderPlanParam(); return; }
+    marquerRecalcul(true);
     try {
       plan.apercu = await invoke("plan_preview", { params: p });
       planBanner(null);
     } catch (e) {
       plan.apercu = null;
       planBanner("warn", String(e));
+    } finally {
+      // Même en échec : des chiffres grisés à jamais seraient pires que des
+      // chiffres faux, on ne saurait plus qu'ils ne bougeront pas.
+      marquerRecalcul(false);
     }
     renderPlanParam();
     suivreApercuDansLePanneau();
@@ -2257,17 +2319,19 @@ function suivreApercuDansLePanneau() {
 }
 
 async function genererPlan() {
-  try {
-    const r = await invoke("plan_generate", { params: planParams() });
-    plan.apercu = r.apercu;
-    plan.fichiers = r.fichiers;
-    plan.genere = true;
-    planBanner(null);
-    signalerObsoletes(r.obsoletes);
-    renderPlanAside();
-    renderPlanParam();
-    await rechargerRecap();
-  } catch (e) { planBanner("error", String(e)); }
+  await occupe($("btn-plan-gen"), "Génération en cours…", async () => {
+    try {
+      const r = await invoke("plan_generate", { params: planParams() });
+      plan.apercu = r.apercu;
+      plan.fichiers = r.fichiers;
+      plan.genere = true;
+      planBanner(null);
+      signalerObsoletes(r.obsoletes);
+      renderPlanAside();
+      renderPlanParam();
+      await rechargerRecap();
+    } catch (e) { planBanner("error", String(e)); }
+  });
 }
 
 async function rechargerRecap() {
