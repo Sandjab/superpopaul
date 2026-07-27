@@ -38,6 +38,13 @@ function creerDocument() {
       // Booléen dès le départ, comme dans un vrai DOM : laissé à `undefined`,
       // il rendait « bouton rouvert » indiscernable de « jamais touché ».
       disabled: false,
+      // Curseur de saisie. Zéro sur un élément neuf, et `setAttribute("value")`
+      // ne l'en bouge PAS — c'est l'attribut de contenu, pas la propriété
+      // `value` (qui, elle, pousse le curseur en fin de texte). D'où un champ
+      // reconstruit qui, sans rien de plus, insère la frappe suivante au début.
+      selectionStart: 0,
+      selectionEnd: 0,
+      setSelectionRange(debut, fin) { this.selectionStart = debut; this.selectionEnd = fin; },
       dataset: {},
       _classes: [],
       setAttribute(k, v) {

@@ -89,3 +89,24 @@ test("la recherche porte aussi sur le compte et l'adressage", () => {
 
   assert.deepEqual(affiches(ctx.$), ["CF3"], "la recherche est insensible à la casse");
 });
+
+test("le curseur reste où il était dans la recherche reconstruite", () => {
+  // Vécu en application : taper « abc » écrivait « cba ». Le champ neuf porte
+  // sa valeur par ATTRIBUT, qui ne déplace pas le curseur — il reste à zéro, et
+  // chaque frappe s'insère devant la précédente.
+  //
+  // Curseur au MILIEU volontairement : le remettre en fin de texte passerait
+  // pour une correction alors qu'il déplacerait la saisie de qui reprend le
+  // début de sa recherche.
+  const ctx = recap();
+
+  const champ = recherche(ctx.$);
+  champ.focus();
+  champ.value = "Bravo";
+  champ.setSelectionRange(2, 2);
+  champ.listeners.input({ target: champ });
+
+  const apres = recherche(ctx.$);
+  assert.equal(apres.selectionStart, 2, "le curseur doit être rendu là où il était");
+  assert.equal(apres.selectionEnd, 2);
+});

@@ -1922,6 +1922,11 @@ function renderPlanRecap() {
   // filtrage. On rend donc le focus au champ reconstruit : sans lui, la lettre
   // suivante tombe dans le vide et la recherche repart de zéro à chaque frappe.
   const cherchait = champRecherche !== null && document.activeElement === champRecherche;
+  // Rendre le focus ne suffit pas : le champ neuf porte sa valeur par ATTRIBUT,
+  // qui ne déplace pas le curseur. Il restait donc à zéro et chaque frappe
+  // s'insérait devant la précédente — taper « abc » écrivait « cba ». On relève
+  // la position AVANT de reconstruire, tant que le champ est encore l'ancien.
+  const curseur = cherchait ? [champRecherche.selectionStart, champRecherche.selectionEnd] : null;
   if (!plan.lignes.length) {
     box.replaceChildren(h("p", { class: "muted" }, "Aucun plan enregistré. Génère-le depuis l'onglet Paramétrage."));
     return;
@@ -2017,7 +2022,10 @@ function renderPlanRecap() {
     noeuds.push(h("p", { class: "muted", style: "text-align:center;font-size:12.5px" },
       `… ${fmtN(visibles.length - PLAFOND)} ligne(s) supplémentaire(s) non affichée(s) — affine les filtres.`));
   box.replaceChildren(...noeuds);
-  if (cherchait) champRecherche.focus();
+  if (cherchait) {
+    champRecherche.focus();
+    champRecherche.setSelectionRange(curseur[0], curseur[1]);
+  }
 }
 
 // --- Modales de retouche -----------------------------------------------------
