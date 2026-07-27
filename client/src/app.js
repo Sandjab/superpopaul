@@ -1882,11 +1882,18 @@ function renderPlanRecap() {
   const noeuds = [barre];
 
   if (plan.sel.size) {
+    // La réactivation n'apparaît qu'avec une ligne retirée sous la main, et son
+    // libellé compte CE SUR QUOI elle agira — sur une sélection mixte, elle ne
+    // touche que les retirées plutôt que de refuser la sélection.
+    const retirees = selectionRetiree().length;
     noeuds.push(h("div", { class: "plan-selbar" },
       h("span", {}, h("b", {}, String(plan.sel.size)), " compte(s) sélectionné(s)"),
       h("span", { class: "spacer" }),
       h("button", { onclick: ouvrirDeplacer }, "Déplacer vers un run…"),
       h("button", { class: "btn-danger", onclick: ouvrirRetrait }, "Retirer…"),
+      ...(retirees
+        ? [h("button", { onclick: ouvrirReactivation }, `Réactiver ${retirees} retiré(s)…`)]
+        : []),
       h("button", { class: "btn-ghost", onclick: () => { plan.sel.clear(); renderPlanRecap(); } }, "Tout désélectionner")));
   }
   // Pas de bouton d'ajout ici : la décision part du run, donc l'action vit sur
@@ -2008,6 +2015,47 @@ function ouvrirRetrait() {
   }
   noeuds.push(h("label", { class: "field-hint" }, "Motif du retrait (obligatoire)"), zone,
     h("div", { class: "actions" }, h("button", { class: "btn-ghost", onclick: closeModal }, "Annuler"), btn));
+  modal(...noeuds);
+}
+
+/** Les comptes retirés de la sélection — les seuls que la réactivation touche. */
+function selectionRetiree() {
+  return plan.lignes.filter((l) => plan.sel.has(l.cf) && l.retire_motif != null);
+}
+
+/** Réactive les comptes retirés de la sélection.
+ *
+ *  Confirmation systématique, même sans MEP gelée : `annuler_retrait` efface le
+ *  motif, donc le geste est moins réversible qu'il n'en a l'air — et un seul
+ *  chemin vaut mieux que deux. L'avertissement sur les MEP gelées reprend les
+ *  termes de `ouvrirRetrait` : les deux gestes changent un fichier déjà
+ *  transmis. */
+function ouvrirReactivation() {
+  const lignes = selectionRetiree();
+  const cfs = lignes.map((l) => l.cf);
+  const geles = lignes.filter((l) => l.gelee);
+
+  const noeuds = [
+    h("h3", {}, `Réactiver ${cfs.length} compte(s)`),
+    h("p", { class: "field-hint" },
+      "Ils redeviennent livrables et repartiront dans les fichiers de leur MEP. "
+      + "Une régénération pourra les replacer sur un autre run."),
+  ];
+  if (geles.length) {
+    noeuds.push(h("div", { class: "danger-note" },
+      `⚠ ${geles.length} compte(s) appartiennent à une MEP gelée (${[...new Set(geles.map((l) => l.mep_date))].join(", ")}). `
+      + "Son fichier a déjà été transmis : il changera au prochain enregistrement."));
+  }
+  noeuds.push(
+    h("p", { class: "field-hint" }, "⚠ Le motif du retrait sera perdu."),
+    h("div", { class: "actions" },
+      h("button", { class: "btn-ghost", onclick: closeModal }, "Annuler"),
+      h("button", { class: "btn-primary", onclick: async () => {
+        try {
+          const obsoletes = await invoke("plan_annuler_retrait", { cfs });
+          closeModal(); plan.sel.clear(); signalerObsoletes(obsoletes); await rechargerRecap();
+        } catch (e) { planBanner("error", String(e)); closeModal(); }
+      } }, `Réactiver ${cfs.length} compte(s)`)));
   modal(...noeuds);
 }
 
