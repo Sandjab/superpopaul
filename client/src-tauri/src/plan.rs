@@ -1017,9 +1017,26 @@ pub struct RunParam {
     pub exclu: bool,
 }
 
+/// Années hors desquelles une date du plan est une saisie fautive, pas un cas
+/// limite à absorber. Un champ date de navigateur notifie l'an 2, puis 20, puis
+/// 202 pendant la frappe de « 2026 » : trois dates complètes à ses yeux. Sans
+/// cette borne, la fenêtre part de l'an 2 et `timeline` — qui produit un jour
+/// civil à la fois — rend 739 409 jours à sérialiser puis à dessiner.
+/// Bornes reprises côté interface (`app.js::saisieEnCours`) : à garder alignées.
+const ANNEES_PLAUSIBLES: std::ops::RangeInclusive<i32> = 2000..=2100;
+
 fn jour_iso(brut: &str, champ: &str) -> Result<chrono::NaiveDate, String> {
-    chrono::NaiveDate::parse_from_str(brut.trim(), "%Y-%m-%d")
-        .map_err(|_| format!("{champ} : date ISO attendue, reçu « {brut} »"))
+    use chrono::Datelike;
+    let jour = chrono::NaiveDate::parse_from_str(brut.trim(), "%Y-%m-%d")
+        .map_err(|_| format!("{champ} : date ISO attendue, reçu « {brut} »"))?;
+    if !ANNEES_PLAUSIBLES.contains(&jour.year()) {
+        return Err(format!(
+            "{champ} : la date ({jour}) sort des années plausibles ({}-{})",
+            ANNEES_PLAUSIBLES.start(),
+            ANNEES_PLAUSIBLES.end()
+        ));
+    }
+    Ok(jour)
 }
 
 impl PlanParams {
@@ -2085,6 +2102,59 @@ mod tests {
         p.runs[0].date = "15/03/2026".into();
         let err = p.calendrier().unwrap_err();
         assert!(err.contains("R2"), "le run fautif doit être nommé : {err}");
+    }
+
+    #[test]
+    fn params_refusent_les_etats_de_frappe_d_une_annee() {
+        // Ce qu'un champ date de navigateur notifie pendant la frappe de
+        // « 2026 » : trois dates complètes, valides à ses yeux, une par chiffre.
+        // Acceptées, elles font partir la fenêtre de l'an 2 — et `timeline`
+        // produit un jour civil à la fois, soit 739 409 jours à sérialiser puis
+        // à dessiner. C'est ce qui fige l'application en cours de saisie.
+        for annee in ["0002", "0020", "0202"] {
+            let mut p = params_ok();
+            p.debut = format!("{annee}-07-27");
+            let err = p.calendrier().unwrap_err();
+            assert!(
+                err.contains("2000-2100"),
+                "l'an {annee} doit être refusé en nommant la plage : {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn params_bornent_les_annees_des_quatre_sortes_de_dates() {
+        // Le garde-fou de l'interface évite l'aller-retour, il n'est pas la
+        // règle : un plan enregistré à la main ou un runs.csv fautif entrent
+        // par ces quatre portes-là, pas seulement par le champ « Début ».
+        let mut p = params_ok();
+        p.debut = "1999-12-31".into();
+        let err = p.calendrier().unwrap_err();
+        assert!(err.contains("début"), "le début n'est pas borné : {err}");
+
+        let mut p = params_ok();
+        p.fin = "2101-01-01".into();
+        let err = p.calendrier().unwrap_err();
+        assert!(err.contains("fin"), "la fin n'est pas bornée : {err}");
+
+        let mut p = params_ok();
+        p.runs[0].date = "0202-03-15".into();
+        let err = p.calendrier().unwrap_err();
+        assert!(err.contains("R2"), "le run fautif doit être nommé : {err}");
+
+        let mut p = params_ok();
+        p.meps[0] = "0002-02-01".into();
+        let err = p.calendrier().unwrap_err();
+        assert!(err.contains("MEP"), "la MEP n'est pas bornée : {err}");
+    }
+
+    #[test]
+    fn params_acceptent_les_bornes_de_la_plage() {
+        // La plage est inclusive : 2000 et 2100 sont dedans, pas dehors.
+        let mut p = params_ok();
+        p.debut = "2000-01-01".into();
+        p.fin = "2100-12-31".into();
+        assert!(p.calendrier().is_ok(), "les bornes doivent passer");
     }
 
     #[test]
