@@ -311,7 +311,9 @@ test("les champs de volumes apparaissent dès l'arrivée du premier aperçu", as
   ctx.repondreAux((cmd) => {
     if (cmd === "plan_load") return { params, fichier: "brm2607.csv", autre_fichier: false };
     if (cmd === "plan_preview") return ctx.evaluer(`(${JSON.stringify(apercu(TROIS_RUNS))})`);
-    return null;
+    // `plan_lignes` rend un Vec, jamais null : une doublure qui répond null
+    // ferait porter au code un état que le moteur ne produit pas.
+    return ctx.evaluer("[]");
   });
 
   await ctx.app.ouvrirPlan();
@@ -339,7 +341,9 @@ test("le premier aperçu part avec les volumes restaurés", async () => {
   ctx.repondreAux((cmd) => {
     if (cmd === "plan_load") return { params, fichier: "brm2607.csv", autre_fichier: false };
     if (cmd === "plan_preview") return ctx.evaluer(`(${JSON.stringify(apercu(TROIS_RUNS))})`);
-    return null;
+    // `plan_lignes` rend un Vec, jamais null : une doublure qui répond null
+    // ferait porter au code un état que le moteur ne produit pas.
+    return ctx.evaluer("[]");
   });
 
   await ctx.app.ouvrirPlan();

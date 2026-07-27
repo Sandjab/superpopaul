@@ -167,6 +167,7 @@ function chargerApp() {
   // remplacer la fonction après coup n'aurait aucun effet. D'où l'indirection,
   // que `repondreAux` réarme quand un test veut simuler le backend.
   let repondre = () => null;
+  let repondreDialogue = () => null;
   const invoke = (cmd, args) => {
     invocations.push([cmd, args]);
     return Promise.resolve(repondre(cmd, args));
@@ -175,7 +176,13 @@ function chargerApp() {
     __TAURI__: {
       core: { invoke },
       event: { listen: () => Promise.resolve(() => {}) },
-      dialog: { open: async () => null, save: async () => null },
+      // Sélecteurs de fichiers. `null` par défaut = l'utilisateur annule, ce
+      // que tout appelant doit savoir traiter ; `repondreAuxDialogues` installe
+      // un chemin pour les tests qui vont plus loin.
+      dialog: {
+        open: async (opts) => repondreDialogue("open", opts),
+        save: async (opts) => repondreDialogue("save", opts),
+      },
       // `cockpit.js` s'abonne à la fermeture de fenêtre dès le chargement, et
       // enchaîne un `.catch` sur la promesse rendue par `onCloseRequested`.
       window: {
@@ -230,6 +237,8 @@ function chargerApp() {
     evaluer: (expr) => vm.runInContext(expr, ctx),
     /** Installe la réponse du backend : `(commande, args) => valeur`. */
     repondreAux: (fn) => { repondre = fn; },
+    /** Installe la réponse des sélecteurs de fichiers : `("open"|"save", opts) => chemin`. */
+    repondreAuxDialogues: (fn) => { repondreDialogue = fn; },
   };
 }
 

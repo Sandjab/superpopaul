@@ -1226,6 +1226,9 @@ const plan = {
   lignes: [],          // récapitulatif (onglet 2)
   sel: new Set(),      // CF sélectionnés
   tri: { col: "mep_id", asc: true },
+  // Nom du jeu de paramètres chargé dans la session. Point de départ, pas état
+  // à persister : le plan généré, lui, est déjà en base.
+  jeu: null,
   filtres: { mep: "", run: "", pa: "", origine: "", etat: "", q: "" },
   genere: false,
   // Rampe manuelle : { [run_num]: volume }. Vit ici et non dans le DOM — les
@@ -1335,6 +1338,128 @@ function saisieEnCours(v) {
   if (!v) return false;
   const an = Number(v.slice(0, 4));
   return an < ANNEE_MIN || an > ANNEE_MAX;
+}
+
+/** Décisions manuelles que porte le plan enregistré, réparties comme
+ *  `Preserves::depuis` (plan.rs) les répartit : une ligne retirée l'emporte sur
+ *  gelée, gelée sur épinglée. Les compter autrement donnerait un total
+ *  supérieur au nombre de lignes — et ferait mentir la fenêtre juste avant un
+ *  geste destructeur. */
+function decisionsDuPlan() {
+  const d = { gelees: 0, epinglees: 0, retirees: 0 };
+  for (const l of plan.lignes) {
+    if (l.retire_motif != null) d.retirees += 1;
+    else if (l.gelee) d.gelees += 1;
+    else if (l.origine === "manuel") d.epinglees += 1;
+  }
+  d.total = d.gelees + d.epinglees + d.retirees;
+  return d;
+}
+
+/** Ce qu'une remise à zéro emporte, énuméré. Seuls les ensembles non vides
+ *  paraissent : « 0 compte retiré » ferait hésiter sur rien. */
+function listeDecisions(d) {
+  const s = (n) => (n > 1 ? "s" : "");
+  const items = [];
+  if (d.gelees)
+    items.push(h("li", {}, h("b", {}, fmtN(d.gelees)),
+      ` MEP gelée${s(d.gelees)} — déjà passée${s(d.gelees)}`));
+  if (d.epinglees)
+    items.push(h("li", {}, h("b", {}, fmtN(d.epinglees)),
+      ` compte${s(d.epinglees)} épinglé${s(d.epinglees)} — ajouté${s(d.epinglees)} ou déplacé${s(d.epinglees)} à la main`));
+  if (d.retirees)
+    items.push(h("li", {}, h("b", {}, fmtN(d.retirees)),
+      ` compte${s(d.retirees)} retiré${s(d.retirees)} — avec leur motif`));
+  return h("ul", { class: "perdu" }, ...items);
+}
+
+/** Efface les lignes du plan, paramètres du panneau intacts. */
+async function effacerLePlan() {
+  await invoke("plan_reset");
+  plan.genere = false;
+  await rechargerRecap();
+}
+
+async function enregistrerJeu() {
+  const f = await save({ filters: [{ name: "YAML", extensions: ["yaml", "yml"] }] });
+  if (!f) return;
+  try {
+    await invoke("plan_params_save", { path: f, params: planParams() });
+    plan.jeu = f.split(/[\\/]/).pop();
+    planBanner(null);
+    renderPlanAside();
+  } catch (e) { planBanner("error", `Enregistrement impossible : ${e}`); }
+}
+
+async function chargerJeu() {
+  const f = await open({ multiple: false, filters: [{ name: "YAML", extensions: ["yaml", "yml"] }] });
+  if (!f) return;
+  let params;
+  try {
+    params = await invoke("plan_params_load", { path: f });
+  } catch (e) {
+    // Refus sec, comme un profil incompatible : AUCUN état modifié. Un jeu à
+    // moitié appliqué produirait un plan que personne ne saurait expliquer.
+    planBanner("error", `Jeu de paramètres illisible : ${e}`);
+    return;
+  }
+  const nom = f.split(/[\\/]/).pop();
+  const d = decisionsDuPlan();
+  // Un plan sans décision n'a rien à perdre : on ne demande rien.
+  if (!d.total) { poserJeu(params, nom); return; }
+  confirmerChargement(params, nom, d);
+}
+
+function poserJeu(params, nom) {
+  plan.jeu = nom;
+  appliquerParams(params);
+  planBanner(null);
+  planRecalc();
+}
+
+function confirmerChargement(params, nom, d) {
+  const poser = (effacer) => async (ev) => {
+    if (effacer) {
+      const fait = await occupe(ev?.currentTarget, "Effacement…", () => effacerLePlan())
+        .then(() => true, (e) => { planBanner("error", String(e)); return false; });
+      if (!fait) { closeModal(); return; }
+    }
+    poserJeu(params, nom);
+    closeModal();
+  };
+  modal(
+    h("h3", {}, `Charger « ${nom} » ?`),
+    h("p", { class: "field-hint" }, "Le plan enregistré porte des décisions manuelles :"),
+    listeDecisions(d),
+    h("p", { class: "field-hint" },
+      "Les conserver les reporte sur le nouveau plan, et sort leurs comptes du tirage. "
+      + "Repartir de zéro les efface définitivement."),
+    h("div", { class: "actions" },
+      h("button", { class: "btn-ghost", onclick: closeModal }, "Annuler"),
+      h("button", { onclick: poser(false) }, "Conserver ces décisions"),
+      h("button", { class: "btn-danger", onclick: poser(true) }, "Repartir de zéro")));
+}
+
+function ouvrirRepartirDeZero() {
+  const d = decisionsDuPlan();
+  const noeuds = [h("h3", {}, "Repartir de zéro ?")];
+  // Un motif de retrait ne se reconstitue pas : c'est la seule perte qu'on ne
+  // peut pas refaire à la main, elle se dit à part.
+  if (d.retirees)
+    noeuds.push(h("div", { class: "danger-note" },
+      `Les ${fmtN(d.retirees)} compte(s) retiré(s) perdent leur motif. Cette trace ne se reconstitue pas.`));
+  noeuds.push(
+    listeDecisions(d),
+    h("p", { class: "field-hint" }, "Les paramètres du panneau, eux, sont conservés."),
+    h("div", { class: "actions" },
+      h("button", { class: "btn-ghost", onclick: closeModal }, "Annuler"),
+      h("button", { class: "btn-danger", onclick: (ev) =>
+        occupe(ev?.currentTarget, "Effacement…", async () => {
+          try { await effacerLePlan(); planRecalc(); }
+          catch (e) { planBanner("error", String(e)); }
+          closeModal();
+        }) }, "Repartir de zéro")));
+  modal(...noeuds);
 }
 
 /** Paramètres envoyés au moteur. Forme exacte de PlanParams (plan.rs). */
@@ -1505,6 +1630,16 @@ function renderPlanAside() {
   const blocVolumes = forme === "manuelle" ? volumesParRun() : null;
 
   $("plan-aside").replaceChildren(
+    // En tête du panneau : un jeu porte TOUT ce qui suit, calendrier compris.
+    h("h3", {}, "Jeu de paramètres"),
+    h("div", { class: "duo-btn" },
+      h("button", { onclick: enregistrerJeu }, "Enregistrer…"),
+      h("button", { onclick: chargerJeu }, "Charger…")),
+    plan.jeu
+      ? h("p", { class: "field-hint jeu-actif" }, `✓ Chargé depuis « ${plan.jeu} »`)
+      : h("p", { class: "field-hint" },
+          "Fenêtre, MEP, cible, rampe et calendrier des runs, dans un seul fichier."),
+
     h("h3", { id: "plan-cols-title", class: manque ? "need" : "" }, "Colonnes"), bloc,
 
     h("h3", {}, "Calendrier de facturation"),
@@ -1579,6 +1714,12 @@ function renderPlanAside() {
     h("button", { id: "btn-plan-gen", class: "btn-primary", style: "width:100%;margin-top:16px", onclick: genererPlan },
       plan.genere ? "Régénérer le plan" : "Générer le plan"),
     h("p", { class: "field-hint" }, "Conservés à l'identique : MEP gelées, retouches manuelles et comptes retirés."),
+    // Un bouton destructeur qui ne détruit rien est du bruit : il n'apparaît
+    // que quand il y a un plan à jeter.
+    ...(plan.lignes.length
+      ? [h("button", { class: "btn-danger", style: "width:100%", onclick: ouvrirRepartirDeZero },
+          "Repartir de zéro…")]
+      : []),
   );
 }
 
@@ -2395,35 +2536,42 @@ function planShowTab(t) {
  *  d'effacer ce qui aurait été saisi entre-temps. */
 let planRelu = false;
 
+/** Pose un jeu de `PlanParams` sur le panneau : état en mémoire puis champs.
+ *  Partagé par la restauration du plan enregistré et le chargement d'un jeu de
+ *  paramètres — les deux appliquent exactement la même forme. */
+function appliquerParams(params) {
+  plan.runs = params.runs ?? [];
+  plan.meps = params.meps ?? [];
+  plan.paExclues = new Set(params.pa_exclues ?? []);
+  plan.volumes = { ...(params.rampe?.volumes ?? {}) };
+  renderPlanAside();
+  if ($("plan-debut")) $("plan-debut").value = params.debut ?? "";
+  if ($("plan-fin")) $("plan-fin").value = params.fin ?? "";
+  if ($("plan-mepcount")) $("plan-mepcount").value = params.mep_count ?? 0;
+  if ($("plan-cible")) $("plan-cible").value = params.cible ?? "";
+  if ($("plan-seed")) $("plan-seed").value = params.seed ?? 42;
+  // La rampe n'était pas restaurée du tout : un plan enregistré en géométrique
+  // rouvrait en « plate », sa raison perdue. Les champs qui en dépendent
+  // (raison, volumes, pilote) n'existent qu'une fois la forme posée — d'où le
+  // second rendu, qui conserve ce qui vient d'être écrit.
+  const ra = params.rampe ?? {};
+  if ($("plan-forme")) $("plan-forme").value = ra.forme ?? "plate";
+  if ($("plan-pilote")) $("plan-pilote").checked = !!ra.pilote;
+  renderPlanAside();
+  if (ra.raison && $("plan-raison")) $("plan-raison").value = ra.raison;
+  if (ra.pilote) {
+    if ($("plan-pilote-runs")) $("plan-pilote-runs").value = ra.pilote.runs ?? 0;
+    if ($("plan-pilote-cf")) $("plan-pilote-cf").value = ra.pilote.cf_par_run ?? 0;
+  }
+}
+
 /** Restaure paramètres et calendrier du plan enregistré. */
 async function hydraterPlan() {
   try {
     const enr = await invoke("plan_load");
     if (enr) {
-      plan.runs = enr.params.runs ?? [];
-      plan.meps = enr.params.meps ?? [];
-      plan.paExclues = new Set(enr.params.pa_exclues ?? []);
-      plan.volumes = { ...(enr.params.rampe?.volumes ?? {}) };
       plan.genere = true;
-      renderPlanAside();
-      if ($("plan-debut")) $("plan-debut").value = enr.params.debut ?? "";
-      if ($("plan-fin")) $("plan-fin").value = enr.params.fin ?? "";
-      if ($("plan-mepcount")) $("plan-mepcount").value = enr.params.mep_count ?? 0;
-      if ($("plan-cible")) $("plan-cible").value = enr.params.cible ?? "";
-      if ($("plan-seed")) $("plan-seed").value = enr.params.seed ?? 42;
-      // La rampe n'était pas restaurée du tout : un plan enregistré en
-      // géométrique rouvrait en « plate », sa raison perdue. Les champs qui en
-      // dépendent (raison, volumes, pilote) n'existent qu'une fois la forme
-      // posée — d'où le second rendu, qui conserve ce qui vient d'être écrit.
-      const ra = enr.params.rampe ?? {};
-      if ($("plan-forme")) $("plan-forme").value = ra.forme ?? "plate";
-      if ($("plan-pilote")) $("plan-pilote").checked = !!ra.pilote;
-      renderPlanAside();
-      if (ra.raison && $("plan-raison")) $("plan-raison").value = ra.raison;
-      if (ra.pilote) {
-        if ($("plan-pilote-runs")) $("plan-pilote-runs").value = ra.pilote.runs ?? 0;
-        if ($("plan-pilote-cf")) $("plan-pilote-cf").value = ra.pilote.cf_par_run ?? 0;
-      }
+      appliquerParams(enr.params);
       $("plan-foot-info").textContent =
         `Plan enregistré depuis ${enr.fichier}` + (enr.autre_fichier ? " — ⚠ le fichier ouvert est différent" : "");
       if (enr.autre_fichier)
