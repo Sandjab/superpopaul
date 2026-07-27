@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Maquette — jeux de paramètres du plan de charge</title>
+<style>
+/* Palette « Bleu nuit & or » — reprise à l'identique de styles.css et des
+   maquettes précédentes. Aucun ton nouveau n'est introduit par ce lot. */
+:root {
+  color-scheme: dark;
+  --bg: #0e1524; --card: #172136; --border: #2b3752;
+  --fg: #eae9e2; --muted: #939cb4;
+  --green: #4cc268; --gold: #d9a83f; --gold-hover: #e6bb5c; --on-gold: #241a02;
+  --amber: #e0873a; --red: #e5534b;
+  --pid: #e8e4d8; --green-later: #2f8050;
+  --btn2: #1b2740; --track: #223050;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 14px/1.5 -apple-system, "Segoe UI", system-ui, sans-serif;
+  padding: 28px 32px 64px;
+}
+h1 { font-size: 20px; font-weight: 600; margin: 0 0 4px; }
+h2 {
+  font-size: 15px; font-weight: 600; margin: 38px 0 6px;
+  padding-top: 18px; border-top: 1px solid var(--border);
+}
+h3 { font-size: 13px; font-weight: 600; margin: 20px 0 8px; color: var(--muted); }
+p.intro { color: var(--muted); margin: 0 0 8px; max-width: 76ch; }
+p.note {
+  color: var(--muted); font-size: 12.5px; margin: 8px 0 0; max-width: 82ch;
+  border-left: 2px solid var(--border); padding-left: 12px;
+}
+p.note b { color: var(--fg); }
+
+button {
+  background: var(--btn2); color: var(--fg); border: 1px solid var(--border);
+  border-radius: 6px; padding: 5px 14px; cursor: pointer; font: inherit;
+}
+button:hover:not(:disabled) { border-color: var(--gold); }
+.btn-primary { background: var(--gold); border-color: var(--gold-hover); color: var(--on-gold); font-weight: 600; }
+.btn-danger { border-color: var(--red); color: var(--red); }
+.btn-ghost { background: transparent; border-color: transparent; color: var(--muted); }
+input, select { background: var(--bg); color: var(--fg); border: 1px solid var(--border);
+                border-radius: 6px; padding: 5px 8px; font: inherit; }
+.field-hint { color: var(--muted); font-size: 12.5px; margin: 4px 0 8px; }
+.banner { border-radius: 8px; padding: 8px 12px; font-size: 12.5px; margin: 8px 0; }
+.banner.error { background: #331518; color: var(--red); }
+.modal {
+  background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+  padding: 18px 20px; max-width: 480px;
+}
+.modal h4 { margin: 0 0 10px; font-size: 15px; font-weight: 600; }
+.modal .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; flex-wrap: wrap; }
+.danger-note { background: #331518; color: var(--red); border-radius: 8px; padding: 9px 12px; font-size: 12.5px; margin: 10px 0; }
+.perdu { margin: 8px 0; padding-left: 18px; font-size: 12.5px; }
+.perdu li { margin: 2px 0; }
+.perdu b { color: var(--fg); }
+
+/* --- NOUVEAU dans ce lot -------------------------------------------------- */
+/* Le jeu de paramètres chargé, nommé sous ses boutons. Même rôle que le
+   triptyque du profil : savoir SUR QUOI on travaille sans avoir à chercher. */
+.jeu-actif { color: var(--gold); }
+/* Les deux boutons du jeu, côte à côte et de largeur égale. */
+.duo-btn { display: flex; gap: 8px; }
+.duo-btn button { flex: 1; }
+
+/* --- échafaudage de la maquette (jamais livré) ---------------------------- */
+.scene { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px; margin: 10px 0; }
+.aside {
+  background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+  padding: 14px 16px; width: 300px;
+}
+.aside h3 { color: var(--fg); font-size: 13px; margin: 16px 0 6px; }
+.aside h3:first-child { margin-top: 0; }
+.aside label { display: block; font-size: 12px; color: var(--muted); margin: 6px 0 2px; }
+.aside input, .aside select { width: 100%; }
+.cote { display: flex; gap: 18px; align-items: flex-start; flex-wrap: wrap; }
+.lbl { font-size: 11px; text-transform: uppercase; letter-spacing: .4px; color: var(--muted); margin-bottom: 8px; }
+.coupe { border-top: 1px dashed var(--border); margin: 14px 0 0; padding-top: 10px; color: var(--muted); font-size: 11.5px; }
+</style>
+</head>
+<body>
+
+<h1>Jeux de paramètres du plan de charge</h1>
+<p class="intro">
+  Rejouer les mêmes paramètres sur un autre fichier oblige aujourd'hui à tout
+  ressaisir, ou à hériter du dernier plan avec ses décisions manuelles. Un seul
+  plan est mémorisé, et il n'existe aucun moyen d'en garder plusieurs jeux.
+</p>
+<p class="note">
+  Le format existe déjà : <code>PlanParams::vers_yaml</code> /
+  <code>depuis_yaml</code>, avec ses tests d'aller-retour. C'est ce qui est
+  persisté dans <code>plan_meta.params_yaml</code>. Le lot n'invente pas un
+  format, il lui donne une porte.
+</p>
+
+<!-- ==================================================================== -->
+<h2>1 · Deux boutons en tête du panneau</h2>
+<p class="intro">
+  Au-dessus de « Colonnes », parce qu'un jeu de paramètres porte tout ce qui
+  suit — calendrier compris. Mêmes gestes que les profils : sélecteur de
+  fichier, YAML, refus sec en cas d'échec.
+</p>
+
+<div class="cote">
+  <div>
+    <div class="lbl">Aucun jeu chargé</div>
+    <div class="aside">
+      <h3>Jeu de paramètres</h3>
+      <div class="duo-btn">
+        <button>Enregistrer…</button>
+        <button>Charger…</button>
+      </div>
+      <p class="field-hint">Fenêtre, MEP, cible, rampe et calendrier des runs, dans un seul fichier.</p>
+
+      <h3>Colonnes</h3>
+      <label>Compte de facturation (CF)</label>
+      <select><option>ACCOUNT_NUM</option></select>
+      <div class="coupe">… le reste du panneau, inchangé …</div>
+    </div>
+  </div>
+
+  <div>
+    <div class="lbl">Après chargement</div>
+    <div class="aside">
+      <h3>Jeu de paramètres</h3>
+      <div class="duo-btn">
+        <button>Enregistrer…</button>
+        <button>Charger…</button>
+      </div>
+      <p class="field-hint jeu-actif">✓ Chargé depuis « fut-2026-t3.yaml »</p>
+
+      <h3>Colonnes</h3>
+      <label>Compte de facturation (CF)</label>
+      <select><option>ACCOUNT_NUM</option></select>
+      <div class="coupe">… le reste du panneau, renseigné par le jeu …</div>
+    </div>
+  </div>
+</div>
+
+<p class="note">
+  Le nom du jeu chargé tient le même rôle que le triptyque du profil : savoir
+  <b>sur quoi</b> on travaille sans avoir à chercher. Il ne vit que dans la
+  session — c'est un point de départ, pas un état à persister.
+</p>
+
+<!-- ==================================================================== -->
+<h2>2 · Repartir de zéro</h2>
+<p class="intro">
+  En pied de panneau, sous « Générer le plan ». Efface les lignes du plan et
+  <b>garde les paramètres</b> : c'est le geste qui manque aujourd'hui pour
+  rejouer une fenêtre sur un autre fichier sans traîner les décisions prises
+  sur le précédent.
+</p>
+
+<div class="cote">
+  <div class="aside">
+    <div class="coupe" style="border-top:none;margin-top:0;padding-top:0">… haut du panneau …</div>
+    <button class="btn-primary" style="width:100%;margin-top:16px">Régénérer le plan</button>
+    <p class="field-hint">Conservés à l'identique : MEP gelées, retouches manuelles et comptes retirés.</p>
+    <button class="btn-danger" style="width:100%">Repartir de zéro…</button>
+  </div>
+</div>
+
+<p class="note">
+  Il ferme aussi, de biais, le défaut connu : une ligne ajoutée à la main puis
+  retirée ne s'efface pas et sort son compte du pool pour de bon. Sans commande
+  de suppression ligne à ligne — qui contredirait la règle « une ligne retirée
+  n'est jamais supprimée » — on rend seulement le plan entier jetable.
+</p>
+
+<!-- ==================================================================== -->
+<h2>3 · La confirmation, seulement s'il y a quelque chose à perdre</h2>
+<p class="intro">
+  Un plan purement automatique, MEP à venir et sans retouche, ne contient
+  aucune décision : charger un jeu ne demande alors rien. La question ne se
+  pose que si le plan porte des lignes que la régénération aurait préservées.
+</p>
+
+<h3>Chargement d'un jeu, plan porteur de décisions</h3>
+<div class="scene">
+  <div class="modal">
+    <h4>Charger « fut-2026-t3.yaml » ?</h4>
+    <p class="field-hint">Le plan enregistré porte des décisions manuelles :</p>
+    <ul class="perdu">
+      <li><b>12</b> MEP gelées — déjà passées</li>
+      <li><b>3</b> comptes épinglés — ajoutés ou déplacés à la main</li>
+      <li><b>5</b> comptes retirés — avec leur motif</li>
+    </ul>
+    <p class="field-hint">
+      Les conserver les reporte sur le nouveau plan, et sort leurs comptes du
+      tirage. Repartir de zéro les efface définitivement.
+    </p>
+    <div class="actions">
+      <button class="btn-ghost">Annuler</button>
+      <button>Conserver ces décisions</button>
+      <button class="btn-danger">Repartir de zéro</button>
+    </div>
+  </div>
+</div>
+
+<h3>« Repartir de zéro » demandé explicitement</h3>
+<div class="scene">
+  <div class="modal">
+    <h4>Repartir de zéro ?</h4>
+    <div class="danger-note">
+      Les <b>5</b> comptes retirés perdent leur motif. Cette trace ne se
+      reconstitue pas.
+    </div>
+    <ul class="perdu">
+      <li><b>12</b> MEP gelées — déjà passées</li>
+      <li><b>3</b> comptes épinglés — ajoutés ou déplacés à la main</li>
+      <li><b>5</b> comptes retirés — avec leur motif</li>
+    </ul>
+    <p class="field-hint">Les paramètres du panneau, eux, sont conservés.</p>
+    <div class="actions">
+      <button class="btn-ghost">Annuler</button>
+      <button class="btn-danger">Repartir de zéro</button>
+    </div>
+  </div>
+</div>
+
+<p class="note">
+  <b>Les trois nombres ne se recoupent pas.</b> Ils suivent l'ordre de
+  <code>Preserves::depuis</code> : une ligne retirée compte comme retirée, même
+  si sa MEP est passée. Les afficher autrement ferait un total supérieur au
+  nombre de lignes.
+</p>
+
+<h3>Un jeu illisible est refusé sans rien changer</h3>
+<div class="scene">
+  <div class="banner error">Jeu de paramètres illisible : paramètres illisibles : missing field `seed`</div>
+</div>
+<p class="note">
+  Refus sec, comme un profil incompatible : aucun état modifié, le panneau
+  reste tel qu'il était. Un jeu à moitié appliqué produirait un plan que
+  personne ne saurait expliquer.
+</p>
+
+<!-- ==================================================================== -->
+<h2>Ce que cette maquette n'introduit pas</h2>
+<p class="note">
+  Aucun suivi « modifié depuis le chargement » : contrairement au profil, un jeu
+  de paramètres est un point de départ, pas un état à tenir à jour — le plan
+  généré, lui, est déjà persisté. Aucun répertoire de jeux, aucune liste : le
+  sélecteur de fichier du système suffit, comme pour les profils. Et aucune
+  suppression de ligne à l'unité : la règle « une ligne retirée n'est jamais
+  supprimée » tient, on rend seulement le plan entier jetable.
+</p>
+
+</body>
+</html>
