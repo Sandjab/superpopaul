@@ -202,6 +202,28 @@ pub fn render(d: &RapprochementReportData) -> String {
     ));
     html.push_str("</section>\n");
 
+    // Retraits portant sur une MEP déjà transmise. AVANT tout le reste : les
+    // fichiers étant cumulatifs, le destinataire a une version antérieure
+    // entre les mains, et c'est la seule information du rapport qui l'oblige
+    // à agir sur ce qu'il a déjà reçu.
+    let geles: Vec<&&Ecart> = retires.iter().filter(|e| e.gelee).collect();
+    if !geles.is_empty() {
+        html.push_str(
+            "<section class=\"warn danger\">\n\
+             <h2>Retrait portant sur une mise en production déjà transmise</h2>\n<ul>\n",
+        );
+        for e in &geles {
+            html.push_str(&format!(
+                "<li>Le compte <b>{}</b> figurait dans un fichier qui vous a déjà été \
+                 transmis. Les fichiers étant cumulatifs, il ne figure plus dans aucun \
+                 fichier de ce lot. Motif : <b>{}</b>.</li>\n",
+                esc(&e.cf),
+                esc(motif(&e.action)),
+            ));
+        }
+        html.push_str("</ul>\n</section>\n");
+    }
+
     // ① Éligibilité perdue.
     let inelig_l = retraits_de_nature(r, false);
     section(
@@ -306,6 +328,45 @@ pub fn render(d: &RapprochementReportData) -> String {
         html.push_str(&format!("<tr><td>{}</td>{}</tr>\n", esc(&e.cf), chg(av, ap)));
     }
     fin_section(&mut html, plat_l.is_empty());
+
+    // Ce que le rapprochement n'a pas tranché. Ni vert ni rouge : en attente.
+    let signales = par_action(r, |a| matches!(a, Action::Signaler));
+    if !signales.is_empty() {
+        html.push_str("<section class=\"todo\">\n<h2>À traiter à la main</h2>\n<ul>\n");
+        for e in &signales {
+            let quoi = match &e.nature {
+                Nature::JourChange { avant, apres } if *apres == 0 => format!(
+                    "annonce un jour de cycle <b>illisible</b> dans le fichier rapproché \
+                     (il était à <b>{}</b>). La ligne n'a pas été déplacée.",
+                    jour(*avant)
+                ),
+                Nature::JourChange { avant, apres } => format!(
+                    "voit son jour de cycle passer de <b>{}</b> à <b>{}</b>{}. \
+                     La ligne n'a pas été déplacée.",
+                    jour(*avant),
+                    jour(*apres),
+                    if e.gelee {
+                        " alors qu'il est gelé (mise en production déjà transmise)"
+                    } else {
+                        ", sans run disponible pour l'accueillir"
+                    },
+                ),
+                Nature::EligibilitePerdue { avant, apres } => {
+                    format!("passe de <b>{}</b> à <b>{}</b>.", esc(avant), esc(apres))
+                }
+                Nature::PlateformeChangee { avant, apres } => format!(
+                    "change de plateforme : <b>{}</b> → <b>{}</b>.",
+                    esc(avant),
+                    esc(apres)
+                ),
+                Nature::DisparuDuFichier => {
+                    "n'apparaît plus dans le fichier rapproché.".to_string()
+                }
+            };
+            html.push_str(&format!("<li>Le compte <b>{}</b> {}</li>\n", esc(&e.cf), quoi));
+        }
+        html.push_str("</ul>\n</section>\n");
+    }
 
     html.push_str(&format!(
         "<footer>\n<span>Le détail compte par compte figure dans le classeur \
@@ -463,6 +524,90 @@ mod tests {
     const T_DISPARUS: &str = "<h2>Comptes retirés — disparus du fichier</h2>";
     const T_DEPLACES: &str = "<h2>Comptes déplacés — jour de cycle changé</h2>";
     const T_PLATEFORMES: &str = "<h2>Plateformes corrigées</h2>";
+
+    const T_ALERTE: &str = "Retrait portant sur une mise en production déjà transmise";
+    const T_TODO: &str = "<h2>À traiter à la main</h2>";
+
+    #[test]
+    fn un_retrait_sur_mep_transmise_a_sa_propre_section() {
+        // Les fichiers sont cumulatifs : le destinataire a une version
+        // antérieure de ce fichier entre les mains. Noyer ce cas dans le
+        // tableau général est le principal moyen de le rater.
+        let mut r = vide();
+        let mut e = ecart_eligibilite("4100238877");
+        e.gelee = true;
+        r.ecarts = vec![e, ecart_eligibilite("4100241902")];
+        let html = render(&donnees(&r));
+        let c = corps(&html);
+        assert!(c.contains(T_ALERTE), "section des retraits sur MEP livrée absente");
+        // Ce qui est vérifié ici, c'est la MISE EN ÉVIDENCE : l'alerte doit
+        // précéder le premier tableau d'écarts, pas seulement exister.
+        let avant_tableaux = c.split("<h2>Comptes retirés").next().unwrap_or("");
+        assert!(
+            avant_tableaux.contains("4100238877"),
+            "le compte gelé doit apparaître AVANT les tableaux d'écarts"
+        );
+    }
+
+    #[test]
+    fn sans_retrait_gele_la_section_d_alerte_n_existe_pas() {
+        let mut r = vide();
+        r.ecarts = vec![ecart_eligibilite("4100241902")];
+        let html = render(&donnees(&r));
+        assert!(!corps(&html).contains(T_ALERTE));
+    }
+
+    #[test]
+    fn un_jour_illisible_se_dit_en_toutes_lettres() {
+        // `apres: 0` est une sentinelle hors du domaine 1–31. L'afficher
+        // comme un chiffre ferait lire « le compte passe au jour 0 ».
+        let mut r = vide();
+        r.ecarts = vec![Ecart {
+            cf: "4100252009".into(),
+            nature: Nature::JourChange { avant: 9, apres: 0 },
+            action: Action::Signaler,
+            gelee: false,
+        }];
+        let html = render(&donnees(&r));
+        let c = corps(&html);
+        // Cherché DANS la section, pas dans le document : les compteurs du
+        // résumé affichent eux aussi des zéros, et `<b>0</b>` y figure.
+        let todo = c
+            .split("<section class=\"todo\">")
+            .nth(1)
+            .expect("la section « à traiter à la main » doit exister");
+        assert!(todo.contains("illisible"), "le jour illisible doit se dire");
+        assert!(!todo.contains("jour 0"), "la sentinelle ne doit jamais s'afficher");
+        assert!(!todo.contains("<b>0</b>"), "la sentinelle ne doit jamais s'afficher");
+    }
+
+    #[test]
+    fn un_signalement_n_est_pas_compte_parmi_les_changements() {
+        // « Signaler » ne mute rien. Le compter dans les déplacés ferait
+        // annoncer un mouvement qui n'a pas eu lieu.
+        let mut r = vide();
+        // Non nul, pour que le compteur des inchangées ne se confonde pas
+        // avec les trois compteurs de changements.
+        r.inchangees = 42;
+        r.ecarts = vec![Ecart {
+            cf: "4100251774".into(),
+            nature: Nature::JourChange { avant: 9, apres: 24 },
+            action: Action::Signaler,
+            gelee: true,
+        }];
+        let html = render(&donnees(&r));
+        let c = corps(&html);
+        assert!(c.contains(T_TODO), "section des signalements absente");
+        assert!(
+            !c.contains(T_DEPLACES),
+            "un signalement ne doit pas produire de tableau de déplacés"
+        );
+        assert_eq!(
+            c.matches("<div class=\"v\">0</div>").count(),
+            3,
+            "retraits, déplacés et plateformes doivent tous rester à zéro"
+        );
+    }
 
     #[test]
     fn chaque_nature_a_son_tableau_avec_l_avant_et_l_apres() {
