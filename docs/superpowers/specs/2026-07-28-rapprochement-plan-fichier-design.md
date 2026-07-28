@@ -270,9 +270,15 @@ ce que la rampe aurait produit.
 ### `rapprochement.rs` — pur, sans I/O
 
 ```rust
-pub fn calculer(plan, entrees, runs, meps, aujourdhui) -> Rapprochement
-pub fn appliquer(plan: &mut Vec<LignePlan>, r: &Rapprochement, maintenant: i64) -> Result<(), String>
+pub fn calculer(plan, entrees, runs, meps, aujourdhui) -> Result<Rapprochement, String>
+pub fn appliquer(plan: &mut [LignePlan], r: &Rapprochement, maintenant: i64) -> Result<(), String>
 ```
+
+`calculer` peut échouer : elle hérite du refus de `dedoublonner` sur un compte
+dont le fichier donne deux jours de cycle contradictoires.
+
+`appliquer` prend une **tranche**, pas un `Vec` : elle n'ajoute ni ne supprime
+jamais de ligne, et le type le dit.
 
 `appliquer` échoue si un écart désigne un compte absent du plan — incohérence
 interne qui ne peut venir que d'un rapprochement calculé sur un autre plan.
@@ -306,6 +312,12 @@ calcule, **n'écrit rien**.
 `plan_rapprocher_appliquer` **recalcule tout depuis zéro**, applique, persiste
 via `sauver_apres_retouche` — qui réécrit les fichiers MEP et supprime les
 obsolètes, comme pour un retrait — et renseigne `rapproche_le`.
+
+**Le plan se réaligne sur le nouveau fichier.** `plan_meta.fichier` et
+`plan_meta.hash` deviennent ceux du fichier ouvert : le plan décrit désormais
+F2, et le laisser pointer sur F1 ferait annoncer « contenu différent » par
+`rapport_au_fichier` sur un plan qu'on vient précisément d'aligner. Seuls
+`genere_le` et `params_yaml` restent — le plan n'a pas été régénéré.
 
 Le diff ne transite pas par le front : ce qui s'écrit ne dépend jamais de
 données remontées par le JS. En contrepartie, un fichier modifié entre les deux
