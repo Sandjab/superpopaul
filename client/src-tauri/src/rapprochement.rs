@@ -221,7 +221,10 @@ mod tests {
         let Action::Retirer { motif } = &r.ecarts[0].action else {
             panic!("attendu un retrait, obtenu {:?}", r.ecarts[0].action);
         };
-        assert!(motif.contains("CTC"), "le motif doit nommer la cause : {motif}");
+        // Égalité stricte, pas `contains` : un simple préfixe « CTC » laisserait
+        // passer n'importe quel libellé (cf. mutation trouvée par la revue sur
+        // `libelle_ctc`).
+        assert_eq!(motif, "CTC prêt plus tard");
     }
 
     #[test]
@@ -234,7 +237,18 @@ mod tests {
         let Action::Retirer { motif } = &r.ecarts[0].action else {
             panic!("attendu un retrait");
         };
-        assert!(motif.contains("PPF"), "le motif doit nommer la cause : {motif}");
+        assert_eq!(motif, "PPF non utilisable");
+    }
+
+    /// `libelle_ctc` seule : couvre les branches qu'aucun test de `calculer`
+    /// n'exerçait (`expired`, statut vide). Un statut vide (jamais résolu)
+    /// n'est pas la même chose que « pas prêt » — deux motifs distincts le
+    /// prouvent, un `contains` commun aux deux ne le prouverait pas.
+    #[test]
+    fn libelle_ctc_distingue_expire_et_jamais_resolu() {
+        assert_eq!(libelle_ctc("expired"), "expiré");
+        assert_eq!(libelle_ctc(""), "non résolu");
+        assert_ne!(libelle_ctc("expired"), libelle_ctc(""));
     }
 
     /// Motif distinct du précédent : « disparu » et « inéligible » ne
