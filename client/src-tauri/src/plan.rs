@@ -71,27 +71,13 @@ pub struct Funnel {
     pub eligibles: u64,
 }
 
-/// Construit le pool éligible et l'entonnoir.
+/// Dédoublonne les entrées par compte de facturation. Première occurrence
+/// retenue, ordre d'entrée conservé ; toute divergence sur le jour de cycle ou
+/// l'adressage est une incohérence de données → refus fort.
 ///
-/// Dédoublonnage : deux lignes STRICTEMENT identiques pour un même CF sont
-/// fondues en silence. En revanche un même CF porté par deux jours de cycle
-/// (ou deux adressages) différents est une incohérence de données, pas un cas
-/// nominal : **refus fort**, avec un message nommant le compte et les valeurs
-/// en conflit.
-///
-/// Les comptes rendus sont dans l'ordre d'apparition ; le tri de priorité est
-/// l'affaire de l'allocation.
-pub fn construire_pool(
-    entrees: &[LigneEntree],
-    pa_exclues: &HashSet<String>,
-) -> Result<(Vec<CfCandidat>, Funnel), String> {
-    let mut f = Funnel {
-        lignes: entrees.len() as u64,
-        ..Funnel::default()
-    };
-
-    // 1) Dédoublonnage par CF. Première occurrence retenue ; toute divergence
-    //    sur le JJ ou l'adressage est une incohérence de données → refus fort.
+/// Extraite de `construire_pool` pour que le rapprochement hérite du même
+/// refus : lui cherche les comptes INÉLIGIBLES, que l'entonnoir écarte.
+pub fn dedoublonner(entrees: &[LigneEntree]) -> Result<Vec<&LigneEntree>, String> {
     let mut vus: HashMap<&str, &LigneEntree> = HashMap::new();
     let mut ordre: Vec<&LigneEntree> = Vec::new();
     for l in entrees {
@@ -120,6 +106,30 @@ pub fn construire_pool(
             }
         }
     }
+    Ok(ordre)
+}
+
+/// Construit le pool éligible et l'entonnoir.
+///
+/// Dédoublonnage : deux lignes STRICTEMENT identiques pour un même CF sont
+/// fondues en silence. En revanche un même CF porté par deux jours de cycle
+/// (ou deux adressages) différents est une incohérence de données, pas un cas
+/// nominal : **refus fort**, avec un message nommant le compte et les valeurs
+/// en conflit.
+///
+/// Les comptes rendus sont dans l'ordre d'apparition ; le tri de priorité est
+/// l'affaire de l'allocation.
+pub fn construire_pool(
+    entrees: &[LigneEntree],
+    pa_exclues: &HashSet<String>,
+) -> Result<(Vec<CfCandidat>, Funnel), String> {
+    let mut f = Funnel {
+        lignes: entrees.len() as u64,
+        ..Funnel::default()
+    };
+
+    // 1) Dédoublonnage par CF, partagé avec le rapprochement.
+    let ordre = dedoublonner(entrees)?;
     f.cf_distincts = ordre.len() as u64;
 
     // 2) Entonnoir : chaque marche retire ce qu'elle doit, et rien d'autre.
@@ -1236,6 +1246,35 @@ mod tests {
         assert_eq!(pool[0].jj, 5);
         assert_eq!(f.lignes, 2);
         assert_eq!(f.eligibles, 2);
+    }
+
+    #[test]
+    fn dedoublonner_garde_la_premiere_occurrence_dans_l_ordre() {
+        let e = vec![
+            ligne("CF1", "5", "Cegedim"),
+            ligne("CF2", "12", "Esker"),
+            ligne("CF1", "5", "Cegedim"),
+        ];
+        let out = dedoublonner(&e).unwrap();
+        assert_eq!(out.len(), 2, "CF1 n'est retenu qu'une fois");
+        assert_eq!(out[0].cf, "CF1", "l'ordre d'entrée est conservé");
+        assert_eq!(out[1].cf, "CF2");
+    }
+
+    /// Le rapprochement rend les INÉLIGIBLES : il doit pouvoir dédoublonner
+    /// sans que l'entonnoir écarte ce qu'il vient chercher.
+    #[test]
+    fn dedoublonner_rend_aussi_les_comptes_ineligibles() {
+        let e = vec![
+            avec_ctc(ligne("CF1", "5", "Cegedim"), "later"),
+            {
+                let mut l = ligne("CF2", "12", "Esker");
+                l.ppf_usable = false;
+                l
+            },
+        ];
+        let out = dedoublonner(&e).unwrap();
+        assert_eq!(out.len(), 2, "aucun filtre d'éligibilité ici");
     }
 
     #[test]
