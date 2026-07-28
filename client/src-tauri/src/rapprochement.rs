@@ -84,6 +84,8 @@ pub fn calculer(
         .into_iter()
         .map(|e| (e.cf.as_str(), e))
         .collect();
+    // Un motif sans date est ingérable six mois plus tard.
+    let stamp = format!("Rapprochement du {}", aujourdhui.format("%d/%m/%Y"));
 
     let mut r = Rapprochement::default();
     for l in plan {
@@ -97,7 +99,7 @@ pub fn calculer(
             r.ecarts.push(Ecart {
                 cf: l.cf.clone(),
                 nature: Nature::DisparuDuFichier,
-                action: Action::Retirer { motif: "absent du fichier".into() },
+                action: Action::Retirer { motif: format!("{stamp} — absent du fichier") },
                 gelee,
             });
             continue;
@@ -111,7 +113,7 @@ pub fn calculer(
             r.ecarts.push(Ecart {
                 cf: l.cf.clone(),
                 nature: Nature::EligibilitePerdue { avant, apres: apres.clone() },
-                action: Action::Retirer { motif: apres },
+                action: Action::Retirer { motif: format!("{stamp} — {apres}") },
                 gelee,
             });
             continue;
@@ -132,14 +134,20 @@ pub fn calculer(
                 });
                 continue;
             };
-            let action = match run_cible(neuf, l.mep_id, runs, meps, aujourdhui) {
-                Some((run, mep_id, mep_date)) => Action::Deplacer {
-                    run_num: run.num.clone(),
-                    run_date: run.date,
-                    mep_id,
-                    mep_date,
-                },
-                None => Action::Signaler,
+            let action = if gelee {
+                // Sortir un compte d'un lot livré pour l'insérer dans un autre
+                // n'est autorisé nulle part. Signalé, pas traité.
+                Action::Signaler
+            } else {
+                match run_cible(neuf, l.mep_id, runs, meps, aujourdhui) {
+                    Some((run, mep_id, mep_date)) => Action::Deplacer {
+                        run_num: run.num.clone(),
+                        run_date: run.date,
+                        mep_id,
+                        mep_date,
+                    },
+                    None => Action::Signaler,
+                }
             };
             r.ecarts.push(Ecart {
                 cf: l.cf.clone(),
@@ -149,8 +157,54 @@ pub fn calculer(
             });
             continue;
         }
+        if e.pa != l.pa {
+            r.ecarts.push(Ecart {
+                cf: l.cf.clone(),
+                nature: Nature::PlateformeChangee {
+                    avant: l.pa.clone(),
+                    apres: e.pa.clone(),
+                },
+                action: Action::Rafraichir,
+                gelee,
+            });
+            continue;
+        }
         r.inchangees += 1;
     }
+
+    // Seuil chiffré plutôt qu'un jugement : « beaucoup » ne se teste pas.
+    let retraits = r
+        .ecarts
+        .iter()
+        .filter(|e| matches!(e.action, Action::Retirer { .. }))
+        .count();
+    let actives = plan.iter().filter(|l| !l.retiree()).count();
+    if actives > 0 && retraits * 4 > actives {
+        r.avertissements.push(format!(
+            "ce rapprochement retire {retraits} des {actives} lignes actives du plan"
+        ));
+    }
+
+    // Les quotas par plateforme ne sont pas rejoués — ce serait du re-tirage.
+    // Le décalage qu'ils prennent doit donc être dit, chiffres à l'appui :
+    // sinon la répartition affichée ailleurs devient fausse en silence.
+    let mut mouvements: std::collections::BTreeMap<(&str, &str), usize> = Default::default();
+    for e in &r.ecarts {
+        if let Nature::PlateformeChangee { avant, apres } = &e.nature {
+            *mouvements.entry((avant.as_str(), apres.as_str())).or_insert(0) += 1;
+        }
+    }
+    if !mouvements.is_empty() {
+        let detail: Vec<String> = mouvements
+            .iter()
+            .map(|((a, b), n)| format!("{n} de {a} vers {b}"))
+            .collect();
+        r.avertissements.push(format!(
+            "la répartition par plateforme change sans être rejouée : {}",
+            detail.join(", ")
+        ));
+    }
+
     Ok(r)
 }
 
@@ -297,7 +351,7 @@ mod tests {
         // Égalité stricte, pas `contains` : un simple préfixe « CTC » laisserait
         // passer n'importe quel libellé (cf. mutation trouvée par la revue sur
         // `libelle_ctc`).
-        assert_eq!(motif, "CTC prêt plus tard");
+        assert_eq!(motif, "Rapprochement du 01/08/2026 — CTC prêt plus tard");
     }
 
     #[test]
@@ -310,7 +364,7 @@ mod tests {
         let Action::Retirer { motif } = &r.ecarts[0].action else {
             panic!("attendu un retrait");
         };
-        assert_eq!(motif, "PPF non utilisable");
+        assert_eq!(motif, "Rapprochement du 01/08/2026 — PPF non utilisable");
     }
 
     /// `libelle_ctc` seule : couvre les branches qu'aucun test de `calculer`
@@ -500,5 +554,174 @@ mod tests {
             panic!("attendu un déplacement, obtenu {:?}", r.ecarts[0].action);
         };
         assert_eq!(run_num, "RF_B", "la MEP 3 est plus proche de la MEP 4 que la MEP 2");
+    }
+
+    #[test]
+    fn une_ligne_gelee_au_jj_change_est_signalee_jamais_deplacee() {
+        let (runs, meps, auj) = contexte();
+        // MEP 1 = 2026-07-01, passée au 2026-08-01.
+        let plan = vec![ligne("CF1", 5, "Cegedim", "RF01", (1, "2026-07-01"))];
+        let entrees = vec![entree("CF1", "12", "Cegedim")];
+        let r = calculer(&plan, &entrees, &runs, &meps, auj).unwrap();
+        assert!(r.ecarts[0].gelee);
+        assert_eq!(
+            r.ecarts[0].action,
+            Action::Signaler,
+            "sortir un compte d'un lot livré pour l'insérer dans un autre n'est autorisé nulle part"
+        );
+    }
+
+    #[test]
+    fn une_ligne_gelee_devenue_ineligible_est_proposee_au_retrait_et_marquee() {
+        let (runs, meps, auj) = contexte();
+        let plan = vec![ligne("CF1", 5, "Cegedim", "RF01", (1, "2026-07-01"))];
+        let entrees = vec![avec_ctc(entree("CF1", "5", "Cegedim"), "expired")];
+        let r = calculer(&plan, &entrees, &runs, &meps, auj).unwrap();
+        assert!(matches!(r.ecarts[0].action, Action::Retirer { .. }));
+        assert!(r.ecarts[0].gelee, "l'IHM doit pouvoir l'isoler et avertir");
+    }
+
+    #[test]
+    fn un_changement_de_plateforme_rafraichit_sans_deplacer() {
+        let (runs, meps, auj) = contexte();
+        let plan = vec![ligne("CF1", 5, "Cegedim", "RF01", (2, "2026-09-01"))];
+        let entrees = vec![entree("CF1", "5", "Esker")];
+        let r = calculer(&plan, &entrees, &runs, &meps, auj).unwrap();
+        assert_eq!(
+            r.ecarts[0].nature,
+            Nature::PlateformeChangee { avant: "Cegedim".into(), apres: "Esker".into() }
+        );
+        assert_eq!(r.ecarts[0].action, Action::Rafraichir);
+    }
+
+    /// Ordre de résolution : retrait > déplacement > rafraîchissement.
+    #[test]
+    fn un_compte_a_retirer_n_est_pas_aussi_deplace() {
+        let (runs, meps, auj) = contexte();
+        let plan = vec![ligne("CF1", 5, "Cegedim", "RF01", (2, "2026-09-01"))];
+        // Tout a changé d'un coup : inéligible, jour 12, plateforme Esker.
+        let entrees = vec![avec_ctc(entree("CF1", "12", "Esker"), "later")];
+        let r = calculer(&plan, &entrees, &runs, &meps, auj).unwrap();
+        assert_eq!(r.ecarts.len(), 1, "un compte, un écart : {:?}", r.ecarts);
+        assert!(matches!(r.ecarts[0].action, Action::Retirer { .. }));
+    }
+
+    #[test]
+    fn le_jj_prime_sur_la_plateforme() {
+        let (runs, meps, auj) = contexte();
+        let plan = vec![ligne("CF1", 5, "Cegedim", "RF01", (2, "2026-09-01"))];
+        let entrees = vec![entree("CF1", "12", "Esker")];
+        let r = calculer(&plan, &entrees, &runs, &meps, auj).unwrap();
+        assert_eq!(r.ecarts.len(), 1);
+        assert!(matches!(r.ecarts[0].nature, Nature::JourChange { .. }));
+    }
+
+    /// Le rapprochement n'ajoute RIEN : c'est la garantie qu'aucun re-tirage
+    /// ne s'est glissé là.
+    #[test]
+    fn aucun_compte_eligible_hors_plan_n_est_ajoute() {
+        let (runs, meps, auj) = contexte();
+        let plan = vec![ligne("CF1", 5, "Cegedim", "RF01", (2, "2026-09-01"))];
+        let entrees = vec![
+            entree("CF1", "5", "Cegedim"),
+            entree("CF2", "12", "Esker"), // éligible, jamais planifié
+        ];
+        let r = calculer(&plan, &entrees, &runs, &meps, auj).unwrap();
+        assert!(r.ecarts.is_empty(), "obtenu {:?}", r.ecarts);
+        assert_eq!(r.inchangees, 1, "CF2 n'entre pas dans le décompte du plan");
+    }
+
+    /// Un adressage ou une raison sociale qui change n'est pas un écart : sans
+    /// effet sur le placement, il n'a rien à faire valider.
+    #[test]
+    fn un_adressage_change_ne_produit_aucun_ecart() {
+        let (runs, meps, auj) = contexte();
+        let plan = vec![ligne("CF1", 5, "Cegedim", "RF01", (2, "2026-09-01"))];
+        let mut e = entree("CF1", "5", "Cegedim");
+        e.participant = "iso6523-actorid-upis::0225:NOUVEAU".into();
+        e.raison_sociale = "ACME SAS".into();
+        let r = calculer(&plan, &[e], &runs, &meps, auj).unwrap();
+        assert!(r.ecarts.is_empty(), "obtenu {:?}", r.ecarts);
+        assert_eq!(r.inchangees, 1);
+    }
+
+    #[test]
+    fn les_motifs_de_retrait_portent_la_date_du_rapprochement() {
+        let (runs, meps, auj) = contexte();
+        let plan = vec![ligne("CF1", 5, "Cegedim", "RF01", (2, "2026-09-01"))];
+        let entrees = vec![avec_ctc(entree("CF1", "5", "Cegedim"), "later")];
+        let r = calculer(&plan, &entrees, &runs, &meps, auj).unwrap();
+        let Action::Retirer { motif } = &r.ecarts[0].action else {
+            panic!("attendu un retrait");
+        };
+        assert!(
+            motif.contains("01/08/2026"),
+            "un motif sans date est ingérable six mois plus tard : {motif}"
+        );
+    }
+
+    /// Au-delà du quart des lignes actives retirées, l'ampleur doit être dite.
+    #[test]
+    fn un_rapprochement_massif_produit_un_avertissement() {
+        let (runs, meps, auj) = contexte();
+        let plan: Vec<LignePlan> = (0..4)
+            .map(|i| ligne(&format!("CF{i}"), 5, "Cegedim", "RF01", (2, "2026-09-01")))
+            .collect();
+        // 2 sur 4 retirés = la moitié.
+        let entrees = vec![
+            avec_ctc(entree("CF0", "5", "Cegedim"), "later"),
+            avec_ctc(entree("CF1", "5", "Cegedim"), "later"),
+            entree("CF2", "5", "Cegedim"),
+            entree("CF3", "5", "Cegedim"),
+        ];
+        let r = calculer(&plan, &entrees, &runs, &meps, auj).unwrap();
+        assert!(
+            r.avertissements.iter().any(|a| a.contains("2 des 4")),
+            "obtenu {:?}",
+            r.avertissements
+        );
+    }
+
+    /// Les quotas par plateforme ne sont PAS rejoués — ce serait du
+    /// re-tirage. L'écart qu'ils prennent doit donc être dit, sinon la
+    /// répartition affichée ailleurs devient fausse en silence.
+    #[test]
+    fn un_changement_de_plateforme_avertit_du_decalage_de_repartition() {
+        let (runs, meps, auj) = contexte();
+        let plan = vec![
+            ligne("CF1", 5, "Cegedim", "RF01", (2, "2026-09-01")),
+            ligne("CF2", 22, "Cegedim", "RF02", (2, "2026-09-01")),
+        ];
+        let entrees = vec![entree("CF1", "5", "Esker"), entree("CF2", "22", "Cegedim")];
+        let r = calculer(&plan, &entrees, &runs, &meps, auj).unwrap();
+        let a = r
+            .avertissements
+            .iter()
+            .find(|a| a.contains("plateforme"))
+            .unwrap_or_else(|| panic!("obtenu {:?}", r.avertissements));
+        assert!(a.contains("Cegedim") && a.contains("Esker"), "obtenu : {a}");
+    }
+
+    #[test]
+    fn sans_changement_de_plateforme_aucun_avertissement_de_repartition() {
+        let (runs, meps, auj) = contexte();
+        let plan = vec![ligne("CF1", 5, "Cegedim", "RF01", (2, "2026-09-01"))];
+        let entrees = vec![entree("CF1", "5", "Cegedim")];
+        let r = calculer(&plan, &entrees, &runs, &meps, auj).unwrap();
+        assert!(r.avertissements.is_empty(), "obtenu {:?}", r.avertissements);
+    }
+
+    #[test]
+    fn un_rapprochement_modeste_ne_produit_pas_d_avertissement_d_ampleur() {
+        let (runs, meps, auj) = contexte();
+        let plan: Vec<LignePlan> = (0..8)
+            .map(|i| ligne(&format!("CF{i}"), 5, "Cegedim", "RF01", (2, "2026-09-01")))
+            .collect();
+        let mut entrees: Vec<LigneEntree> = (0..8)
+            .map(|i| entree(&format!("CF{i}"), "5", "Cegedim"))
+            .collect();
+        entrees[0] = avec_ctc(entrees[0].clone(), "later"); // 1 sur 8
+        let r = calculer(&plan, &entrees, &runs, &meps, auj).unwrap();
+        assert!(r.avertissements.is_empty(), "obtenu {:?}", r.avertissements);
     }
 }
