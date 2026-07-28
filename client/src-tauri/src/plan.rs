@@ -1383,6 +1383,21 @@ mod tests {
         assert!(err.contains("CF1"), "{err}");
     }
 
+    /// Quand les DEUX divergent à la fois, le jour de cycle doit être signalé
+    /// en premier : c'est lui qui décide du lot d'appartenance d'un compte
+    /// (cf. `rapprochement.rs`), l'adressage ne sert qu'aux quotas et à
+    /// l'affichage. Rien ne vérifiait quel message gagnait quand les deux
+    /// contrôles étaient simultanément en défaut.
+    #[test]
+    fn deux_divergences_a_la_fois_signale_le_jour_de_cycle_en_priorite() {
+        let mut a = ligne("CF1", "5", "PA");
+        let mut b = ligne("CF1", "12", "PA");
+        a.participant = "iso6523-actorid-upis::0225:111".into();
+        b.participant = "iso6523-actorid-upis::0225:222".into();
+        let err = construire_pool(&[a, b], &sans_exclusion()).unwrap_err();
+        assert!(err.contains("jours de cycle"), "obtenu : {err}");
+    }
+
     #[test]
     fn plateforme_exclue_retire_ses_comptes() {
         let e = vec![ligne("CF1", "5", "Cegedim"), ligne("CF2", "5", "Esker")];

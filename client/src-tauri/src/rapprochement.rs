@@ -468,6 +468,19 @@ mod tests {
         assert_ne!(libelle_ctc("expired"), libelle_ctc(""));
     }
 
+    /// Branche `_` : structurellement nécessaire (un `match` sur `&str` exige
+    /// un cas par défaut) mais inatteignable en production — `output::ctc_status`
+    /// ne rend que `""`, `"ready"`, `"later"` ou `"expired"`, et `libelle_ctc`
+    /// n'est appelée que quand `!ctc_ready` (donc jamais avec `"ready"`), qui
+    /// sont tous les trois nommés explicitement. Un statut hors de ce domaine
+    /// (donnée corrompue, valeur future non encore mappée) ne doit pas non
+    /// plus planter ni s'afficher vide : la valeur de repli est verrouillée
+    /// ici, seul test qui exercerait cette branche.
+    #[test]
+    fn libelle_ctc_a_une_valeur_de_repli_pour_un_statut_hors_domaine() {
+        assert_eq!(libelle_ctc("statut_futur_inconnu"), "non prêt");
+    }
+
     /// Motif distinct du précédent : « disparu » et « inéligible » ne
     /// s'expliquent pas pareil six mois plus tard.
     #[test]
@@ -646,6 +659,24 @@ mod tests {
         assert_eq!(run_num, "RF_B", "la MEP 3 est plus proche de la MEP 4 que la MEP 2");
     }
 
+    /// `run_date`/`mep_date` doivent partir en JSON au même format ISO que
+    /// partout ailleurs dans l'appli (`plan::LignePlan` sérialisé via
+    /// `.to_string()` — voir `commands.rs`) : rien ne le vérifiait, alors que
+    /// c'est tout l'objet du commentaire sur `date_iso`. Un format qui diverge
+    /// (ex. jour/mois/année) casserait silencieusement toute comparaison ou
+    /// tri de dates côté écran, sans qu'aucun test Rust ne le voie — les tests
+    /// existants ne comparent que des `NaiveDate`, jamais le JSON produit.
+    #[test]
+    fn deplacer_serialise_ses_dates_au_meme_format_iso_que_le_reste_du_plan() {
+        let (runs, meps, auj) = contexte();
+        let plan = vec![ligne("CF1", 5, "Cegedim", "RF01", (2, "2026-09-01"))];
+        let entrees = vec![entree("CF1", "12", "Cegedim")];
+        let r = calculer(&plan, &entrees, &runs, &meps, auj).unwrap();
+        let v = serde_json::to_value(&r.ecarts[0].action).expect("sérialisation JSON");
+        assert_eq!(v["run_date"], "2026-09-20", "obtenu {v}");
+        assert_eq!(v["mep_date"], "2026-09-01", "obtenu {v}");
+    }
+
     #[test]
     fn une_ligne_gelee_au_jj_change_est_signalee_jamais_deplacee() {
         let (runs, meps, auj) = contexte();
@@ -790,6 +821,38 @@ mod tests {
             .find(|a| a.contains("plateforme"))
             .unwrap_or_else(|| panic!("obtenu {:?}", r.avertissements));
         assert!(a.contains("Cegedim") && a.contains("Esker"), "obtenu : {a}");
+    }
+
+    /// L'ordre d'insertion est volontairement PAS alphabétique : si le détail
+    /// provenait d'une `HashMap` plutôt que d'une `BTreeMap`, l'ordre du
+    /// message dépendrait du hasard de hachage du processus — le même
+    /// rapprochement pourrait afficher un ordre différent d'une exécution à
+    /// l'autre, pour des données identiques.
+    #[test]
+    fn plusieurs_changements_de_plateforme_sont_dans_un_ordre_deterministe() {
+        let (runs, meps, auj) = contexte();
+        let plan = vec![
+            ligne("CF1", 5, "Zeta", "RF01", (2, "2026-09-01")),
+            ligne("CF2", 5, "Cegedim", "RF01", (2, "2026-09-01")),
+            ligne("CF3", 5, "Esker", "RF01", (2, "2026-09-01")),
+        ];
+        let entrees = vec![
+            entree("CF1", "5", "Alpha"),
+            entree("CF2", "5", "Esker"),
+            entree("CF3", "5", "Cegedim"),
+        ];
+        let r = calculer(&plan, &entrees, &runs, &meps, auj).unwrap();
+        let a = r
+            .avertissements
+            .iter()
+            .find(|a| a.contains("plateforme"))
+            .unwrap_or_else(|| panic!("obtenu {:?}", r.avertissements));
+        assert_eq!(
+            a,
+            "la répartition par plateforme change sans être rejouée : \
+             1 de Cegedim vers Esker, 1 de Esker vers Cegedim, 1 de Zeta vers Alpha",
+            "l'ordre doit être trié, pas dépendant du hachage : obtenu {a}"
+        );
     }
 
     #[test]
@@ -977,6 +1040,29 @@ mod tests {
                     mep_id: 2,
                     mep_date: d("2026-09-01"),
                 },
+                gelee: false,
+            }],
+            inchangees: 0,
+            avertissements: vec![],
+        };
+        let err = appliquer(&mut plan, &r, 1_800_000_000).unwrap_err();
+        assert!(err.contains("CF1"), "obtenu : {err}");
+        assert_eq!(plan[0], temoin, "rien ne doit avoir été écrit");
+    }
+
+    /// Symétrique du test précédent, pour l'autre branche du même
+    /// appariement : un `Rafraichir` sans `PlateformeChangee` écrirait le
+    /// champ `pa` depuis une nature qui ne le porte pas. Seule la branche
+    /// `Deplacer` était couverte jusqu'ici — celle-ci ne l'était par rien.
+    #[test]
+    fn appliquer_refuse_un_ecart_rafraichir_dont_la_nature_ne_correspond_pas() {
+        let mut plan = vec![ligne("CF1", 5, "Cegedim", "RF01", (2, "2026-09-01"))];
+        let temoin = plan[0].clone();
+        let r = Rapprochement {
+            ecarts: vec![Ecart {
+                cf: "CF1".into(),
+                nature: Nature::DisparuDuFichier,
+                action: Action::Rafraichir,
                 gelee: false,
             }],
             inchangees: 0,
