@@ -211,8 +211,17 @@ dans une enveloppe qui lui est propre :
 pub struct RapprochementVue {
     pub rapprochement: crate::rapprochement::Rapprochement,
     pub empreinte: String,
+    /// Séparé des avertissements du calcul : ceux-là décrivent ce que le
+    /// rapprochement va faire, celui-ci prévient qu'il est **incomplet**.
+    pub annuaire_incomplet: Option<String>,
 }
 ```
+
+L'avertissement d'annuaire cumulatif ne rejoint donc **pas**
+`Rapprochement.avertissements`, qui ne porte que ce qui dérive du calcul. Il
+n'est pas du même ordre : les autres annoncent des conséquences, celui-ci
+prévient que le résultat peut être muet là où il devrait parler. L'écran le
+rend au-dessus des autres, dans un registre visuel plus grave.
 
 ### Une ligne, un écart
 
