@@ -202,6 +202,29 @@ pub fn render(d: &RapprochementReportData) -> String {
     ));
     html.push_str("</section>\n");
 
+    // Avertissements DÉRIVÉS DU CALCUL : ils décrivent tous ce que le
+    // rapprochement va faire.
+    if !r.avertissements.is_empty() {
+        html.push_str("<section class=\"warn\">\n<h2>Avertissements</h2>\n<ul>\n");
+        for a in &r.avertissements {
+            html.push_str(&format!("<li>{}</li>\n", esc(a)));
+        }
+        html.push_str("</ul>\n</section>\n");
+    }
+    // Séparé des précédents, et jamais fondu avec eux : celui-ci ne décrit pas
+    // ce que le rapprochement fait, il prévient qu'il est INCOMPLET. Dans un
+    // document transmis, sans lui, « 0 éligibilité perdue » se lit comme un
+    // constat au lieu d'un aveu d'aveuglement.
+    if let Some(a) = d.annuaire_incomplet {
+        html.push_str(&format!(
+            "<section class=\"warn\">\n<h2>Annuaire PPF incomplet</h2>\n<ul>\n\
+             <li>{}<br><b>Les éligibilités PPF perdues ne sont pas visibles</b> — \
+             le compte « 0 éligibilité perdue » ne vaut que pour le verdict CTC.</li>\n\
+             </ul>\n</section>\n",
+            esc(a)
+        ));
+    }
+
     // Retraits portant sur une MEP déjà transmise. AVANT tout le reste : les
     // fichiers étant cumulatifs, le destinataire a une version antérieure
     // entre les mains, et c'est la seule information du rapport qui l'oblige
@@ -368,6 +391,38 @@ pub fn render(d: &RapprochementReportData) -> String {
         html.push_str("</ul>\n</section>\n");
     }
 
+    // Ce que le destinataire a effectivement en main après ce lot.
+    if !d.fichiers.is_empty() || !d.obsoletes.is_empty() {
+        html.push_str("<h2>Fichiers de livraison produits</h2>\n");
+        html.push_str(
+            "<p class=\"h2sub\">Les fichiers sont cumulatifs : celui de la MEP <i>n</i> \
+             contient les comptes des MEP 1 à <i>n</i>. Ils remplacent ceux du lot \
+             précédent.</p>\n",
+        );
+        html.push_str(
+            "<div class=\"tbl\">\n<table>\n<thead><tr><th>Fichier</th><th>MEP</th>\
+             <th>Date de MEP</th><th class=\"num\">Comptes</th></tr></thead>\n<tbody>\n",
+        );
+        for f in d.fichiers {
+            html.push_str(&format!(
+                "<tr><td>{}</td><td>{}</td><td>{}</td>\
+                 <td class=\"num\"><b>{}</b></td></tr>\n",
+                esc(f.nom),
+                f.mep_id,
+                date_fr(f.mep_date),
+                fmt_int(f.comptes as u64),
+            ));
+        }
+        for o in d.obsoletes {
+            html.push_str(&format!(
+                "<tr class=\"gone\"><td>{}</td><td>—</td><td>—</td>\
+                 <td class=\"num why\">supprimé — plus aucun compte</td></tr>\n",
+                esc(o),
+            ));
+        }
+        html.push_str("</tbody>\n</table>\n</div>\n");
+    }
+
     html.push_str(&format!(
         "<footer>\n<span>Le détail compte par compte figure dans le classeur \
          du périmètre.</span>\n<span>Super Popaul {}</span>\n</footer>\n\
@@ -524,6 +579,85 @@ mod tests {
     const T_DISPARUS: &str = "<h2>Comptes retirés — disparus du fichier</h2>";
     const T_DEPLACES: &str = "<h2>Comptes déplacés — jour de cycle changé</h2>";
     const T_PLATEFORMES: &str = "<h2>Plateformes corrigées</h2>";
+
+    #[test]
+    fn les_avertissements_du_calcul_et_de_l_annuaire_ne_se_confondent_pas() {
+        // Décision verrouillée au chantier précédent : les premiers décrivent
+        // ce que le rapprochement FAIT, le second prévient qu'il est
+        // INCOMPLET. Les fondre ferait disparaître la nuance.
+        let mut r = vide();
+        r.avertissements = vec!["le run 12 n'accueille plus de compte".into()];
+        let mut d = donnees(&r);
+        d.annuaire_incomplet = Some("l'annuaire PPF a été construit par cumul de 3 fichiers");
+        let html = render(&d);
+        let c = corps(&html);
+        // Cherchés ÉCHAPPÉS : `esc` rend l'apostrophe en `&#39;`, et un
+        // avertissement backend est du texte non fiable comme le reste.
+        assert!(c.contains("le run 12 n&#39;accueille plus de compte"));
+        assert!(c.contains("l&#39;annuaire PPF a été construit par cumul de 3 fichiers"));
+        assert!(c.contains("<h2>Annuaire PPF incomplet</h2>"), "titre propre à l'annuaire absent");
+        assert_eq!(
+            c.matches("<section class=\"warn\">").count(),
+            2,
+            "les deux avertissements doivent vivre dans deux encadrés distincts"
+        );
+    }
+
+    #[test]
+    fn sans_avertissement_aucun_encadre_n_est_rendu() {
+        let r = vide();
+        let html = render(&donnees(&r));
+        assert!(!corps(&html).contains("<section class=\"warn\">"));
+    }
+
+    #[test]
+    fn les_fichiers_produits_sont_listes_avec_leurs_comptes() {
+        let r = vide();
+        let fichiers = vec![
+            FichierLivre {
+                nom: "brm2607_plan_mep_1_2026-05-15.txt",
+                mep_id: 1,
+                mep_date: "2026-05-15",
+                comptes: 28,
+            },
+            FichierLivre {
+                nom: "brm2607_plan_mep_2_2026-06-12.txt",
+                mep_id: 2,
+                mep_date: "2026-06-12",
+                comptes: 61,
+            },
+        ];
+        let mut d = donnees(&r);
+        d.fichiers = &fichiers;
+        let html = render(&d);
+        let c = corps(&html);
+        assert!(c.contains("brm2607_plan_mep_1_2026-05-15.txt"));
+        assert!(c.contains("15/05/2026"), "la date de MEP doit être lisible");
+        assert!(c.contains("<b>28</b>"), "le nombre de comptes doit figurer");
+        assert!(c.contains("<b>61</b>"));
+    }
+
+    #[test]
+    fn un_fichier_supprime_est_dit_supprime() {
+        // Une MEP vidée par les retraits perd son fichier. La ligne existe
+        // pour dire qu'elle n'existe plus : le destinataire doit jeter sa
+        // copie, qui n'est plus dans aucun lot.
+        let r = vide();
+        let obsoletes = vec!["brm2607_plan_mep_6_2026-11-27.txt".to_string()];
+        let mut d = donnees(&r);
+        d.obsoletes = &obsoletes;
+        let html = render(&d);
+        let c = corps(&html);
+        assert!(c.contains("brm2607_plan_mep_6_2026-11-27.txt"));
+        assert!(c.contains("supprimé"), "la raison de la disparition doit se lire");
+    }
+
+    #[test]
+    fn sans_fichier_ni_obsolete_la_section_n_existe_pas() {
+        let r = vide();
+        let html = render(&donnees(&r));
+        assert!(!corps(&html).contains("<h2>Fichiers de livraison produits</h2>"));
+    }
 
     const T_ALERTE: &str = "Retrait portant sur une mise en production déjà transmise";
     const T_TODO: &str = "<h2>À traiter à la main</h2>";
