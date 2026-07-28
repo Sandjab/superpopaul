@@ -157,6 +157,12 @@ pub fn calculer(
             });
             continue;
         }
+        // Pas de court-circuit `gelee` ici, contrairement au jour changé : la
+        // plateforme ne conditionne aucun fichier de livraison (ils ne
+        // contiennent que des comptes nus par MEP), alors que le jour de
+        // cycle décide du lot d'appartenance d'un compte déjà transmis. Le
+        // champ ne sert qu'aux quotas et à l'affichage : le rafraîchir sur
+        // une ligne gelée ne rouvre rien qui ait déjà été livré.
         if e.pa != l.pa {
             r.ecarts.push(Ecart {
                 cf: l.cf.clone(),
@@ -723,5 +729,38 @@ mod tests {
         entrees[0] = avec_ctc(entrees[0].clone(), "later"); // 1 sur 8
         let r = calculer(&plan, &entrees, &runs, &meps, auj).unwrap();
         assert!(r.avertissements.is_empty(), "obtenu {:?}", r.avertissements);
+    }
+
+    /// La spec dit « au-delà du quart », pas « à partir du quart » : à la
+    /// limite exacte, aucun avertissement. Protège spécifiquement la
+    /// frontière `>` contre une mutation en `>=`.
+    #[test]
+    fn un_rapprochement_a_exactement_un_quart_ne_produit_pas_d_avertissement_d_ampleur() {
+        let (runs, meps, auj) = contexte();
+        let plan: Vec<LignePlan> = (0..8)
+            .map(|i| ligne(&format!("CF{i}"), 5, "Cegedim", "RF01", (2, "2026-09-01")))
+            .collect();
+        let mut entrees: Vec<LigneEntree> = (0..8)
+            .map(|i| entree(&format!("CF{i}"), "5", "Cegedim"))
+            .collect();
+        entrees[0] = avec_ctc(entrees[0].clone(), "later"); // 2 sur 8 : pile un quart
+        entrees[1] = avec_ctc(entrees[1].clone(), "later");
+        let r = calculer(&plan, &entrees, &runs, &meps, auj).unwrap();
+        assert!(r.avertissements.is_empty(), "obtenu {:?}", r.avertissements);
+    }
+
+    /// La plateforme n'est pas gardée contre le gel comme le jour de cycle :
+    /// elle ne conditionne aucun fichier de livraison, contrairement au jour
+    /// qui décide du lot. Une ligne gelée est donc rafraîchie normalement,
+    /// et l'écart reste marqué gelé pour l'IHM.
+    #[test]
+    fn une_ligne_gelee_dont_la_plateforme_change_est_rafraichie_et_marquee() {
+        let (runs, meps, auj) = contexte();
+        // MEP 1 = 2026-07-01, passée au 2026-08-01.
+        let plan = vec![ligne("CF1", 5, "Cegedim", "RF01", (1, "2026-07-01"))];
+        let entrees = vec![entree("CF1", "5", "Esker")];
+        let r = calculer(&plan, &entrees, &runs, &meps, auj).unwrap();
+        assert_eq!(r.ecarts[0].action, Action::Rafraichir);
+        assert!(r.ecarts[0].gelee, "l'IHM doit pouvoir isoler ce cas aussi");
     }
 }
