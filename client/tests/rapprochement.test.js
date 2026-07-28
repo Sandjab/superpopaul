@@ -51,6 +51,7 @@ test("l'empreinte survit à un re-rendu de l'écran", async () => {
       return ctx.evaluer(`(${JSON.stringify({
         rapprochement: { ecarts: [ECART], inchangees: 0, avertissements: [] },
         empreinte: EMPREINTE,
+        annuaire_incomplet: null,
       })})`);
     if (cmd === "plan_lignes") return ctx.evaluer(`(${JSON.stringify([ligne("CF1")])})`);
     if (cmd === "plan_rapprocher_appliquer") return ctx.evaluer("[]");
@@ -78,6 +79,7 @@ test("sans écart, le déclencheur d'application reste inerte", async () => {
       return ctx.evaluer(`(${JSON.stringify({
         rapprochement: { ecarts: [], inchangees: 2001, avertissements: [] },
         empreinte: "peu importe ici",
+        annuaire_incomplet: null,
       })})`);
     return null;
   });
@@ -106,4 +108,48 @@ test("une erreur backend s'affiche telle quelle, jamais via innerHTML", async ()
   assert.equal(banniere.textContent, MESSAGE, "le message doit être posé tel quel, sans interprétation");
   assert.equal(trouver(banniere, (n) => n.tagName === "script"), null,
     "aucun nœud <script> ne doit apparaître dans le DOM : la donnée n'est pas fiable");
+});
+
+/** Tous les nœuds dont la classe contient "rappro-avert", dans l'ordre du DOM
+ *  (profondeur d'abord) — la revue en pose au plus deux : celui de l'annuaire
+ *  (gravité supérieure) et celui du calcul. */
+function boitesAvertissement($) {
+  const out = [];
+  (function marcher(n) {
+    if (typeof n !== "object" || n === null) return;
+    if (typeof n.className === "string" && n.className.includes("rappro-avert")) out.push(n);
+    for (const c of n.children ?? []) marcher(c);
+  })($("modal"));
+  return out;
+}
+
+test("l'avertissement d'annuaire est séparé de ceux du calcul, et passe en tête", async () => {
+  // Régression du 28/07/2026 : les deux étaient fondus dans le même tableau
+  // de chaînes côté backend. Un « 0 éligibilité perdue » peut alors vouloir
+  // dire « l'annuaire ne sait pas les voir » — la distinction doit rester
+  // visible à l'écran, pas seulement dans la forme de la réponse.
+  const ctx = ecran();
+  const TEXTE_ANNUAIRE = "l'annuaire PPF a été construit par cumul de 2 fichiers : une "
+    + "éligibilité PPF perdue n'y est pas détectable.";
+  const TEXTE_CALCUL = "ce rapprochement retire 47 des 2001 lignes actives du plan";
+  ctx.repondreAux((cmd) => {
+    if (cmd === "plan_rapprocher")
+      return ctx.evaluer(`(${JSON.stringify({
+        rapprochement: { ecarts: [ECART], inchangees: 0, avertissements: [TEXTE_CALCUL] },
+        empreinte: "peu importe ici",
+        annuaire_incomplet: TEXTE_ANNUAIRE,
+      })})`);
+    return null;
+  });
+
+  await boutonRapprocher(ctx.$).click();
+
+  const boites = boitesAvertissement(ctx.$);
+  assert.equal(boites.length, 2, "un bloc pour l'annuaire, un pour le calcul");
+  assert.match(boites[0].className, /rappro-avert-hard/,
+    "l'avertissement d'annuaire doit porter le style de gravité supérieure");
+  assert.match(boites[0].textContent, /annuaire PPF/, "et paraître en premier, avant celui du calcul");
+  assert.ok(!boites[1].className.includes("rappro-avert-hard"),
+    "celui du calcul reste au style normal");
+  assert.match(boites[1].textContent, /retire 47/);
 });

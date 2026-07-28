@@ -843,3 +843,6 @@ tr.tl-run:hover .tl-add-btn { color: var(--gold); border-color: var(--gold); }
 }
 .rappro-avert ul { margin: 6px 0 0; padding-left: 18px; }
 .rappro-avert li { margin-bottom: 3px; }
+/* Gravité supérieure (annuaire PPF incomplet) : le calcul lui-même n'est pas
+   fiable à 100 %, pas seulement « voici ce qui va se passer ». */
+.rappro-avert-hard { background: rgba(229, 83, 75, .10); border-color: rgba(229, 83, 75, .45); }

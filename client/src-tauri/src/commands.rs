@@ -1663,6 +1663,12 @@ fn avertissement_ppf_cumulatif(fichiers: usize) -> Option<String> {
 pub struct RapprochementVue {
     pub rapprochement: crate::rapprochement::Rapprochement,
     pub empreinte: String,
+    /// Séparé des avertissements du calcul : ceux-là décrivent ce que le
+    /// rapprochement va FAIRE (ampleur, répartition par plateforme), celui-ci
+    /// prévient que le calcul est INCOMPLET — un « 0 éligibilité perdue »
+    /// peut vouloir dire « l'annuaire ne sait pas la voir ». Les fondre ferait
+    /// disparaître cette nuance.
+    pub annuaire_incomplet: Option<String>,
 }
 
 /// Cœur partagé par le calcul et l'application. Rend aussi le plan et sa méta,
@@ -1677,6 +1683,7 @@ fn calculer_rapprochement(
         String,
         Vec<crate::plan::LignePlan>,
         crate::store::PlanMeta,
+        Option<String>,
     ),
     String,
 > {
@@ -1690,10 +1697,13 @@ fn calculer_rapprochement(
         )
     };
     let aujourdhui = chrono::Local::now().date_naive();
-    let mut r = crate::rapprochement::calculer(&lignes, &entrees, &runs, &meps, aujourdhui)?;
-    r.avertissements.extend(avertissement_ppf_cumulatif(fichiers_ppf));
+    let r = crate::rapprochement::calculer(&lignes, &entrees, &runs, &meps, aujourdhui)?;
+    // Dérivé de l'état de la BASE (l'annuaire), pas du calcul : il ne rejoint
+    // PLUS `r.avertissements`, sans quoi il serait indiscernable des
+    // avertissements que `rapprochement::calculer` dérive lui-même.
+    let annuaire_incomplet = avertissement_ppf_cumulatif(fichiers_ppf);
     let empreinte = sha256_hex(&std::fs::read(input).map_err(|e| format!("lecture entrée : {e}"))?);
-    Ok((r, empreinte, lignes, meta))
+    Ok((r, empreinte, lignes, meta, annuaire_incomplet))
 }
 
 /// Rapproche le plan du fichier ouvert **sans rien écrire**.
@@ -1703,8 +1713,9 @@ pub async fn plan_rapprocher(state: State<'_, AppState>) -> Result<Rapprochement
     let input = state.input_path()?;
     let store = state.store.clone();
     tokio::task::spawn_blocking(move || {
-        let (rapprochement, empreinte, _, _) = calculer_rapprochement(&store, &input, &cfg)?;
-        Ok(RapprochementVue { rapprochement, empreinte })
+        let (rapprochement, empreinte, _, _, annuaire_incomplet) =
+            calculer_rapprochement(&store, &input, &cfg)?;
+        Ok(RapprochementVue { rapprochement, empreinte, annuaire_incomplet })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1724,7 +1735,10 @@ pub async fn plan_rapprocher_appliquer(
     let input = state.input_path()?;
     let store = state.store.clone();
     tokio::task::spawn_blocking(move || {
-        let (r, courante, mut lignes, mut meta) = calculer_rapprochement(&store, &input, &cfg)?;
+        // `annuaire_incomplet` n'est affiché qu'au calcul (`plan_rapprocher`) :
+        // l'application n'a rien à en dire, elle applique ce qui a déjà été lu.
+        let (r, courante, mut lignes, mut meta, _annuaire_incomplet) =
+            calculer_rapprochement(&store, &input, &cfg)?;
         if courante != empreinte {
             return Err("le fichier a changé depuis le calcul — relance le rapprochement \
                         avant d'appliquer"
@@ -2503,6 +2517,81 @@ mod tests_rapprochement {
             r.ecarts[0].action,
             crate::rapprochement::Action::Signaler,
             "le seul run compatible avec le jour 12 est exclu : rien à faire automatiquement"
+        );
+    }
+
+    #[test]
+    fn avertissement_annuaire_ne_rejoint_plus_les_avertissements_du_calcul() {
+        // La distinction compte : les avertissements de `rapprochement::calculer`
+        // décrivent ce que le rapprochement va FAIRE (ampleur, répartition par
+        // plateforme) ; celui de l'annuaire dit que le calcul lui-même est
+        // INCOMPLET. Les fondre ferait disparaître cette nuance — c'est
+        // exactement ce qu'un retour en arrière referait sans le vouloir.
+        let store = Arc::new(Mutex::new(Store::open_in_memory().expect("store en mémoire")));
+        {
+            let s = store.lock().unwrap();
+            // Annuaire cumulatif : au-delà d'un fichier ingéré, une éligibilité
+            // PPF perdue n'y est plus détectable (avertissement_ppf_cumulatif).
+            s.ingest_ppf("f1.csv", "hash1", &[], 0, 0).expect("ingestion 1");
+            s.ingest_ppf("f2.csv", "hash2", &[], 0, 0).expect("ingestion 2");
+
+            let params = params_avec_run_exclu();
+            let meta = meta_pour(&params);
+            let lignes = vec![crate::plan::LignePlan {
+                cf: "CF1".into(),
+                participant: "0225:CF1".into(),
+                jj: 5,
+                raison_sociale: "ACME".into(),
+                pa: "Cegedim".into(),
+                mep_id: 1,
+                mep_date: chrono::NaiveDate::parse_from_str("2026-09-01", "%Y-%m-%d").unwrap(),
+                run_num: "RF01".into(),
+                run_date: chrono::NaiveDate::parse_from_str("2026-09-10", "%Y-%m-%d").unwrap(),
+                origine: crate::plan::Origine::Auto,
+                in_directory: true,
+                resolved_at: 0,
+                planned_at: 0,
+                retire: None,
+            }];
+            s.ecrire_plan(&lignes, &meta).expect("plan persisté");
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let csv = dir.path().join("comptes.csv");
+        std::fs::write(&csv, "cf;pid;jj\nCF1;;5\n").expect("écriture du CSV de test");
+
+        let cfg = Config {
+            version: 1,
+            api: crate::config::ApiConfig {
+                url: String::new(), key: String::new(), mode: ApiMode::Api,
+                resolver: None, resolver_fallback: String::new(), dns_concurrency: 1,
+                batch_size: 1, concurrency: 1, proxy: None, refresh_days: 30,
+            },
+            input: crate::config::InputConfig {
+                path: csv.to_string_lossy().into_owned(),
+                delimiter: ";".into(), encoding: "utf-8".into(),
+                pid_column: "pid".into(), record_label: crate::config::RecordLabel::Record,
+                cf_column: "cf".into(), jj_column: "jj".into(), raison_sociale_column: String::new(),
+            },
+            output: crate::config::OutputConfig {
+                dir: String::new(), suffix: String::new(), path: String::new(),
+                timestamp_suffix: true, encoding: crate::config::OutputEncoding::Utf8Bom,
+                separator: crate::config::OutputSeparator::Auto, columns: vec![],
+            },
+            ppf: crate::config::PpfConfig::default(),
+        };
+
+        let (r, _empreinte, _lignes, _meta, annuaire_incomplet) =
+            calculer_rapprochement(&store, &csv, &cfg).expect("calcul valide");
+
+        assert!(
+            annuaire_incomplet.is_some(),
+            "2 fichiers PPF cumulés : l'avertissement doit être rendu, séparément"
+        );
+        assert!(
+            !r.avertissements.iter().any(|a| a.contains("annuaire PPF")),
+            "l'avertissement d'annuaire ne doit plus se mêler à ceux du calcul : {:?}",
+            r.avertissements
         );
     }
 }

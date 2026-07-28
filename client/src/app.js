@@ -2414,15 +2414,28 @@ function lignePlateformeChangee(e) {
     h("td", { class: "rappro-chg" }, `${e.nature.avant} → ${e.nature.apres}`));
 }
 
-/** Un seul bloc pour tous les avertissements dérivés du calcul : le backend ne
- *  rend qu'un tableau de chaînes, sans marquer lesquelles seraient plus
- *  graves — les distinguer ici demanderait de reconnaître leur texte au vol,
- *  fragile au moindre changement de formulation côté Rust. */
+/** Un seul bloc pour les avertissements DÉRIVÉS DU CALCUL (`rapprochement.
+ *  avertissements`) : ils décrivent tous ce que le rapprochement va FAIRE
+ *  (ampleur, répartition par plateforme), le backend ne les distingue pas
+ *  entre eux et les reconnaître au vol serait fragile au moindre changement
+ *  de formulation côté Rust. L'avertissement d'annuaire, lui, est SÉPARÉ
+ *  (`annuaire_incomplet`) : il ne dérive pas du calcul mais de l'état de la
+ *  base, et dit autre chose — que le calcul est incomplet, pas ce qu'il va
+ *  faire. Voir `blocAnnuaireIncomplet`. */
 function blocAvertissementsRapprochement(liste) {
   if (!liste.length) return null;
   return h("div", { class: "rappro-avert" },
     h("b", {}, "À savoir avant d'appliquer :"),
     h("ul", {}, ...liste.map((a) => h("li", {}, a))));
+}
+
+/** Bloc de gravité supérieure (fond rouge, comme la maquette) : l'annuaire PPF
+ *  est cumulatif, une éligibilité PPF perdue peut n'y être pas détectable —
+ *  un « 0 » peut vouloir dire « je ne sais pas les voir ». Affiché en tête,
+ *  avant les avertissements du calcul : il qualifie leur fiabilité même. */
+function blocAnnuaireIncomplet(texte) {
+  if (!texte) return null;
+  return h("div", { class: "rappro-avert rappro-avert-hard" }, h("b", {}, texte));
 }
 
 /** Texte du récapitulatif de bas de revue. Toutes les lignes que le calcul a
@@ -2455,8 +2468,10 @@ function compteRenduRapprochement(rapprochement, obsoletes) {
 
 /** Revue groupée, rien n'est encore appliqué. `empreinte` est celle vue au
  *  calcul : elle voyage jusqu'au clic sur Appliquer sans jamais transiter par
- *  le DOM (dataset, attribut…), qui se reconstruit à chaque re-rendu du récap. */
-function renderRevueRapprochement(rapprochement, empreinte) {
+ *  le DOM (dataset, attribut…), qui se reconstruit à chaque re-rendu du récap.
+ *  `annuaireIncomplet` est séparé de `rapprochement.avertissements` (voir
+ *  `blocAnnuaireIncomplet`) : rendu à part, en tête. */
+function renderRevueRapprochement(rapprochement, empreinte, annuaireIncomplet) {
   const g = grouperEcarts(rapprochement.ecarts);
   // "Signaler" ne mute rien (`rapprochement::appliquer`) : ce n'est pas un
   // changement à appliquer, même si c'est un écart à lire.
@@ -2504,8 +2519,13 @@ function renderRevueRapprochement(rapprochement, empreinte) {
   // bouton inerte vaut mieux qu'un aller-retour serveur qui n'écrirait rien.
   if (!changements) appliquerBtn.disabled = true;
 
-  const scrollChildren = [blocAvertissementsRapprochement(rapprochement.avertissements), ...groupes]
-    .filter(Boolean);
+  // L'avertissement d'annuaire d'abord (gravité supérieure : il qualifie la
+  // fiabilité du calcul), puis ceux du calcul, puis les groupes.
+  const scrollChildren = [
+    blocAnnuaireIncomplet(annuaireIncomplet),
+    blocAvertissementsRapprochement(rapprochement.avertissements),
+    ...groupes,
+  ].filter(Boolean);
   modal(
     h("div", { class: "add-head" }, h("h3", {}, "Rapprocher le plan avec le fichier ouvert")),
     h("div", { class: "add-scroll" }, ...scrollChildren),
@@ -2526,7 +2546,7 @@ async function ouvrirRapprocher(bouton) {
     catch (e) { planBanner("error", String(e)); }
   });
   if (!vue) return;
-  const { rapprochement, empreinte } = vue;
+  const { rapprochement, empreinte, annuaire_incomplet: annuaireIncomplet } = vue;
   if (!rapprochement.ecarts.length) {
     const appliquerVide = h("button", {}, "Appliquer");
     appliquerVide.disabled = true;
@@ -2540,7 +2560,7 @@ async function ouvrirRapprocher(bouton) {
         h("button", { class: "btn-ghost", onclick: closeModal }, "Fermer")));
     return;
   }
-  renderRevueRapprochement(rapprochement, empreinte);
+  renderRevueRapprochement(rapprochement, empreinte, annuaireIncomplet);
 }
 
 /** Tri d'une liste de candidats sur une colonne. Ne mute pas l'entrée. */
