@@ -75,8 +75,10 @@ pub struct PlanMeta {
     /// divergeraient en silence.
     pub params_yaml: String,
     /// Horodatage du dernier rapprochement appliqué, `None` si le plan n'a
-    /// jamais été rapproché. Porté par le plan et non par la ligne : c'est le
-    /// plan entier qui a été confronté à un fichier.
+    /// jamais été rapproché. Porté par le plan et non par la ligne : `Retrait`
+    /// a déjà son horodatage par ligne (`retire.le`), mais `Deplacer` et
+    /// `Rafraichir` n'en ont aucun — `rapproche_le` est le seul endroit qui
+    /// trace ces mutations-là.
     pub rapproche_le: Option<i64>,
 }
 
@@ -256,8 +258,10 @@ impl Store {
             params![prefix],
         )
         .map_err(|e| e.to_string())?;
-        // Migration : date de rapprochement (v1.5.0). Les plans existants ont
-        // NULL, ce qui est exact — ils n'ont jamais été rapprochés.
+        // Migration : date de rapprochement (v1.5.0). La v1.4.1 est publiée et
+        // des bases sans cette colonne sont déjà sur les postes ; sans cet
+        // ALTER TABLE, l'application n'y démarrerait plus. Les plans existants
+        // gagnent NULL, ce qui est exact — ils n'ont jamais été rapprochés.
         let present: bool = conn
             .prepare("SELECT 1 FROM pragma_table_info('plan_meta') WHERE name=?1")
             .and_then(|mut s| s.exists(["rapproche_le"]))
@@ -1527,6 +1531,11 @@ mod tests {
         // `rapproche_le` existe. Elle doit rester ouvrable, et le plan déjà
         // écrit doit se relire avec `rapproche_le: None` — il n'a jamais été
         // rapproché, ce qui est la valeur exacte, pas un pis-aller.
+        //
+        // Le schéma `CREATE TABLE` ci-dessous est DÉLIBÉRÉMENT figé sur l'ancien
+        // schéma (sans `rapproche_le`) : c'est tout l'objet du test. Ne pas le
+        // « synchroniser » avec le schéma courant, sous peine de lui retirer
+        // tout pouvoir de preuve.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("plan_sans_rapproche_le.db");
         {
