@@ -195,7 +195,9 @@ pub fn calculer(
 /// bouge pas.
 ///
 /// Tout est vérifié avant d'écrire quoi que ce soit — comme `plan::ajouter` :
-/// un lot à moitié appliqué serait pire qu'un refus.
+/// un lot à moitié appliqué serait pire qu'un refus. Un compte n'apparaît au
+/// plus qu'une fois dans les écarts : c'est `calculer` qui le garantit, un
+/// seul écart est produit par ligne de plan.
 pub fn appliquer(
     plan: &mut [LignePlan],
     r: &Rapprochement,
@@ -207,6 +209,28 @@ pub fn appliquer(
             .iter()
             .position(|l| l.cf == e.cf)
             .ok_or_else(|| format!("le compte « {} » n'est pas au plan", e.cf))?;
+        // `nature` et `action` sont indépendants : rien ne les lie sauf ici.
+        // Un `Deplacer` sans `JourChange` écrirait le run et la MEP mais pas
+        // le jour, EN SILENCE — exactement le lot à moitié appliqué que cette
+        // fonction refuse partout ailleurs. Un écart mal apparié fait donc
+        // échouer tout le rapprochement, avant toute écriture.
+        match (&e.nature, &e.action) {
+            (Nature::JourChange { .. }, Action::Deplacer { .. })
+            | (Nature::PlateformeChangee { .. }, Action::Rafraichir) => {}
+            (_, Action::Deplacer { .. }) => {
+                return Err(format!(
+                    "le compte « {} » a une action de déplacement sans changement de jour de cycle",
+                    e.cf
+                ));
+            }
+            (_, Action::Rafraichir) => {
+                return Err(format!(
+                    "le compte « {} » a une action de rafraîchissement sans changement de plateforme",
+                    e.cf
+                ));
+            }
+            _ => {}
+        }
         cibles.push((i, e));
     }
     for (i, e) in cibles {
@@ -236,6 +260,8 @@ pub fn appliquer(
                     l.pa = apres.clone();
                 }
             }
+            // Vu, rien à faire automatiquement : l'utilisateur tranche avec
+            // les outils existants. Le vide est délibéré, pas un oubli.
             Action::Signaler => {}
         }
     }
@@ -931,6 +957,33 @@ mod tests {
         };
         let err = appliquer(&mut plan, &r, 1_800_000_000).unwrap_err();
         assert!(err.contains("INCONNU"), "obtenu : {err}");
+        assert_eq!(plan[0], temoin, "rien ne doit avoir été écrit");
+    }
+
+    /// Un écart mal apparié (nature/action incohérentes) ne doit jamais
+    /// s'appliquer à moitié en silence : un `Deplacer` sans `JourChange`
+    /// écrirait le run et la MEP mais pas le jour, sans lever d'erreur.
+    #[test]
+    fn appliquer_refuse_un_ecart_dont_la_nature_ne_correspond_pas_a_l_action() {
+        let mut plan = vec![ligne("CF1", 5, "Cegedim", "RF01", (2, "2026-09-01"))];
+        let temoin = plan[0].clone();
+        let r = Rapprochement {
+            ecarts: vec![Ecart {
+                cf: "CF1".into(),
+                nature: Nature::DisparuDuFichier,
+                action: Action::Deplacer {
+                    run_num: "RF02".into(),
+                    run_date: d("2026-09-20"),
+                    mep_id: 2,
+                    mep_date: d("2026-09-01"),
+                },
+                gelee: false,
+            }],
+            inchangees: 0,
+            avertissements: vec![],
+        };
+        let err = appliquer(&mut plan, &r, 1_800_000_000).unwrap_err();
+        assert!(err.contains("CF1"), "obtenu : {err}");
         assert_eq!(plan[0], temoin, "rien ne doit avoir été écrit");
     }
 }
