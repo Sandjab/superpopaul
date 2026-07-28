@@ -688,6 +688,28 @@ fn chemin_classeur(input: &Path, dir: &str) -> PathBuf {
     ))
 }
 
+/// Chemin du rapport d'un rapprochement. Horodaté **à la seconde** : le
+/// document est transmis et conservé, contrairement au classeur et au rapport
+/// de plan qui ont un chemin unique réécrit. Deux rapprochements rapprochés
+/// dans le temps ne doivent pas s'écraser — une perte de ce genre ne se
+/// remarque jamais.
+///
+/// Le préfixe évite `_plan_mep_`, que `fichiers_obsoletes` sélectionne pour
+/// suppression.
+fn chemin_rapport_rapprochement(input: &Path, dir: &str, horodatage: &str) -> PathBuf {
+    resolved_out_dir(input, dir).join(format!(
+        "{}_rapprochement_{horodatage}.html",
+        input.file_stem().unwrap_or_default().to_string_lossy()
+    ))
+}
+
+/// Le nom d'un fichier depuis son chemin. Le rapport nomme les fichiers, il ne
+/// parle jamais de chemins absolus : ceux de la machine qui a produit le lot
+/// n'apprennent rien à qui le reçoit.
+fn nom_de_fichier(chemin: &str) -> &str {
+    chemin.rsplit(['/', '\\']).next().unwrap_or(chemin)
+}
+
 #[tauri::command]
 pub async fn generate_output(state: State<'_, AppState>) -> Result<String, String> {
     let cfg = state.current_config()?;
@@ -1715,6 +1737,15 @@ fn calculer_rapprochement(
     Ok((r, empreinte, lignes, meta, annuaire_incomplet))
 }
 
+/// Ce qu'une application de rapprochement laisse derrière elle.
+#[derive(Serialize)]
+pub struct RapprochementApplique {
+    /// Fichiers de MEP supprimés parce que leur MEP s'est vidée.
+    pub obsoletes: Vec<String>,
+    /// Chemin du rapport écrit. Le lot ne part jamais sans sa note.
+    pub rapport: String,
+}
+
 /// Rapproche le plan du fichier ouvert **sans rien écrire**.
 #[tauri::command]
 pub async fn plan_rapprocher(state: State<'_, AppState>) -> Result<RapprochementVue, String> {
@@ -1739,20 +1770,43 @@ pub async fn plan_rapprocher(state: State<'_, AppState>) -> Result<Rapprochement
 pub async fn plan_rapprocher_appliquer(
     state: State<'_, AppState>,
     empreinte: String,
-) -> Result<Vec<String>, String> {
+) -> Result<RapprochementApplique, String> {
     let cfg = state.current_config()?;
     let input = state.input_path()?;
     let store = state.store.clone();
     tokio::task::spawn_blocking(move || {
-        // `annuaire_incomplet` n'est affiché qu'au calcul (`plan_rapprocher`) :
-        // l'application n'a rien à en dire, elle applique ce qui a déjà été lu.
-        let (r, courante, mut lignes, mut meta, _annuaire_incomplet) =
+        // `annuaire_incomplet` n'est plus ignoré : l'écran n'a rien à en dire
+        // au moment d'appliquer, mais le RAPPORT si — sans lui, le document
+        // transmis affirmerait une exhaustivité qu'il n'a pas.
+        let (r, courante, mut lignes, mut meta, annuaire_incomplet) =
             calculer_rapprochement(&store, &input, &cfg)?;
         if courante != empreinte {
             return Err("le fichier a changé depuis le calcul — relance le rapprochement \
                         avant d'appliquer"
                 .into());
         }
+        // Capturés AVANT `appliquer` et le réalignement, qui les écrasent : le
+        // rapport doit nommer le fichier d'origine, et `Action::Deplacer` ne
+        // porte que la destination — sans cette photo, il ne peut pas dire
+        // d'où vient un compte déplacé.
+        let fichier_avant = meta.fichier.clone();
+        let origines: std::collections::BTreeMap<
+            String,
+            crate::rapprochement_report::PositionAvant,
+        > = lignes
+            .iter()
+            .map(|l| {
+                (
+                    l.cf.clone(),
+                    crate::rapprochement_report::PositionAvant {
+                        run_num: l.run_num.clone(),
+                        run_date: l.run_date.to_string(),
+                        mep_id: l.mep_id,
+                    },
+                )
+            })
+            .collect();
+
         let maintenant = chrono::Utc::now().timestamp();
         crate::rapprochement::appliquer(&mut lignes, &r, maintenant)?;
         // Le plan décrit désormais le fichier ouvert : sans ça,
@@ -1764,7 +1818,53 @@ pub async fn plan_rapprocher_appliquer(
             .unwrap_or_default();
         meta.hash = courante;
         meta.rapproche_le = Some(maintenant);
-        sauver_apres_retouche(&store, &input, &cfg, &lignes, &meta).map(|(_, obs)| obs)
+        let (ecrits, obsoletes) = sauver_apres_retouche(&store, &input, &cfg, &lignes, &meta)?;
+
+        // Le rapport décrit les fichiers RÉELLEMENT écrits ci-dessus : les
+        // produire d'abord évite deux calculs du même nombre de comptes, qui
+        // finiraient par diverger.
+        let noms_obsoletes: Vec<String> =
+            obsoletes.iter().map(|c| nom_de_fichier(c).to_string()).collect();
+        let fichiers: Vec<crate::rapprochement_report::FichierLivre> = ecrits
+            .iter()
+            .map(|f| crate::rapprochement_report::FichierLivre {
+                nom: nom_de_fichier(&f.chemin),
+                mep_id: f.mep_id,
+                mep_date: &f.mep_date,
+                comptes: f.comptes,
+            })
+            .collect();
+        let local = chrono::Local::now();
+        let html = crate::rapprochement_report::render(
+            &crate::rapprochement_report::RapprochementReportData {
+                fichier_avant: &fichier_avant,
+                fichier_apres: &meta.fichier,
+                empreinte: &meta.hash,
+                date_longue: &report::date_fr_longue(&local),
+                version: env!("CARGO_PKG_VERSION"),
+                rapprochement: &r,
+                fichiers: &fichiers,
+                obsoletes: &noms_obsoletes,
+                origines: &origines,
+                annuaire_incomplet: annuaire_incomplet.as_deref(),
+            },
+        );
+        let out = chemin_rapport_rapprochement(
+            &input,
+            &cfg.output.dir,
+            &local.format("%Y-%m-%d_%H%M%S").to_string(),
+        );
+        // Le plan et les fichiers sont DÉJÀ écrits. L'erreur doit dire les
+        // deux choses : un message nu ferait croire à un échec total et
+        // pousserait à relancer, or relancer recalculerait un rapprochement
+        // désormais sans écart — et le document serait perdu pour de bon.
+        std::fs::write(&out, html).map_err(|e| {
+            format!("Le rapprochement a été appliqué, mais le rapport n'a pas pu être écrit : {e}")
+        })?;
+        Ok(RapprochementApplique {
+            obsoletes,
+            rapport: out.display().to_string(),
+        })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -2170,6 +2270,41 @@ mod tests {
             planned_at: 0,
             retire: None,
         }
+    }
+
+    #[test]
+    fn le_rapport_de_rapprochement_suit_le_repertoire_de_sortie() {
+        let p = chemin_rapport_rapprochement(
+            Path::new("/data/brm2607.csv"),
+            "sortie",
+            "2026-07-28_143205",
+        );
+        assert!(
+            p.ends_with("brm2607_rapprochement_2026-07-28_143205.html"),
+            "nom inattendu : {p:?}"
+        );
+        assert!(
+            p.to_string_lossy().contains("sortie"),
+            "répertoire de sortie ignoré : {p:?}"
+        );
+    }
+
+    /// `fichiers_obsoletes` supprime tout `<souche>_plan_mep_*.txt` qu'il n'a
+    /// pas écrit. Un rapport qui tomberait dans ce filtre disparaîtrait au
+    /// rapprochement suivant — silencieusement, puisqu'il est conservé et que
+    /// personne ne le rouvre.
+    #[test]
+    fn le_rapport_echappe_au_menage_des_fichiers_de_mep() {
+        let presents = vec![
+            "brm2607_rapprochement_2026-07-28_143205.html".to_string(),
+            "brm2607_plan_mep_1_2026-05-15.txt".to_string(),
+        ];
+        let obsoletes = fichiers_obsoletes(&presents, &HashSet::new(), "brm2607");
+        assert_eq!(
+            obsoletes,
+            vec!["brm2607_plan_mep_1_2026-05-15.txt"],
+            "le rapport ne doit jamais être sélectionné pour suppression"
+        );
     }
 
     /// La date du nom et la date remontée viennent de la même source : si
