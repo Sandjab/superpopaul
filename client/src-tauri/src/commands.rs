@@ -1072,6 +1072,7 @@ pub async fn plan_generate(
             hash: sha256_hex(&std::fs::read(&input).map_err(|e| format!("lecture entrée : {e}"))?),
             genere_le: horodatage,
             params_yaml: params.vers_yaml()?,
+            rapproche_le: None, // plan neuf : jamais rapproché
         };
         store.lock().unwrap().ecrire_plan(&lignes, &meta)?;
         let (fichiers, obsoletes) = ecrire_fichiers_mep(&input, &cfg.output.dir, &lignes)?;
@@ -1641,6 +1642,125 @@ pub async fn plan_runs_compatibles(
     .map_err(|e| e.to_string())?
 }
 
+/// L'annuaire PPF est chargé **cumulativement** (`store::ingest_ppf`) : un
+/// identifiant qui en sort, ou passe à un motif inactif, conserve sa ligne et
+/// reste utilisable. Au-delà d'un fichier chargé, la perte d'éligibilité PPF
+/// n'est donc pas détectable — et un « 0 » se lirait comme « il n'y en a
+/// pas ». La correction du chargement est un lot séparé ; ici on le dit.
+fn avertissement_ppf_cumulatif(fichiers: usize) -> Option<String> {
+    (fichiers > 1).then(|| {
+        format!(
+            "l'annuaire PPF a été construit par cumul de {fichiers} fichiers : une \
+             éligibilité PPF perdue n'y est pas détectable. Pour un rapprochement \
+             complet, il faut vider l'annuaire puis recharger le fichier le plus récent."
+        )
+    })
+}
+
+/// Enveloppe de commande : le rapprochement lui-même est pur, l'empreinte du
+/// fichier vient du disque.
+#[derive(Serialize)]
+pub struct RapprochementVue {
+    pub rapprochement: crate::rapprochement::Rapprochement,
+    pub empreinte: String,
+    /// Séparé des avertissements du calcul : ceux-là décrivent ce que le
+    /// rapprochement va FAIRE (ampleur, répartition par plateforme), celui-ci
+    /// prévient que le calcul est INCOMPLET — un « 0 éligibilité perdue »
+    /// peut vouloir dire « l'annuaire ne sait pas la voir ». Les fondre ferait
+    /// disparaître cette nuance.
+    pub annuaire_incomplet: Option<String>,
+}
+
+/// Cœur partagé par le calcul et l'application. Rend aussi le plan et sa méta,
+/// dont l'application a besoin.
+fn calculer_rapprochement(
+    store: &Arc<Mutex<Store>>,
+    input: &Path,
+    cfg: &Config,
+) -> Result<
+    (
+        crate::rapprochement::Rapprochement,
+        String,
+        Vec<crate::plan::LignePlan>,
+        crate::store::PlanMeta,
+        Option<String>,
+    ),
+    String,
+> {
+    let (lignes, meta) = charger_pour_retouche(store)?;
+    let (runs, meps) = calendrier_du_plan(&meta)?;
+    let (entrees, fichiers_ppf) = {
+        let s = store.lock().unwrap();
+        (
+            plan_entrees_from_scan(&s, input, cfg, chrono::Utc::now())?,
+            s.ppf_files()?.len(),
+        )
+    };
+    let aujourdhui = chrono::Local::now().date_naive();
+    let r = crate::rapprochement::calculer(&lignes, &entrees, &runs, &meps, aujourdhui)?;
+    // Dérivé de l'état de la BASE (l'annuaire), pas du calcul : il ne rejoint
+    // PLUS `r.avertissements`, sans quoi il serait indiscernable des
+    // avertissements que `rapprochement::calculer` dérive lui-même.
+    let annuaire_incomplet = avertissement_ppf_cumulatif(fichiers_ppf);
+    let empreinte = sha256_hex(&std::fs::read(input).map_err(|e| format!("lecture entrée : {e}"))?);
+    Ok((r, empreinte, lignes, meta, annuaire_incomplet))
+}
+
+/// Rapproche le plan du fichier ouvert **sans rien écrire**.
+#[tauri::command]
+pub async fn plan_rapprocher(state: State<'_, AppState>) -> Result<RapprochementVue, String> {
+    let cfg = state.current_config()?;
+    let input = state.input_path()?;
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || {
+        let (rapprochement, empreinte, _, _, annuaire_incomplet) =
+            calculer_rapprochement(&store, &input, &cfg)?;
+        Ok(RapprochementVue { rapprochement, empreinte, annuaire_incomplet })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Recalcule le rapprochement **depuis zéro** et l'applique. Le diff ne
+/// transite pas par le front : ce qui s'écrit ne dépend jamais de données
+/// remontées par le JS. `empreinte` est celle vue au calcul — si le fichier a
+/// bougé depuis, on refuse plutôt que d'appliquer autre chose que ce qui a été
+/// lu à l'écran.
+#[tauri::command]
+pub async fn plan_rapprocher_appliquer(
+    state: State<'_, AppState>,
+    empreinte: String,
+) -> Result<Vec<String>, String> {
+    let cfg = state.current_config()?;
+    let input = state.input_path()?;
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || {
+        // `annuaire_incomplet` n'est affiché qu'au calcul (`plan_rapprocher`) :
+        // l'application n'a rien à en dire, elle applique ce qui a déjà été lu.
+        let (r, courante, mut lignes, mut meta, _annuaire_incomplet) =
+            calculer_rapprochement(&store, &input, &cfg)?;
+        if courante != empreinte {
+            return Err("le fichier a changé depuis le calcul — relance le rapprochement \
+                        avant d'appliquer"
+                .into());
+        }
+        let maintenant = chrono::Utc::now().timestamp();
+        crate::rapprochement::appliquer(&mut lignes, &r, maintenant)?;
+        // Le plan décrit désormais le fichier ouvert : sans ça,
+        // `rapport_au_fichier` continuerait d'annoncer « contenu différent »
+        // sur un plan qu'on vient précisément d'aligner.
+        meta.fichier = input
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        meta.hash = courante;
+        meta.rapproche_le = Some(maintenant);
+        sauver_apres_retouche(&store, &input, &cfg, &lignes, &meta)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Rapport HTML du plan — livrable DISTINCT du rapport de run.
 #[tauri::command]
 pub async fn plan_rapport(state: State<'_, AppState>) -> Result<String, String> {
@@ -2201,6 +2321,21 @@ mod tests {
         let entrees = vec![entree("CF1", "zzz", "ready", true), entree("CF2", "99", "ready", true)];
         assert!(candidats_du_run(&entrees, &run_test(), &HashSet::new()).is_empty());
     }
+
+    #[test]
+    fn l_annuaire_ppf_cumulatif_est_signale() {
+        // Deux fichiers chargés sans reset : la perte d'éligibilité PPF n'est
+        // pas détectable, et un « 0 » se lirait comme « il n'y en a pas ».
+        let a = avertissement_ppf_cumulatif(2);
+        let a = a.expect("deux fichiers doivent produire un avertissement");
+        assert!(a.contains("recharger"), "l'avertissement doit dire quoi faire : {a}");
+    }
+
+    #[test]
+    fn un_annuaire_ppf_charge_une_seule_fois_ne_declenche_rien() {
+        assert!(avertissement_ppf_cumulatif(1).is_none());
+        assert!(avertissement_ppf_cumulatif(0).is_none());
+    }
 }
 
 #[cfg(test)]
@@ -2278,6 +2413,189 @@ mod tests_jeu_de_parametres {
     }
 }
 
+/// `rapprochement::run_cible` ne refiltre pas `RunFacturation::exclu` : la
+/// garde vit dans `calendrier::runs_utilisables`, déjà appliquée par
+/// `calendrier_du_plan` (même convention que `plan::runs_compatibles`, qui ne
+/// la refait pas non plus). Ce module le prouve à l'endroit où les deux se
+/// rencontrent : un run exclu ne doit jamais atteindre `rapprochement::calculer`.
+#[cfg(test)]
+mod tests_rapprochement {
+    use super::*;
+
+    /// Deux runs sur le même jour de cycle 12 : un normal plus tard, un exclu
+    /// plus tôt (donc « meilleur » candidat s'il n'était pas filtré). Si la
+    /// garde venait à manquer, le run exclu serait choisi en priorité.
+    fn params_avec_run_exclu() -> crate::plan::PlanParams {
+        crate::plan::PlanParams {
+            runs: vec![
+                crate::plan::RunParam {
+                    num: "RF01".into(),
+                    date: "2026-09-10".into(),
+                    jjs: vec![5],
+                    exclu: false,
+                },
+                crate::plan::RunParam {
+                    num: "RF_EXCLU".into(),
+                    date: "2026-09-12".into(),
+                    jjs: vec![12],
+                    exclu: true,
+                },
+            ],
+            debut: "2026-08-01".into(),
+            fin: "2026-11-30".into(),
+            meps: vec!["2026-09-01".into()],
+            mep_count: 0,
+            cible: None,
+            seed: 0,
+            pa_exclues: vec![],
+            rampe: crate::plan::Rampe { forme: crate::plan::Forme::Plate, pilote: None },
+        }
+    }
+
+    fn meta_pour(params: &crate::plan::PlanParams) -> crate::store::PlanMeta {
+        crate::store::PlanMeta {
+            fichier: "f.csv".into(),
+            hash: "h".into(),
+            genere_le: 0,
+            params_yaml: params.vers_yaml().expect("sérialisation des paramètres de test"),
+            rapproche_le: None,
+        }
+    }
+
+    #[test]
+    fn un_run_exclu_n_est_jamais_choisi_comme_cible_de_rapprochement() {
+        let params = params_avec_run_exclu();
+        let meta = meta_pour(&params);
+        let (runs, meps) = calendrier_du_plan(&meta).expect("calendrier valide");
+        // La garde vérifiée à la source : si `calendrier_du_plan` ne filtrait
+        // plus les runs exclus, ce test perdrait tout son sens sans le dire.
+        assert!(
+            runs.iter().all(|r| r.num != "RF_EXCLU"),
+            "le run exclu ne doit jamais atteindre le rapprochement : {runs:?}"
+        );
+
+        let plan = vec![crate::plan::LignePlan {
+            cf: "CF1".into(),
+            participant: "0225:CF1".into(),
+            jj: 5,
+            raison_sociale: "ACME".into(),
+            pa: "Cegedim".into(),
+            mep_id: 1,
+            mep_date: chrono::NaiveDate::parse_from_str("2026-09-01", "%Y-%m-%d").unwrap(),
+            run_num: "RF01".into(),
+            run_date: chrono::NaiveDate::parse_from_str("2026-09-10", "%Y-%m-%d").unwrap(),
+            origine: crate::plan::Origine::Auto,
+            in_directory: true,
+            resolved_at: 0,
+            planned_at: 0,
+            retire: None,
+        }];
+        // Le fichier annonce désormais le jour 12 — que SEUL le run exclu couvre.
+        let entrees = vec![crate::plan::LigneEntree {
+            cf: "CF1".into(),
+            participant: "0225:CF1".into(),
+            jj_brut: "12".into(),
+            raison_sociale: "ACME".into(),
+            pa: "Cegedim".into(),
+            resolu: true,
+            ctc_ready: true,
+            ctc_status: "ready".into(),
+            ppf_usable: true,
+            in_directory: true,
+            resolved_at: 0,
+        }];
+        let r = crate::rapprochement::calculer(
+            &plan,
+            &entrees,
+            &runs,
+            &meps,
+            chrono::NaiveDate::parse_from_str("2026-08-15", "%Y-%m-%d").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(r.ecarts.len(), 1, "obtenu {:?}", r.ecarts);
+        assert_eq!(
+            r.ecarts[0].action,
+            crate::rapprochement::Action::Signaler,
+            "le seul run compatible avec le jour 12 est exclu : rien à faire automatiquement"
+        );
+    }
+
+    #[test]
+    fn avertissement_annuaire_ne_rejoint_plus_les_avertissements_du_calcul() {
+        // La distinction compte : les avertissements de `rapprochement::calculer`
+        // décrivent ce que le rapprochement va FAIRE (ampleur, répartition par
+        // plateforme) ; celui de l'annuaire dit que le calcul lui-même est
+        // INCOMPLET. Les fondre ferait disparaître cette nuance — c'est
+        // exactement ce qu'un retour en arrière referait sans le vouloir.
+        let store = Arc::new(Mutex::new(Store::open_in_memory().expect("store en mémoire")));
+        {
+            let s = store.lock().unwrap();
+            // Annuaire cumulatif : au-delà d'un fichier ingéré, une éligibilité
+            // PPF perdue n'y est plus détectable (avertissement_ppf_cumulatif).
+            s.ingest_ppf("f1.csv", "hash1", &[], 0, 0).expect("ingestion 1");
+            s.ingest_ppf("f2.csv", "hash2", &[], 0, 0).expect("ingestion 2");
+
+            let params = params_avec_run_exclu();
+            let meta = meta_pour(&params);
+            let lignes = vec![crate::plan::LignePlan {
+                cf: "CF1".into(),
+                participant: "0225:CF1".into(),
+                jj: 5,
+                raison_sociale: "ACME".into(),
+                pa: "Cegedim".into(),
+                mep_id: 1,
+                mep_date: chrono::NaiveDate::parse_from_str("2026-09-01", "%Y-%m-%d").unwrap(),
+                run_num: "RF01".into(),
+                run_date: chrono::NaiveDate::parse_from_str("2026-09-10", "%Y-%m-%d").unwrap(),
+                origine: crate::plan::Origine::Auto,
+                in_directory: true,
+                resolved_at: 0,
+                planned_at: 0,
+                retire: None,
+            }];
+            s.ecrire_plan(&lignes, &meta).expect("plan persisté");
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let csv = dir.path().join("comptes.csv");
+        std::fs::write(&csv, "cf;pid;jj\nCF1;;5\n").expect("écriture du CSV de test");
+
+        let cfg = Config {
+            version: 1,
+            api: crate::config::ApiConfig {
+                url: String::new(), key: String::new(), mode: ApiMode::Api,
+                resolver: None, resolver_fallback: String::new(), dns_concurrency: 1,
+                batch_size: 1, concurrency: 1, proxy: None, refresh_days: 30,
+            },
+            input: crate::config::InputConfig {
+                path: csv.to_string_lossy().into_owned(),
+                delimiter: ";".into(), encoding: "utf-8".into(),
+                pid_column: "pid".into(), record_label: crate::config::RecordLabel::Record,
+                cf_column: "cf".into(), jj_column: "jj".into(), raison_sociale_column: String::new(),
+            },
+            output: crate::config::OutputConfig {
+                dir: String::new(), suffix: String::new(), path: String::new(),
+                timestamp_suffix: true, encoding: crate::config::OutputEncoding::Utf8Bom,
+                separator: crate::config::OutputSeparator::Auto, columns: vec![],
+            },
+            ppf: crate::config::PpfConfig::default(),
+        };
+
+        let (r, _empreinte, _lignes, _meta, annuaire_incomplet) =
+            calculer_rapprochement(&store, &csv, &cfg).expect("calcul valide");
+
+        assert!(
+            annuaire_incomplet.is_some(),
+            "2 fichiers PPF cumulés : l'avertissement doit être rendu, séparément"
+        );
+        assert!(
+            !r.avertissements.iter().any(|a| a.contains("annuaire PPF")),
+            "l'avertissement d'annuaire ne doit plus se mêler à ceux du calcul : {:?}",
+            r.avertissements
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests_rapport_au_fichier {
     use super::*;
@@ -2288,6 +2606,7 @@ mod tests_rapport_au_fichier {
             hash: hash.into(),
             genere_le: 0,
             params_yaml: String::new(),
+            rapproche_le: None,
         }
     }
 

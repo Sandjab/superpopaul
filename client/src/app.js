@@ -1231,6 +1231,11 @@ const plan = {
   jeu: null,
   filtres: { mep: "", run: "", pa: "", origine: "", etat: "", q: "" },
   genere: false,
+  // Rapport au fichier ouvert (clé de `MESSAGES_FICHIER`) : décide du style du
+  // bouton de rapprochement dans la barre d'outils du récap. `null` tant
+  // qu'aucun plan n'est en mémoire — le bouton reste alors masqué (`genere`
+  // gate déjà son affichage).
+  rapportFichier: null,
   // Rampe manuelle : { [run_num]: volume }. Vit ici et non dans le DOM — les
   // champs sont dynamiques (un par run retenu) et le panneau est reconstruit
   // en entier à chaque rendu. Un run absent vaut 0 côté moteur, en silence :
@@ -1260,11 +1265,11 @@ async function pousserConfig() {
   catch (e) { planBanner("error", String(e)); }
 }
 
-function planBanner(kind, texte) {
+function planBanner(kind, texte, ...actionNodes) {
   const el = $("plan-banner");
   if (!kind) { el.className = "hidden"; el.replaceChildren(); return; }
   el.className = kind;
-  el.replaceChildren(texte);
+  el.replaceChildren(texte, ...actionNodes);
 }
 
 function fmtN(n) { return (n ?? 0).toLocaleString("fr-FR"); }
@@ -1377,6 +1382,7 @@ function listeDecisions(d) {
 async function effacerLePlan() {
   await invoke("plan_reset");
   plan.genere = false;
+  plan.rapportFichier = null;
   await rechargerRecap();
 }
 
@@ -2088,6 +2094,16 @@ function renderPlanRecap() {
     champRecherche = h("input", { class: "grow", type: "search", value: plan.filtres.q,
       placeholder: "Rechercher un compte, un adressage, une raison sociale…",
       oninput: (e) => { plan.filtres.q = e.target.value; renderPlanRecap(); } }));
+  // Point d'entrée du rapprochement : toujours là dès qu'un plan existe, sauf
+  // fichier illisible (rien à rapprocher). Discret si le fichier ouvert est
+  // déjà celui qui a produit le plan, mis en avant sinon — l'éligibilité
+  // dépend aussi de l'annuaire et des résolutions, qui bougent sans le fichier.
+  if (plan.genere) {
+    const info = MESSAGES_FICHIER[plan.rapportFichier] ?? MESSAGES_FICHIER.inconnu;
+    if (info.entree !== "masque")
+      barre.append(h("button", { class: info.entree === "avant" ? "btn-primary" : "",
+        onclick: (ev) => ouvrirRapprocher(ev.currentTarget) }, "Rapprocher…"));
+  }
 
   const visibles = lignesFiltrees();
   const actives = plan.lignes.filter((l) => l.retire_motif == null).length;
@@ -2283,6 +2299,268 @@ function ouvrirReactivation() {
         }),
       }, `Réactiver ${cfs.length} compte(s)`)));
   modal(...noeuds);
+}
+
+// --- Rapprochement avec le fichier ouvert -------------------------------------
+// Le calcul (`rapprochement.rs`) est pur et déjà testé côté Rust : ce qui suit
+// n'est que l'affichage de son résultat, groupé par nature comme la maquette
+// du 28/07/2026, et l'application en bloc (jamais ligne à ligne).
+
+/** Nombre de lignes affichées par groupe avant de compter le reste — jamais de
+ *  troncature muette, comme le plafond du récap (500 lignes), mais un groupe
+ *  n'a besoin que de quelques exemples pour se comprendre. */
+const RAPPRO_PLAFOND_GROUPE = 5;
+
+/** Raison sociale d'un compte, retrouvée dans le récap déjà chargé : l'écart
+ *  (`Ecart` de rapprochement.rs) ne garde que le strict nécessaire à l'action
+ *  (cf, nature, action, gelée), mais son `cf` désigne toujours une ligne du
+ *  plan courant — les deux sont calculés dans la même requête côté backend. */
+function ligneDuPlan(cf) { return plan.lignes.find((l) => l.cf === cf); }
+
+/** Répartit les écarts dans les 5 groupes de la maquette. Une même nature peut
+ *  donner deux actions différentes (jour changé : déplacé ou signalé selon la
+ *  gelée et l'existence d'un run cible) — c'est l'action, pas seulement la
+ *  nature, qui décide du groupe pour ce cas-là. */
+function grouperEcarts(ecarts) {
+  const g = { eligibilite: [], disparus: [], deplaces: [], signales: [], plateforme: [] };
+  for (const e of ecarts) {
+    if (e.nature.type === "eligibilite_perdue") g.eligibilite.push(e);
+    else if (e.nature.type === "disparu_du_fichier") g.disparus.push(e);
+    else if (e.nature.type === "jour_change") (e.action.type === "deplacer" ? g.deplaces : g.signales).push(e);
+    else if (e.nature.type === "plateforme_changee") g.plateforme.push(e);
+  }
+  return g;
+}
+
+/** Carte d'un groupe : pastille de couleur, décompte, tableau plafonné.
+ *  `null` si le groupe est vide — la revue ne montre jamais de carte vide. */
+function carteGroupeEcarts(couleur, titre, ecarts, construireLigne, colonnes) {
+  if (!ecarts.length) return null;
+  const tbl = h("table", {});
+  for (const e of ecarts.slice(0, RAPPRO_PLAFOND_GROUPE)) tbl.append(construireLigne(e));
+  if (ecarts.length > RAPPRO_PLAFOND_GROUPE)
+    tbl.append(h("tr", {}, h("td", { colspan: String(colonnes), class: "rappro-more" },
+      `… ${fmtN(ecarts.length - RAPPRO_PLAFOND_GROUPE)} autre(s)`)));
+  return h("div", { class: "rappro-grp" },
+    h("div", { class: "rappro-grp-h" },
+      h("span", { class: "rappro-dot", style: `background:${couleur}` }),
+      h("span", { class: "rappro-n" }, fmtN(ecarts.length)),
+      h("span", { class: "rappro-t" }, titre)),
+    tbl);
+}
+
+function ligneEligibilitePerdue(e) {
+  const l = ligneDuPlan(e.cf);
+  return h("tr", {},
+    h("td", { class: "rappro-cf" }, e.cf),
+    h("td", { class: "rappro-rs" }, l?.raison_sociale ?? ""),
+    h("td", { class: "rappro-chg" }, `${e.nature.avant} → `,
+      h("span", { class: "tag removed" }, e.nature.apres)));
+}
+
+function ligneDisparuDuFichier(e) {
+  const l = ligneDuPlan(e.cf);
+  const nom = (state.inputPath ?? "").split(/[\\/]/).pop();
+  return h("tr", {},
+    h("td", { class: "rappro-cf" }, e.cf),
+    h("td", { class: "rappro-rs" }, l?.raison_sociale ?? ""),
+    h("td", { class: "rappro-chg" }, `absent de ${nom}`));
+}
+
+function ligneDeplacement(e) {
+  const l = ligneDuPlan(e.cf);
+  const a = e.action; // { type: "deplacer", run_num, run_date, mep_id, mep_date }
+  const memeMep = l && l.mep_id === a.mep_id;
+  return h("tr", {},
+    h("td", { class: "rappro-cf" }, e.cf),
+    h("td", { class: "rappro-rs" }, l?.raison_sociale ?? ""),
+    h("td", { class: "rappro-chg" }, `jour ${e.nature.avant} → ${e.nature.apres}`),
+    h("td", { class: "rappro-arrow" },
+      `${l?.run_num ?? "?"} → ${a.run_num} · `,
+      memeMep ? `MEP ${a.mep_id} inchangée` : h("b", {}, `MEP ${l?.mep_id ?? "?"} → ${a.mep_id}`)));
+}
+
+/** Les trois raisons de signalement (jour illisible, MEP gelée, aucun run
+ *  cible) se lisent sur la même ligne plutôt que trois groupes d'une poignée
+ *  d'écarts : l'action est la même dans les trois cas — aucune. `apres === 0`
+ *  est la sentinelle de `rapprochement.rs` pour un jour illisible : hors du
+ *  domaine 1–31, elle ne doit JAMAIS s'afficher comme un chiffre. */
+function ligneSignalee(e) {
+  const l = ligneDuPlan(e.cf);
+  const { avant, apres } = e.nature;
+  let chg, motif;
+  if (apres === 0) {
+    chg = h("span", { class: "tag stale" }, "jour de cycle illisible");
+    motif = "valeur illisible dans le fichier";
+  } else if (e.gelee) {
+    chg = h("span", {}, `jour ${avant} → ${apres} `, h("span", { class: "tag frozen" }, "❄ gelé"));
+    motif = "un lot livré ne se déplace pas";
+  } else {
+    chg = `jour ${avant} → ${apres}`;
+    motif = `aucun run retenu ne couvre le jour ${apres}`;
+  }
+  return h("tr", {},
+    h("td", { class: "rappro-cf" }, e.cf),
+    h("td", { class: "rappro-rs" }, l?.raison_sociale ?? ""),
+    h("td", { class: "rappro-chg" }, chg),
+    h("td", { class: "rappro-arrow" }, motif));
+}
+
+function lignePlateformeChangee(e) {
+  const l = ligneDuPlan(e.cf);
+  return h("tr", {},
+    h("td", { class: "rappro-cf" }, e.cf),
+    h("td", { class: "rappro-rs" }, l?.raison_sociale ?? ""),
+    h("td", { class: "rappro-chg" }, `${e.nature.avant} → ${e.nature.apres}`));
+}
+
+/** Un seul bloc pour les avertissements DÉRIVÉS DU CALCUL (`rapprochement.
+ *  avertissements`) : ils décrivent tous ce que le rapprochement va FAIRE
+ *  (ampleur, répartition par plateforme), le backend ne les distingue pas
+ *  entre eux et les reconnaître au vol serait fragile au moindre changement
+ *  de formulation côté Rust. L'avertissement d'annuaire, lui, est SÉPARÉ
+ *  (`annuaire_incomplet`) : il ne dérive pas du calcul mais de l'état de la
+ *  base, et dit autre chose — que le calcul est incomplet, pas ce qu'il va
+ *  faire. Voir `blocAnnuaireIncomplet`. */
+function blocAvertissementsRapprochement(liste) {
+  if (!liste.length) return null;
+  return h("div", { class: "rappro-avert" },
+    h("b", {}, "À savoir avant d'appliquer :"),
+    h("ul", {}, ...liste.map((a) => h("li", {}, a))));
+}
+
+/** Bloc de gravité supérieure (fond rouge, comme la maquette) : l'annuaire PPF
+ *  est cumulatif, une éligibilité PPF perdue peut n'y être pas détectable —
+ *  un « 0 » peut vouloir dire « je ne sais pas les voir ». Affiché en tête,
+ *  avant les avertissements du calcul : il qualifie leur fiabilité même. */
+function blocAnnuaireIncomplet(texte) {
+  if (!texte) return null;
+  return h("div", { class: "rappro-avert rappro-avert-hard" }, h("b", {}, texte));
+}
+
+/** Texte du récapitulatif de bas de revue. Toutes les lignes que le calcul a
+ *  vues (hors retirées, déjà hors plan) sont soit inchangées soit en écart :
+ *  additionner les deux donne le total actif AVANT application. */
+function rapproRecapTexte(rapprochement) {
+  const retraits = rapprochement.ecarts.filter((e) => e.action.type === "retirer").length;
+  const avant = rapprochement.inchangees + rapprochement.ecarts.length;
+  return `Après application : ${fmtN(avant - retraits)} ligne(s) active(s), `
+    + `${fmtN(retraits)} retirée(s). Le reste du plan n'est pas retiré au sort.`;
+}
+
+/** Bandeau de compte rendu après application. Les comptages viennent du calcul
+ *  déjà affiché à l'écran (retirés/déplacés/plateformes) ; `obsoletes` est le
+ *  seul retour de `plan_rapprocher_appliquer`, comme pour `plan_retirer` et
+ *  `plan_deplacer` — le nombre de fichiers de MEP réécrits n'est pas remonté
+ *  par le backend, et ne se devine pas : on ne l'affiche donc pas. */
+function compteRenduRapprochement(rapprochement, obsoletes) {
+  const g = grouperEcarts(rapprochement.ecarts);
+  const parts = [];
+  const retraits = g.eligibilite.length + g.disparus.length;
+  if (retraits) parts.push(`${fmtN(retraits)} compte(s) retiré(s)`);
+  if (g.deplaces.length) parts.push(`${fmtN(g.deplaces.length)} déplacé(s)`);
+  if (g.plateforme.length) parts.push(`${fmtN(g.plateforme.length)} plateforme(s) corrigée(s)`);
+  let texte = parts.length ? `✓ Rapprochement appliqué : ${parts.join(", ")}.` : "✓ Rapprochement appliqué.";
+  const noms = (obsoletes ?? []).map((c) => c.split(/[/\\]/).pop());
+  if (noms.length) texte += ` ${noms.length} fichier(s) obsolète(s) supprimé(s) : ${noms.join(", ")}.`;
+  planBanner("ok", texte);
+}
+
+/** Revue groupée, rien n'est encore appliqué. `empreinte` est celle vue au
+ *  calcul : elle voyage jusqu'au clic sur Appliquer sans jamais transiter par
+ *  le DOM (dataset, attribut…), qui se reconstruit à chaque re-rendu du récap.
+ *  `annuaireIncomplet` est séparé de `rapprochement.avertissements` (voir
+ *  `blocAnnuaireIncomplet`) : rendu à part, en tête. */
+function renderRevueRapprochement(rapprochement, empreinte, annuaireIncomplet) {
+  const g = grouperEcarts(rapprochement.ecarts);
+  // "Signaler" ne mute rien (`rapprochement::appliquer`) : ce n'est pas un
+  // changement à appliquer, même si c'est un écart à lire.
+  const changements = rapprochement.ecarts.filter((e) => e.action.type !== "signaler").length;
+
+  const groupes = [
+    carteGroupeEcarts("var(--red)", "à retirer — éligibilité perdue",
+      g.eligibilite, ligneEligibilitePerdue, 3),
+    carteGroupeEcarts("var(--red)", "à retirer — disparus du fichier",
+      g.disparus, ligneDisparuDuFichier, 3),
+    carteGroupeEcarts("var(--gold)", "à déplacer — jour de cycle changé",
+      g.deplaces, ligneDeplacement, 4),
+    carteGroupeEcarts("var(--amber)", "signalés — aucune action automatique",
+      g.signales, ligneSignalee, 4),
+    carteGroupeEcarts("var(--ppf-l3)", "plateforme corrigée — la ligne ne bouge pas",
+      g.plateforme, lignePlateformeChangee, 3),
+  ].filter(Boolean);
+  if (rapprochement.inchangees > 0)
+    groupes.push(h("div", { class: "rappro-grp rappro-mute" },
+      h("div", { class: "rappro-grp-h" },
+        h("span", { class: "rappro-dot", style: "background:var(--green-later)" }),
+        h("span", { class: "rappro-n" }, fmtN(rapprochement.inchangees)),
+        h("span", { class: "rappro-t" }, "inchangées — non touchées"))));
+
+  const appliquerBtn = h("button", { class: "btn-primary", onclick: (ev) =>
+    occupe(ev.currentTarget, "Application en cours…", async () => {
+      try {
+        const obsoletes = await invoke("plan_rapprocher_appliquer", { empreinte });
+        closeModal();
+        plan.rapportFichier = "identique"; // le backend vient d'aligner meta.hash dessus
+        await rechargerRecap();
+        compteRenduRapprochement(rapprochement, obsoletes);
+      } catch (e) {
+        // Refus (empreinte périmée) ou autre échec : la revue affichée décrit
+        // un calcul qui n'est plus valide, la fermer évite de laisser croire
+        // qu'elle tient encore. Le bandeau, lui, reste — avec de quoi relancer.
+        closeModal();
+        planBanner("error", String(e),
+          h("button", { class: "btn-primary",
+            onclick: (ev2) => ouvrirRapprocher(ev2.currentTarget) }, "Rapprocher…"));
+      }
+    }) }, `Appliquer ${fmtN(changements)} changement(s)`);
+  // N'arrive normalement pas ici (le calcul renvoie plus tôt sans écart), mais
+  // si tous les écarts sont de purs signalements, rien n'est à écrire : un
+  // bouton inerte vaut mieux qu'un aller-retour serveur qui n'écrirait rien.
+  if (!changements) appliquerBtn.disabled = true;
+
+  // L'avertissement d'annuaire d'abord (gravité supérieure : il qualifie la
+  // fiabilité du calcul), puis ceux du calcul, puis les groupes.
+  const scrollChildren = [
+    blocAnnuaireIncomplet(annuaireIncomplet),
+    blocAvertissementsRapprochement(rapprochement.avertissements),
+    ...groupes,
+  ].filter(Boolean);
+  modal(
+    h("div", { class: "add-head" }, h("h3", {}, "Rapprocher le plan avec le fichier ouvert")),
+    h("div", { class: "add-scroll" }, ...scrollChildren),
+    h("div", { class: "add-foot" },
+      h("span", { class: "rappro-recap" }, rapproRecapTexte(rapprochement)),
+      h("span", { class: "spacer" }),
+      appliquerBtn,
+      h("button", { class: "btn-ghost", onclick: closeModal }, "Annuler")));
+  $("modal").classList.add("modal-wide");
+}
+
+/** Point d'entrée : calcule sans rien écrire, puis affiche le résultat — vide
+ *  (aucun écart) ou revue groupée par nature. */
+async function ouvrirRapprocher(bouton) {
+  let vue;
+  await occupe(bouton, "Calcul en cours…", async () => {
+    try { vue = await invoke("plan_rapprocher"); }
+    catch (e) { planBanner("error", String(e)); }
+  });
+  if (!vue) return;
+  const { rapprochement, empreinte, annuaire_incomplet: annuaireIncomplet } = vue;
+  if (!rapprochement.ecarts.length) {
+    const appliquerVide = h("button", {}, "Appliquer");
+    appliquerVide.disabled = true;
+    modal(
+      h("h3", {}, "Rapprochement du plan"),
+      h("p", {}, `✓ Le plan est à jour avec le fichier ouvert. `
+        + `${fmtN(rapprochement.inchangees)} ligne(s) active(s), aucun écart.`),
+      h("div", { class: "add-foot" },
+        h("span", { class: "spacer" }),
+        appliquerVide,
+        h("button", { class: "btn-ghost", onclick: closeModal }, "Fermer")));
+    return;
+  }
+  renderRevueRapprochement(rapprochement, empreinte, annuaireIncomplet);
 }
 
 /** Tri d'une liste de candidats sur une colonne. Ne mute pas l'entrée. */
@@ -2501,6 +2779,9 @@ async function genererPlan() {
       plan.apercu = r.apercu;
       plan.fichiers = r.fichiers;
       plan.genere = true;
+      // Fraîchement généré depuis le fichier ouvert : par construction, c'est
+      // celui-là qui vient de le produire.
+      plan.rapportFichier = "identique";
       planBanner(null);
       signalerObsoletes(r.obsoletes);
       renderPlanAside();
@@ -2571,22 +2852,32 @@ function appliquerParams(params) {
  *  « Même nom, contenu changé » n'est PAS « ce n'est pas le même fichier » :
  *  c'en est un, mis à jour. Ce qui est en cause n'est pas son identité mais
  *  l'âge de ce que le plan affirme, d'où le libellé. */
+// `entree` pilote le bouton de rapprochement de la barre d'outils du récap :
+// "discret" (style par défaut) tant que rien n'affirme un écart, "avant"
+// (mis en avant) dès que le fichier a bougé, "masque" quand il n'y a rien à
+// rapprocher (fichier illisible). L'éligibilité dépend aussi de l'annuaire et
+// des résolutions, qui changent sans le fichier : même "identique" garde un
+// bouton, discret.
 const MESSAGES_FICHIER = {
-  identique: { pied: "", bandeau: null },
+  identique: { pied: "", bandeau: null, entree: "discret" },
   contenu_different: {
     pied: " — ⚠ son contenu a changé depuis",
     bandeau: (f) => `Le fichier ouvert porte le même nom que celui qui a produit le plan `
       + `(« ${f} ») mais son contenu a changé : les lignes gelées décrivent des comptes `
       + `tels qu'ils étaient, pas tels qu'ils sont.`,
+    entree: "avant",
   },
   autre_fichier: {
     pied: " — ⚠ le fichier ouvert est différent",
     bandeau: (f) => `Le plan enregistré a été produit depuis « ${f} », différent du `
       + `fichier ouvert : les lignes gelées peuvent ne plus correspondre.`,
+    entree: "avant",
   },
   // Fichier absent ou illisible : on ne conclut pas. Prétendre « fichier
-  // différent » serait une affirmation que rien n'étaye.
-  inconnu: { pied: " — vérification impossible", bandeau: null },
+  // différent » serait une affirmation que rien n'étaye. Rien à rapprocher
+  // non plus : le bouton disparaît plutôt que d'ouvrir sur un calcul voué à
+  // échouer à la première lecture du fichier.
+  inconnu: { pied: " — vérification impossible", bandeau: null, entree: "masque" },
 };
 
 /** Restaure paramètres et calendrier du plan enregistré. */
@@ -2598,7 +2889,10 @@ async function hydraterPlan() {
       appliquerParams(enr.params);
       // Un état que ce frontend ne connaît pas se rabat sur « inconnu », jamais
       // sur le silence : une absence d'avertissement se lit « tout va bien ».
-      const m = MESSAGES_FICHIER[enr.rapport] ?? MESSAGES_FICHIER.inconnu;
+      // Le rapprochement suit le même repli : un état futur non reconnu masque
+      // son bouton plutôt que d'affirmer à tort qu'il n'y a rien à faire.
+      plan.rapportFichier = MESSAGES_FICHIER[enr.rapport] ? enr.rapport : "inconnu";
+      const m = MESSAGES_FICHIER[plan.rapportFichier];
       $("plan-foot-info").textContent = `Plan enregistré depuis ${enr.fichier}${m.pied}`;
       if (m.bandeau) planBanner("warn", m.bandeau(enr.fichier));
     } else {

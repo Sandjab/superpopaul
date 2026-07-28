@@ -74,6 +74,12 @@ pub struct PlanMeta {
     /// dans la MÊME transaction que les lignes : deux artefacts séparés
     /// divergeraient en silence.
     pub params_yaml: String,
+    /// Horodatage du dernier rapprochement appliqué, `None` si le plan n'a
+    /// jamais été rapproché. Porté par le plan et non par la ligne : `Retrait`
+    /// a déjà son horodatage par ligne (`retire.le`), mais `Deplacer` et
+    /// `Rafraichir` n'en ont aucun — `rapproche_le` est le seul endroit qui
+    /// trace ces mutations-là.
+    pub rapproche_le: Option<i64>,
 }
 
 pub struct Store {
@@ -139,7 +145,8 @@ CREATE TABLE IF NOT EXISTS plan_meta (
   fichier      TEXT NOT NULL,
   hash         TEXT NOT NULL,
   genere_le    INTEGER NOT NULL,
-  params_yaml  TEXT NOT NULL
+  params_yaml  TEXT NOT NULL,
+  rapproche_le INTEGER
 );
 ";
 
@@ -251,6 +258,18 @@ impl Store {
             params![prefix],
         )
         .map_err(|e| e.to_string())?;
+        // Migration : date de rapprochement (v1.5.0). La v1.4.1 est publiée et
+        // des bases sans cette colonne sont déjà sur les postes ; sans cet
+        // ALTER TABLE, l'application n'y démarrerait plus. Les plans existants
+        // gagnent NULL, ce qui est exact — ils n'ont jamais été rapprochés.
+        let present: bool = conn
+            .prepare("SELECT 1 FROM pragma_table_info('plan_meta') WHERE name=?1")
+            .and_then(|mut s| s.exists(["rapproche_le"]))
+            .map_err(|e| e.to_string())?;
+        if !present {
+            conn.execute("ALTER TABLE plan_meta ADD COLUMN rapproche_le INTEGER", [])
+                .map_err(|e| e.to_string())?;
+        }
         Ok(Store { conn })
     }
 
@@ -629,9 +648,15 @@ impl Store {
             }
         }
         tx.execute(
-            "INSERT INTO plan_meta (id, fichier, hash, genere_le, params_yaml)
-             VALUES (1, ?1, ?2, ?3, ?4)",
-            params![meta.fichier, meta.hash, meta.genere_le, meta.params_yaml],
+            "INSERT INTO plan_meta (id, fichier, hash, genere_le, params_yaml, rapproche_le)
+             VALUES (1, ?1, ?2, ?3, ?4, ?5)",
+            params![
+                meta.fichier,
+                meta.hash,
+                meta.genere_le,
+                meta.params_yaml,
+                meta.rapproche_le
+            ],
         )
         .map_err(|e| e.to_string())?;
         tx.commit().map_err(|e| e.to_string())
@@ -656,7 +681,7 @@ impl Store {
         let meta = self
             .conn
             .query_row(
-                "SELECT fichier, hash, genere_le, params_yaml FROM plan_meta WHERE id = 1",
+                "SELECT fichier, hash, genere_le, params_yaml, rapproche_le FROM plan_meta WHERE id = 1",
                 [],
                 |r| {
                     Ok(PlanMeta {
@@ -664,6 +689,7 @@ impl Store {
                         hash: r.get(1)?,
                         genere_le: r.get(2)?,
                         params_yaml: r.get(3)?,
+                        rapproche_le: r.get(4)?,
                     })
                 },
             )
@@ -1364,6 +1390,7 @@ mod tests {
             hash: "abc123".into(),
             genere_le: 1_800_000_000,
             params_yaml: "seed: 42\n".into(),
+            rapproche_le: None,
         }
     }
 
@@ -1476,5 +1503,86 @@ mod tests {
         let (relues, m) = s.charger_plan().unwrap().expect("méta présente");
         assert!(relues.is_empty());
         assert_eq!(m, meta());
+    }
+
+    #[test]
+    fn plan_meta_conserve_la_date_de_rapprochement() {
+        let s = Store::open_in_memory().unwrap();
+        let l = ligne("CF1", "0225:123");
+        let mut m = meta();
+        s.ecrire_plan(std::slice::from_ref(&l), &m).unwrap();
+        let (_, relu) = s.charger_plan().unwrap().unwrap();
+        assert_eq!(relu.rapproche_le, None, "un plan neuf n'a jamais été rapproché");
+
+        // Après application, le plan décrit le NOUVEAU fichier.
+        m.rapproche_le = Some(1_800_000_000);
+        m.fichier = "f2.csv".into();
+        m.hash = "bbb".into();
+        s.ecrire_plan(&[l], &m).unwrap();
+        let (_, relu) = s.charger_plan().unwrap().unwrap();
+        assert_eq!(relu.rapproche_le, Some(1_800_000_000));
+        assert_eq!(relu.fichier, "f2.csv");
+        assert_eq!(relu.hash, "bbb");
+    }
+
+    #[test]
+    fn ouverture_migre_plan_meta_sans_rapproche_le() {
+        // Une base v1.4.1 a un plan enregistré AVANT que la colonne
+        // `rapproche_le` existe. Elle doit rester ouvrable, et le plan déjà
+        // écrit doit se relire avec `rapproche_le: None` — il n'a jamais été
+        // rapproché, ce qui est la valeur exacte, pas un pis-aller.
+        //
+        // Le schéma `CREATE TABLE` ci-dessous est DÉLIBÉRÉMENT figé sur l'ancien
+        // schéma (sans `rapproche_le`) : c'est tout l'objet du test. Ne pas le
+        // « synchroniser » avec le schéma courant, sous peine de lui retirer
+        // tout pouvoir de preuve.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plan_sans_rapproche_le.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE plan_cf (
+                   cf              TEXT PRIMARY KEY,
+                   participant     TEXT NOT NULL,
+                   jj              INTEGER NOT NULL,
+                   raison_sociale  TEXT,
+                   pa              TEXT,
+                   mep_id          INTEGER NOT NULL,
+                   mep_date        TEXT NOT NULL,
+                   run_num         TEXT NOT NULL,
+                   run_date        TEXT NOT NULL,
+                   origine         TEXT NOT NULL,
+                   in_directory    INTEGER,
+                   resolved_at     INTEGER,
+                   planned_at      INTEGER NOT NULL,
+                   retire_le       INTEGER,
+                   retire_motif    TEXT
+                 );
+                 CREATE TABLE plan_meta (
+                   id           INTEGER PRIMARY KEY CHECK (id = 1),
+                   fichier      TEXT NOT NULL,
+                   hash         TEXT NOT NULL,
+                   genere_le    INTEGER NOT NULL,
+                   params_yaml  TEXT NOT NULL
+                 );
+                 INSERT INTO plan_cf (cf, participant, jj, mep_id, mep_date,
+                   run_num, run_date, origine, planned_at)
+                   VALUES ('CF1', '123', 5, 1, '2026-06-15', 'R1', '2026-08-11',
+                           'auto', 1800000000);
+                 INSERT INTO plan_meta (id, fichier, hash, genere_le, params_yaml)
+                   VALUES (1, 'clients.csv', 'abc123', 1800000000, 'seed: 42');",
+            )
+            .unwrap();
+        }
+        let s = Store::open(&path).unwrap();
+        let (relues, m) = s.charger_plan().unwrap().expect("le plan préexistant survit");
+        assert_eq!(relues.len(), 1);
+        assert_eq!(m.rapproche_le, None, "un plan repris d'avant la colonne n'a jamais été rapproché");
+
+        // Idempotence : réouvrir la base déjà migrée ne doit pas échouer.
+        drop(s);
+        let s2 = Store::open(&path).unwrap();
+        let (_, m2) = s2.charger_plan().unwrap().expect("toujours présent après réouverture");
+        assert_eq!(m2.rapproche_le, None);
     }
 }
