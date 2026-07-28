@@ -16,6 +16,7 @@ pub mod plan;
 pub mod plan_report;
 pub mod plan_xlsx;
 pub mod ppf;
+pub mod rapprochement;
 pub mod repartition;
 pub mod resolver;
 pub mod report;
