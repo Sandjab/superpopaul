@@ -1103,6 +1103,9 @@ pub struct PlanGeneration {
 pub struct FichierMep {
     pub chemin: String,
     pub mep_id: usize,
+    /// Date de la MEP en ISO, telle qu'elle figure dans le nom du fichier.
+    /// La reparser depuis le nom ferait du nom un format à maintenir.
+    pub mep_date: String,
     pub comptes: usize,
 }
 
@@ -1175,6 +1178,7 @@ fn ecrire_fichiers_mep(
         out.push(FichierMep {
             chemin: chemin.display().to_string(),
             mep_id,
+            mep_date,
             comptes: comptes.len(),
         });
     }
@@ -2161,6 +2165,31 @@ mod tests {
             planned_at: 0,
             retire: None,
         }
+    }
+
+    /// La date du nom et la date remontée viennent de la même source : si
+    /// elles divergent, le rapport de rapprochement annonce une MEP qui n'est
+    /// pas celle du fichier que le destinataire a en main.
+    #[test]
+    fn un_fichier_de_mep_porte_la_date_qui_figure_dans_son_nom() {
+        let tmp = tempfile::tempdir().unwrap();
+        let input = tmp.path().join("brm2607.csv");
+        let dir = tmp.path().to_string_lossy().into_owned();
+        let plan = vec![
+            ligne_mep("CF1", 1, "2026-05-15"),
+            ligne_mep("CF2", 2, "2026-06-12"),
+        ];
+
+        let (ecrits, _) = ecrire_fichiers_mep(&input, &dir, &plan).unwrap();
+
+        assert_eq!(ecrits.len(), 2);
+        assert_eq!(ecrits[0].mep_date, "2026-05-15");
+        assert_eq!(ecrits[1].mep_date, "2026-06-12");
+        assert!(
+            ecrits[0].chemin.ends_with("brm2607_plan_mep_1_2026-05-15.txt"),
+            "chemin inattendu : {}",
+            ecrits[0].chemin
+        );
     }
 
     /// Ce que le ménage fait VRAIMENT sur un disque : `fichiers_obsoletes`
