@@ -1072,6 +1072,7 @@ pub async fn plan_generate(
             hash: sha256_hex(&std::fs::read(&input).map_err(|e| format!("lecture entrée : {e}"))?),
             genere_le: horodatage,
             params_yaml: params.vers_yaml()?,
+            rapproche_le: None, // plan neuf : jamais rapproché
         };
         store.lock().unwrap().ecrire_plan(&lignes, &meta)?;
         let (fichiers, obsoletes) = ecrire_fichiers_mep(&input, &cfg.output.dir, &lignes)?;
@@ -2288,6 +2289,7 @@ mod tests_rapport_au_fichier {
             hash: hash.into(),
             genere_le: 0,
             params_yaml: String::new(),
+            rapproche_le: None,
         }
     }
 
