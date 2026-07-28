@@ -103,14 +103,50 @@ pub struct RapprochementReportData<'a> {
     pub date_longue: &'a str,
     pub version: &'a str,
     pub rapprochement: &'a Rapprochement,
-    /// Fichiers de MEP réellement écrits, avec date de MEP et nombre de comptes.
-    pub fichiers: &'a [FichierMep],
+    /// Fichiers de MEP réellement écrits. Vue propre au module (`FichierLivre`)
+    /// et non `commands::FichierMep` : le rapport nomme les fichiers, il ne
+    /// connaît pas de chemins, et le module pur n'a pas à dépendre de
+    /// `commands`. La commande fait la conversion, qu'elle devait faire de
+    /// toute façon pour extraire le nom du chemin.
+    pub fichiers: &'a [FichierLivre<'a>],
     /// Fichiers de MEP supprimés parce que leur MEP s'est vidée.
     pub obsoletes: &'a [String],
     /// Avertissement d'annuaire PPF incomplet, s'il y a lieu.
     pub annuaire_incomplet: Option<&'a str>,
 }
+
+/// Un fichier de livraison, tel que le rapport en parle : par son nom.
+pub struct FichierLivre<'a> {
+    pub nom: &'a str,
+    pub mep_id: usize,
+    pub mep_date: &'a str,
+    pub comptes: usize,
+}
+
+/// Où se trouvait une ligne avant le rapprochement.
+pub struct PositionAvant {
+    pub run_num: String,
+    /// ISO, comme partout ailleurs dans le projet.
+    pub run_date: String,
+    pub mep_id: usize,
+}
 ```
+
+`RapprochementReportData` porte aussi :
+
+```rust
+    /// Position d'origine des lignes, capturée AVANT `appliquer`. Clé : n° de CF.
+    pub origines: &'a BTreeMap<String, PositionAvant>,
+```
+
+**Pourquoi cette capture.** `Action::Deplacer` ne porte que la **destination**
+(`run_num`, `run_date`, `mep_id`, `mep_date`), et `appliquer` mute les lignes en
+place : après application, le run d'origine n'existe plus nulle part. Or le
+rapport l'affiche — le destinataire cherche pourquoi *son* fichier de MEP 3 a
+changé, et « le compte est au run 13 » ne le lui dit pas, quand « le compte
+passe du run 12 au run 13 » le lui dit.
+
+La commande construit donc la table depuis `lignes` **avant** `appliquer`.
 
 ### `sauver_apres_retouche` remonte ce qu'il a écrit
 
@@ -218,7 +254,9 @@ documents qui peuvent diverger.
   toutes lettres. Le document ne contient jamais « jour 0 ».
 - Quand le jour change mais que le run cible est le même — cas réel, le calcul
   produit un écart dès que le jour lu diffère (`rapprochement.rs:122`) — le run
-  n'est pas répété : une seule valeur, suivie de « même run » en gris.
+  n'est pas répété : une seule valeur, suivie de « même run » en gris. La
+  comparaison se fait entre `origines[cf].run_num` et la destination portée par
+  l'action.
 - Le **rouge est réservé** aux retraits sur MEP déjà transmise. Un seul usage,
   sinon il ne veut plus rien dire.
 
