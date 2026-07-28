@@ -1487,15 +1487,20 @@ fn charger_pour_retouche(
 /// Rend les fichiers d'une génération précédente supprimés au passage : un
 /// retrait ou un déplacement peut vider une MEP, et son fichier n'a alors plus
 /// lieu d'être.
+///
+/// Rend aussi **les fichiers de MEP écrits** : `plan_rapprocher_appliquer` en a
+/// besoin pour son rapport, et eux seuls disent combien de comptes chaque
+/// fichier porte réellement. Les autres appelants les ignorent — ce helper
+/// dit ce qu'il a fait, à l'appelant de décider quoi en faire.
 fn sauver_apres_retouche(
     store: &Arc<Mutex<Store>>,
     input: &Path,
     cfg: &Config,
     lignes: &[crate::plan::LignePlan],
     meta: &crate::store::PlanMeta,
-) -> Result<Vec<String>, String> {
+) -> Result<(Vec<FichierMep>, Vec<String>), String> {
     store.lock().unwrap().ecrire_plan(lignes, meta)?;
-    let (_, obsoletes) = ecrire_fichiers_mep(input, &cfg.output.dir, lignes)?;
+    let (ecrits, obsoletes) = ecrire_fichiers_mep(input, &cfg.output.dir, lignes)?;
     let entrees = {
         let s = store.lock().unwrap();
         plan_entrees_from_scan(&s, input, cfg, chrono::Utc::now())?
@@ -1504,7 +1509,7 @@ fn sauver_apres_retouche(
         &chemin_classeur(input, &cfg.output.dir),
         &crate::plan_xlsx::lignes(&entrees, lignes),
     )?;
-    Ok(obsoletes)
+    Ok((ecrits, obsoletes))
 }
 
 /// Runs et MEP du plan enregistré, tels que la retouche doit les voir.
@@ -1562,7 +1567,7 @@ pub async fn plan_ajouter(
             &meps,
             chrono::Utc::now().timestamp(),
         )?;
-        sauver_apres_retouche(&store, &input, &cfg, &lignes, &meta)
+        sauver_apres_retouche(&store, &input, &cfg, &lignes, &meta).map(|(_, obs)| obs)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1585,7 +1590,7 @@ pub async fn plan_deplacer(
             .find(|r| r.num == run_num)
             .ok_or_else(|| format!("Run de Facturation « {run_num} » inconnu"))?;
         crate::plan::deplacer(&mut lignes, &cfs, run, &meps)?;
-        sauver_apres_retouche(&store, &input, &cfg, &lignes, &meta)
+        sauver_apres_retouche(&store, &input, &cfg, &lignes, &meta).map(|(_, obs)| obs)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1603,7 +1608,7 @@ pub async fn plan_retirer(
     tokio::task::spawn_blocking(move || {
         let (mut lignes, meta) = charger_pour_retouche(&store)?;
         crate::plan::retirer(&mut lignes, &cfs, &motif, chrono::Utc::now().timestamp())?;
-        sauver_apres_retouche(&store, &input, &cfg, &lignes, &meta)
+        sauver_apres_retouche(&store, &input, &cfg, &lignes, &meta).map(|(_, obs)| obs)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1620,7 +1625,7 @@ pub async fn plan_annuler_retrait(
     tokio::task::spawn_blocking(move || {
         let (mut lignes, meta) = charger_pour_retouche(&store)?;
         crate::plan::annuler_retrait(&mut lignes, &cfs)?;
-        sauver_apres_retouche(&store, &input, &cfg, &lignes, &meta)
+        sauver_apres_retouche(&store, &input, &cfg, &lignes, &meta).map(|(_, obs)| obs)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1759,7 +1764,7 @@ pub async fn plan_rapprocher_appliquer(
             .unwrap_or_default();
         meta.hash = courante;
         meta.rapproche_le = Some(maintenant);
-        sauver_apres_retouche(&store, &input, &cfg, &lignes, &meta)
+        sauver_apres_retouche(&store, &input, &cfg, &lignes, &meta).map(|(_, obs)| obs)
     })
     .await
     .map_err(|e| e.to_string())?
