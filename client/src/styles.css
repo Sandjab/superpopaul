@@ -615,6 +615,10 @@ table.ppf-files { border-collapse: collapse; width: 100%; margin: 6px 0 0; font-
 #plan-banner.warn { background: #2e2010; color: var(--amber); }
 #plan-banner.error { background: #331518; color: var(--red); }
 #plan-banner.info { background: var(--card); color: var(--fg); font-weight: 400; }
+/* Même recette que warn/error (fond sombre teinté + texte dans l'accent),
+   pour le compte rendu du rapprochement : « tout va bien » n'avait encore
+   aucun style dédié. */
+#plan-banner.ok { background: #132e1c; color: var(--green); }
 /* Mapping des colonnes : mis en évidence quand il manque (c'est lui qui
    débloque l'écran, sans aller-retour vers l'étape Format). */
 #plan-cols.need { border: 1px solid var(--amber); border-radius: 8px; padding: 10px 12px; background: var(--bg); }
@@ -808,3 +812,34 @@ tr.tl-run:hover .tl-add-btn { color: var(--gold); border-color: var(--gold); }
 .plan-selbar .spacer { flex: 1; }
 .motif { color: var(--muted); font-style: italic; font-size: 11.5px; }
 .danger-note { background: #331518; color: var(--red); border-radius: 8px; padding: 9px 12px; font-size: 12.5px; margin: 10px 0; }
+
+/* --- Revue du rapprochement (modale large, .add-head/.add-scroll/.add-foot) -
+   Un groupe par nature d'écart, comme la maquette du 28/07/2026. Classes
+   préfixées (`.rappro-*`) plutôt que les noms bruts de la maquette (`.dot`,
+   `.cf`, `.chg`…) : ces noms sont trop génériques pour rester globaux sans
+   risquer une collision avec un usage futur. */
+.rappro-grp { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 10px; overflow: hidden; }
+.rappro-grp table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.rappro-grp td { padding: 6px 12px; border-bottom: 1px solid rgba(43, 55, 82, .55); vertical-align: top; }
+.rappro-grp tr:last-child td { border-bottom: 0; }
+.rappro-grp-h {
+  padding: 9px 12px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  background: rgba(255, 255, 255, .025); border-bottom: 1px solid var(--border);
+}
+.rappro-n { font-weight: 700; font-size: 15px; min-width: 34px; }
+.rappro-t { flex: 1; min-width: 180px; }
+.rappro-mute .rappro-grp-h { background: transparent; border-bottom: 0; }
+.rappro-mute .rappro-n, .rappro-mute .rappro-t { color: var(--muted); }
+.rappro-dot { display: inline-block; width: 8px; height: 8px; border-radius: 99px; flex: 0 0 auto; }
+.rappro-cf { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--fg); }
+.rappro-rs { color: var(--muted); }
+.rappro-chg { color: var(--fg); }
+.rappro-arrow { color: var(--gold); white-space: nowrap; }
+.rappro-more { color: var(--muted); font-style: italic; }
+.rappro-recap { color: var(--muted); font-size: 12.5px; }
+.rappro-avert {
+  background: rgba(224, 135, 58, .09); border: 1px solid rgba(224, 135, 58, .35);
+  border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; font-size: 13px;
+}
+.rappro-avert ul { margin: 6px 0 0; padding-left: 18px; }
+.rappro-avert li { margin-bottom: 3px; }
