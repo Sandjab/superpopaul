@@ -107,6 +107,8 @@ pub fn run() {
             commands::plan_retirer,
             commands::plan_annuler_retrait,
             commands::plan_runs_compatibles,
+            commands::plan_rapprocher,
+            commands::plan_rapprocher_appliquer,
             commands::plan_rapport,
             commands::directory_status,
             commands::load_directory_file,
