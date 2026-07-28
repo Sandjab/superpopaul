@@ -190,6 +190,58 @@ pub fn calculer(
     Ok(r)
 }
 
+/// Applique un rapprochement au plan, **par mutation en place**. Aucune
+/// ré-allocation n'est appelée : c'est ce qui garantit que le reste du plan ne
+/// bouge pas.
+///
+/// Tout est vérifié avant d'écrire quoi que ce soit — comme `plan::ajouter` :
+/// un lot à moitié appliqué serait pire qu'un refus.
+pub fn appliquer(
+    plan: &mut [LignePlan],
+    r: &Rapprochement,
+    maintenant: i64,
+) -> Result<(), String> {
+    let mut cibles = Vec::with_capacity(r.ecarts.len());
+    for e in &r.ecarts {
+        let i = plan
+            .iter()
+            .position(|l| l.cf == e.cf)
+            .ok_or_else(|| format!("le compte « {} » n'est pas au plan", e.cf))?;
+        cibles.push((i, e));
+    }
+    for (i, e) in cibles {
+        let l = &mut plan[i];
+        match &e.action {
+            Action::Retirer { motif } => {
+                l.retire = Some(crate::plan::Retrait {
+                    le: maintenant,
+                    motif: motif.clone(),
+                });
+            }
+            Action::Deplacer { run_num, run_date, mep_id, mep_date } => {
+                if let Nature::JourChange { apres, .. } = e.nature {
+                    l.jj = apres;
+                }
+                l.run_num = run_num.clone();
+                l.run_date = *run_date;
+                l.mep_id = *mep_id;
+                l.mep_date = *mep_date;
+                // L'origine reste celle d'avant : un rapprochement corrige une
+                // donnée périmée, il ne change pas la provenance de
+                // l'affectation. L'épingler la soustrairait à toutes les
+                // régénérations futures.
+            }
+            Action::Rafraichir => {
+                if let Nature::PlateformeChangee { apres, .. } = &e.nature {
+                    l.pa = apres.clone();
+                }
+            }
+            Action::Signaler => {}
+        }
+    }
+    Ok(())
+}
+
 /// Au-delà du quart des lignes actives retirées, l'ampleur doit être dite.
 /// Seuil chiffré plutôt qu'un jugement : « beaucoup » ne se teste pas.
 fn avertissement_ampleur(plan: &[LignePlan], ecarts: &[Ecart]) -> Option<String> {
@@ -768,5 +820,117 @@ mod tests {
         let r = calculer(&plan, &entrees, &runs, &meps, auj).unwrap();
         assert_eq!(r.ecarts[0].action, Action::Rafraichir);
         assert!(r.ecarts[0].gelee, "l'IHM doit pouvoir isoler ce cas aussi");
+    }
+
+    /// La régression la plus insidieuse : épingler les lignes déplacées les
+    /// soustrairait à TOUTES les régénérations futures, et le plan se figerait
+    /// un peu plus à chaque rapprochement, sans que rien ne le dise.
+    #[test]
+    fn appliquer_ne_change_pas_l_origine_des_lignes_deplacees() {
+        let (runs, meps, auj) = contexte();
+        let mut plan = vec![ligne("CF1", 5, "Cegedim", "RF01", (2, "2026-09-01"))];
+        let entrees = vec![entree("CF1", "12", "Cegedim")];
+        let r = calculer(&plan, &entrees, &runs, &meps, auj).unwrap();
+        appliquer(&mut plan, &r, 1_800_000_000).unwrap();
+        assert_eq!(
+            plan[0].origine,
+            Origine::Auto,
+            "un rapprochement corrige une donnée, il ne change pas la provenance"
+        );
+    }
+
+    #[test]
+    fn appliquer_met_a_jour_le_jour_et_le_run() {
+        let (runs, meps, auj) = contexte();
+        let mut plan = vec![ligne("CF1", 5, "Cegedim", "RF01", (2, "2026-09-01"))];
+        let entrees = vec![entree("CF1", "12", "Cegedim")];
+        let r = calculer(&plan, &entrees, &runs, &meps, auj).unwrap();
+        appliquer(&mut plan, &r, 1_800_000_000).unwrap();
+        assert_eq!(plan[0].jj, 12, "sans le jour, le déplacement ne sert à rien");
+        assert_eq!(plan[0].run_num, "RF02");
+        assert_eq!(plan[0].run_date, d("2026-09-20"));
+        assert_eq!(plan[0].mep_id, 2);
+    }
+
+    /// L'invariant central du chantier.
+    #[test]
+    fn appliquer_laisse_les_lignes_inchangees_champ_pour_champ() {
+        let (runs, meps, auj) = contexte();
+        let mut plan = vec![
+            ligne("CF1", 5, "Cegedim", "RF01", (2, "2026-09-01")),
+            ligne("CF2", 22, "Esker", "RF02", (2, "2026-09-01")),
+        ];
+        let temoin = plan[1].clone();
+        let entrees = vec![
+            avec_ctc(entree("CF1", "5", "Cegedim"), "later"),
+            entree("CF2", "22", "Esker"),
+        ];
+        let r = calculer(&plan, &entrees, &runs, &meps, auj).unwrap();
+        appliquer(&mut plan, &r, 1_800_000_000).unwrap();
+        assert_eq!(plan[1], temoin, "CF2 n'a aucune raison d'avoir bougé");
+    }
+
+    #[test]
+    fn appliquer_marque_le_retrait_sans_supprimer_la_ligne() {
+        let (runs, meps, auj) = contexte();
+        let mut plan = vec![ligne("CF1", 5, "Cegedim", "RF01", (2, "2026-09-01"))];
+        let entrees: Vec<LigneEntree> = vec![];
+        let r = calculer(&plan, &entrees, &runs, &meps, auj).unwrap();
+        appliquer(&mut plan, &r, 1_800_000_000).unwrap();
+        assert_eq!(plan.len(), 1, "un retrait marque, il ne supprime pas");
+        let retrait = plan[0].retire.as_ref().expect("la ligne doit porter un retrait");
+        assert_eq!(retrait.le, 1_800_000_000);
+        assert!(retrait.motif.contains("absent du fichier"));
+    }
+
+    #[test]
+    fn appliquer_rafraichit_la_plateforme() {
+        let (runs, meps, auj) = contexte();
+        let mut plan = vec![ligne("CF1", 5, "Cegedim", "RF01", (2, "2026-09-01"))];
+        let entrees = vec![entree("CF1", "5", "Esker")];
+        let r = calculer(&plan, &entrees, &runs, &meps, auj).unwrap();
+        appliquer(&mut plan, &r, 1_800_000_000).unwrap();
+        assert_eq!(plan[0].pa, "Esker");
+        assert_eq!(plan[0].run_num, "RF01", "le rafraîchissement ne déplace pas");
+    }
+
+    #[test]
+    fn appliquer_ne_touche_pas_aux_ecarts_signales() {
+        let (runs, meps, auj) = contexte();
+        let mut plan = vec![ligne("CF1", 5, "Cegedim", "RF01", (2, "2026-09-01"))];
+        let temoin = plan[0].clone();
+        let entrees = vec![entree("CF1", "17", "Cegedim")]; // aucun run ne couvre 17
+        let r = calculer(&plan, &entrees, &runs, &meps, auj).unwrap();
+        appliquer(&mut plan, &r, 1_800_000_000).unwrap();
+        assert_eq!(plan[0], temoin, "signalé n'est pas traité");
+    }
+
+    /// Un rapprochement calculé sur un autre plan ne doit pas s'appliquer à
+    /// moitié : tout est vérifié avant d'écrire quoi que ce soit.
+    #[test]
+    fn appliquer_refuse_un_ecart_dont_le_compte_est_absent_du_plan() {
+        let mut plan = vec![ligne("CF1", 5, "Cegedim", "RF01", (2, "2026-09-01"))];
+        let temoin = plan[0].clone();
+        let r = Rapprochement {
+            ecarts: vec![
+                Ecart {
+                    cf: "CF1".into(),
+                    nature: Nature::DisparuDuFichier,
+                    action: Action::Retirer { motif: "essai".into() },
+                    gelee: false,
+                },
+                Ecart {
+                    cf: "INCONNU".into(),
+                    nature: Nature::DisparuDuFichier,
+                    action: Action::Retirer { motif: "essai".into() },
+                    gelee: false,
+                },
+            ],
+            inchangees: 0,
+            avertissements: vec![],
+        };
+        let err = appliquer(&mut plan, &r, 1_800_000_000).unwrap_err();
+        assert!(err.contains("INCONNU"), "obtenu : {err}");
+        assert_eq!(plan[0], temoin, "rien ne doit avoir été écrit");
     }
 }
