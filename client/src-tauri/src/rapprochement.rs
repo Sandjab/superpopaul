@@ -80,7 +80,6 @@ pub fn calculer(
     meps: &[chrono::NaiveDate],
     aujourdhui: chrono::NaiveDate,
 ) -> Result<Rapprochement, String> {
-    let _ = (runs, meps);
     let par_cf: HashMap<&str, &LigneEntree> = crate::plan::dedoublonner(entrees)?
         .into_iter()
         .map(|e| (e.cf.as_str(), e))
@@ -117,9 +116,63 @@ pub fn calculer(
             });
             continue;
         }
+        let jj_fichier = crate::plan::parse_jj(&e.jj_brut);
+        if jj_fichier != Some(l.jj) {
+            // Un jour illisible n'est pas un changement : c'est une donnée
+            // qu'on ne sait pas lire. On le signale sans rien décider.
+            let Some(neuf) = jj_fichier else {
+                r.ecarts.push(Ecart {
+                    cf: l.cf.clone(),
+                    nature: Nature::JourChange { avant: l.jj, apres: 0 },
+                    action: Action::Signaler,
+                    gelee,
+                });
+                continue;
+            };
+            let action = match run_cible(neuf, l.mep_id, runs, meps, aujourdhui) {
+                Some((run, mep_id, mep_date)) => Action::Deplacer {
+                    run_num: run.num.clone(),
+                    run_date: run.date,
+                    mep_id,
+                    mep_date,
+                },
+                None => Action::Signaler,
+            };
+            r.ecarts.push(Ecart {
+                cf: l.cf.clone(),
+                nature: Nature::JourChange { avant: l.jj, apres: neuf },
+                action,
+                gelee,
+            });
+            continue;
+        }
         r.inchangees += 1;
     }
     Ok(r)
+}
+
+/// Run cible pour un compte qui a changé de jour de cycle.
+///
+/// Moindre perturbation : d'abord un run de la MÊME MEP que la ligne actuelle
+/// — le compte reste dans son lot, seul son ordonnancement change. À défaut,
+/// le run compatible dont la MEP est la plus proche. **Jamais un run déjà
+/// passé** : la ligne basculerait dans le gel avec effet rétroactif.
+fn run_cible<'a>(
+    jj: u8,
+    mep_actuelle: usize,
+    runs: &'a [RunFacturation],
+    meps: &[chrono::NaiveDate],
+    aujourdhui: chrono::NaiveDate,
+) -> Option<(&'a RunFacturation, usize, chrono::NaiveDate)> {
+    let mut candidats: Vec<(&RunFacturation, usize, chrono::NaiveDate)> = runs
+        .iter()
+        .filter(|r| r.couvre(jj) && r.date >= aujourdhui)
+        .filter_map(|r| crate::calendrier::mep_de(r.date, meps).map(|(id, date)| (r, id, date)))
+        .collect();
+    // Clé composite plutôt qu'une suite de tris : la MEP courante d'abord,
+    // puis la MEP la plus proche, puis la date de run pour départager.
+    candidats.sort_by_key(|(r, id, _)| (*id != mep_actuelle, *id, r.date));
+    candidats.into_iter().next()
 }
 
 /// Libellé français d'un statut CTC. Vide = jamais résolu, ce qui n'est pas la
@@ -292,5 +345,96 @@ mod tests {
         let entrees = vec![entree("CF1", "5", "Cegedim"), entree("CF1", "12", "Cegedim")];
         let err = calculer(&plan, &entrees, &runs, &meps, auj).unwrap_err();
         assert!(err.contains("deux jours de cycle"), "obtenu : {err}");
+    }
+
+    /// Moindre perturbation : le compte reste dans le MÊME lot, seul son
+    /// ordonnancement change.
+    #[test]
+    fn le_jj_change_prefere_un_run_de_la_meme_mep() {
+        // RF01 (10/09) et RF02 (20/09) dépendent tous deux de la MEP 2.
+        let (runs, meps, auj) = contexte();
+        let plan = vec![ligne("CF1", 5, "Cegedim", "RF01", (2, "2026-09-01"))];
+        let entrees = vec![entree("CF1", "12", "Cegedim")];
+        let r = calculer(&plan, &entrees, &runs, &meps, auj).unwrap();
+        assert_eq!(r.ecarts.len(), 1);
+        assert_eq!(r.ecarts[0].nature, Nature::JourChange { avant: 5, apres: 12 });
+        let Action::Deplacer { run_num, mep_id, .. } = &r.ecarts[0].action else {
+            panic!("attendu un déplacement, obtenu {:?}", r.ecarts[0].action);
+        };
+        assert_eq!(run_num, "RF02", "seul RF02 couvre le jour 12");
+        assert_eq!(*mep_id, 2, "la MEP ne change pas");
+    }
+
+    /// Quand plusieurs runs conviennent, celui de la MEP courante l'emporte —
+    /// même s'il est plus tardif.
+    #[test]
+    fn a_mep_egale_le_run_de_la_mep_courante_prime_sur_le_plus_proche() {
+        let runs = vec![
+            run("RF01", "2026-08-10", &[12]), // MEP 1, plus tôt
+            run("RF02", "2026-09-20", &[12]), // MEP 2, celle de la ligne
+        ];
+        let meps = vec![d("2026-07-01"), d("2026-09-01")];
+        let plan = vec![ligne("CF1", 5, "Cegedim", "RF09", (2, "2026-09-01"))];
+        let entrees = vec![entree("CF1", "12", "Cegedim")];
+        let r = calculer(&plan, &entrees, &runs, &meps, d("2026-08-01")).unwrap();
+        let Action::Deplacer { run_num, .. } = &r.ecarts[0].action else {
+            panic!("attendu un déplacement");
+        };
+        assert_eq!(run_num, "RF02", "la MEP de rattachement prime sur la date");
+    }
+
+    #[test]
+    fn sans_run_a_la_meme_mep_la_mep_la_plus_proche_est_prise() {
+        let runs = vec![
+            run("RF01", "2026-09-10", &[1, 5]),
+            run("RF02", "2026-10-05", &[12]), // MEP 3
+        ];
+        let meps = vec![d("2026-07-01"), d("2026-09-01"), d("2026-10-01")];
+        let plan = vec![ligne("CF1", 5, "Cegedim", "RF01", (2, "2026-09-01"))];
+        let entrees = vec![entree("CF1", "12", "Cegedim")];
+        let r = calculer(&plan, &entrees, &runs, &meps, d("2026-08-01")).unwrap();
+        let Action::Deplacer { run_num, mep_id, .. } = &r.ecarts[0].action else {
+            panic!("attendu un déplacement");
+        };
+        assert_eq!(run_num, "RF02");
+        assert_eq!(*mep_id, 3, "le lot change, faute de mieux");
+    }
+
+    #[test]
+    fn le_jj_change_sans_run_compatible_est_signale_pas_deplace() {
+        let (runs, meps, auj) = contexte(); // couvre 1, 5, 12, 22
+        let plan = vec![ligne("CF1", 5, "Cegedim", "RF01", (2, "2026-09-01"))];
+        let entrees = vec![entree("CF1", "17", "Cegedim")];
+        let r = calculer(&plan, &entrees, &runs, &meps, auj).unwrap();
+        assert_eq!(r.ecarts[0].nature, Nature::JourChange { avant: 5, apres: 17 });
+        assert_eq!(r.ecarts[0].action, Action::Signaler);
+    }
+
+    /// Un run passé ferait basculer la ligne dans le gel avec effet
+    /// rétroactif : un lot livré changerait après coup.
+    #[test]
+    fn un_run_deja_passe_n_est_jamais_choisi_comme_cible() {
+        let runs = vec![run("RF01", "2026-07-10", &[12])]; // avant aujourd'hui
+        let meps = vec![d("2026-07-01")];
+        let plan = vec![ligne("CF1", 5, "Cegedim", "RF09", (1, "2026-07-01"))];
+        let entrees = vec![entree("CF1", "12", "Cegedim")];
+        let r = calculer(&plan, &entrees, &runs, &meps, d("2026-08-01")).unwrap();
+        assert_eq!(
+            r.ecarts[0].action,
+            Action::Signaler,
+            "le seul run compatible est passé : rien à faire automatiquement"
+        );
+    }
+
+    /// Un jour de cycle illisible dans le fichier n'est pas un changement :
+    /// c'est une donnée qu'on ne sait pas lire.
+    #[test]
+    fn un_jj_illisible_dans_le_fichier_est_signale_sans_deplacement() {
+        let (runs, meps, auj) = contexte();
+        let plan = vec![ligne("CF1", 5, "Cegedim", "RF01", (2, "2026-09-01"))];
+        let entrees = vec![entree("CF1", "n/a", "Cegedim")];
+        let r = calculer(&plan, &entrees, &runs, &meps, auj).unwrap();
+        assert_eq!(r.ecarts.len(), 1, "obtenu {:?}", r.ecarts);
+        assert_eq!(r.ecarts[0].action, Action::Signaler);
     }
 }
