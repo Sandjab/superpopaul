@@ -6,7 +6,7 @@
 
 use crate::calendrier::RunFacturation;
 use crate::plan::{LigneEntree, LignePlan};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// Ce qui a changé pour un compte, entre le plan et le fichier courant.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -158,11 +158,13 @@ pub fn calculer(
             continue;
         }
         // Pas de court-circuit `gelee` ici, contrairement au jour changé : la
-        // plateforme ne conditionne aucun fichier de livraison (ils ne
-        // contiennent que des comptes nus par MEP), alors que le jour de
-        // cycle décide du lot d'appartenance d'un compte déjà transmis. Le
-        // champ ne sert qu'aux quotas et à l'affichage : le rafraîchir sur
-        // une ligne gelée ne rouvre rien qui ait déjà été livré.
+        // plateforme ne conditionne aucun fichier transmis aux tiers lors
+        // d'une MEP (ils ne contiennent que des comptes nus) — à la
+        // différence du fichier comparé ici (`entrees`), qui porte `pa`. Le
+        // jour de cycle, lui, décide du lot d'appartenance d'un compte déjà
+        // transmis. Le champ `pa` ne sert qu'aux quotas et à l'affichage :
+        // le rafraîchir sur une ligne gelée ne rouvre rien qui ait déjà été
+        // livré.
         if e.pa != l.pa {
             r.ecarts.push(Ecart {
                 cf: l.cf.clone(),
@@ -178,40 +180,44 @@ pub fn calculer(
         r.inchangees += 1;
     }
 
-    // Seuil chiffré plutôt qu'un jugement : « beaucoup » ne se teste pas.
-    let retraits = r
-        .ecarts
-        .iter()
-        .filter(|e| matches!(e.action, Action::Retirer { .. }))
-        .count();
-    let actives = plan.iter().filter(|l| !l.retiree()).count();
-    if actives > 0 && retraits * 4 > actives {
-        r.avertissements.push(format!(
-            "ce rapprochement retire {retraits} des {actives} lignes actives du plan"
-        ));
+    if let Some(a) = avertissement_ampleur(plan, &r.ecarts) {
+        r.avertissements.push(a);
+    }
+    if let Some(a) = avertissement_repartition_plateforme(&r.ecarts) {
+        r.avertissements.push(a);
     }
 
-    // Les quotas par plateforme ne sont pas rejoués — ce serait du re-tirage.
-    // Le décalage qu'ils prennent doit donc être dit, chiffres à l'appui :
-    // sinon la répartition affichée ailleurs devient fausse en silence.
-    let mut mouvements: std::collections::BTreeMap<(&str, &str), usize> = Default::default();
-    for e in &r.ecarts {
+    Ok(r)
+}
+
+/// Au-delà du quart des lignes actives retirées, l'ampleur doit être dite.
+/// Seuil chiffré plutôt qu'un jugement : « beaucoup » ne se teste pas.
+fn avertissement_ampleur(plan: &[LignePlan], ecarts: &[Ecart]) -> Option<String> {
+    let retraits = ecarts.iter().filter(|e| matches!(e.action, Action::Retirer { .. })).count();
+    let actives = plan.iter().filter(|l| !l.retiree()).count();
+    (actives > 0 && retraits * 4 > actives)
+        .then(|| format!("ce rapprochement retire {retraits} des {actives} lignes actives du plan"))
+}
+
+/// Les quotas par plateforme ne sont pas rejoués — ce serait du re-tirage.
+/// Le décalage qu'ils prennent doit donc être dit, chiffres à l'appui :
+/// sinon la répartition affichée ailleurs devient fausse en silence.
+fn avertissement_repartition_plateforme(ecarts: &[Ecart]) -> Option<String> {
+    let mut mouvements: BTreeMap<(&str, &str), usize> = BTreeMap::new();
+    for e in ecarts {
         if let Nature::PlateformeChangee { avant, apres } = &e.nature {
             *mouvements.entry((avant.as_str(), apres.as_str())).or_insert(0) += 1;
         }
     }
-    if !mouvements.is_empty() {
-        let detail: Vec<String> = mouvements
-            .iter()
-            .map(|((a, b), n)| format!("{n} de {a} vers {b}"))
-            .collect();
-        r.avertissements.push(format!(
-            "la répartition par plateforme change sans être rejouée : {}",
-            detail.join(", ")
-        ));
+    if mouvements.is_empty() {
+        return None;
     }
-
-    Ok(r)
+    let detail: Vec<String> =
+        mouvements.iter().map(|((a, b), n)| format!("{n} de {a} vers {b}")).collect();
+    Some(format!(
+        "la répartition par plateforme change sans être rejouée : {}",
+        detail.join(", ")
+    ))
 }
 
 /// Run cible pour un compte qui a changé de jour de cycle.
