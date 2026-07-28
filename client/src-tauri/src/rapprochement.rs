@@ -311,6 +311,15 @@ fn avertissement_repartition_plateforme(ecarts: &[Ecart]) -> Option<String> {
 /// pas postérieure, qui peut donc être passée même pour un run futur, si
 /// aucune MEP n'a été déclarée entre les deux.
 ///
+/// Des deux gardes, **seule celle sur la MEP fait le travail** : un run passé
+/// a forcément une MEP passée (`mep_de` ne rend qu'une MEP antérieure ou
+/// égale), donc la première est impliquée par la seconde — une passe de
+/// mutation l'a confirmé, la retirer ne change aucun comportement. Elle est
+/// gardée parce qu'elle dit l'intention là où on la cherche, sans exiger de
+/// dérouler `mep_de` pour comprendre qu'un run passé est exclu, et parce
+/// qu'elle survivrait à un changement de sémantique de `mep_de`. **Ne pas
+/// retirer la seconde en croyant qu'elle est la redondante.**
+///
 /// Précondition non revérifiée ici : `runs` est censé provenir de
 /// `calendrier::runs_utilisables`, qui a déjà écarté les runs exclus (et hors
 /// fenêtre). Un run exclu n'est donc jamais candidat, sans qu'il soit besoin
