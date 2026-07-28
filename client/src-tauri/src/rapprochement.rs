@@ -121,6 +121,9 @@ pub fn calculer(
             // Un jour illisible n'est pas un changement : c'est une donnée
             // qu'on ne sait pas lire. On le signale sans rien décider.
             let Some(neuf) = jj_fichier else {
+                // `apres: 0` est une sentinelle hors domaine (les jours de
+                // cycle vont de 1 à 31) : elle marque un jour illisible, pas
+                // un jour 0 réel.
                 r.ecarts.push(Ecart {
                     cf: l.cf.clone(),
                     nature: Nature::JourChange { avant: l.jj, apres: 0 },
@@ -163,6 +166,12 @@ pub fn calculer(
 /// qu'en théorie : `mep_de` rattache un run à la dernière MEP qui ne lui est
 /// pas postérieure, qui peut donc être passée même pour un run futur, si
 /// aucune MEP n'a été déclarée entre les deux.
+///
+/// Précondition non revérifiée ici : `runs` est censé provenir de
+/// `calendrier::runs_utilisables`, qui a déjà écarté les runs exclus (et hors
+/// fenêtre). Un run exclu n'est donc jamais candidat, sans qu'il soit besoin
+/// de refiltrer `exclu` — même choix que `plan::runs_compatibles`, qui ne le
+/// refait pas non plus pour la même raison.
 fn run_cible<'a>(
     jj: u8,
     mep_actuelle: usize,
@@ -179,7 +188,10 @@ fn run_cible<'a>(
     // Distance à la MEP actuelle, puis date de run pour départager. La MEP
     // actuelle (distance 0) l'emporte donc déjà sur toute autre MEP sans
     // indicateur séparé : une distance ne descend jamais sous zéro.
-    candidats.sort_by_key(|(r, id, _)| (id.abs_diff(mep_actuelle), r.date));
+    // Troisième clé (`*id`) pour un ordre total : deux MEP à distance égale
+    // dont les runs tombent le même jour ne doivent pas dépendre de l'ordre
+    // d'itération de `runs`.
+    candidats.sort_by_key(|(r, id, _)| (id.abs_diff(mep_actuelle), r.date, *id));
     candidats.into_iter().next()
 }
 
