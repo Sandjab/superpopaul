@@ -72,8 +72,10 @@ pub struct Funnel {
 }
 
 /// Dédoublonne les entrées par compte de facturation. Première occurrence
-/// retenue, ordre d'entrée conservé ; toute divergence sur le jour de cycle ou
-/// l'adressage est une incohérence de données → refus fort.
+/// retenue, ordre d'entrée conservé : deux lignes strictement identiques pour
+/// un même CF sont donc fondues en silence. En revanche toute divergence sur
+/// le jour de cycle ou l'adressage est une incohérence de données → refus
+/// fort.
 ///
 /// Extraite de `construire_pool` pour que le rapprochement hérite du même
 /// refus : lui cherche les comptes INÉLIGIBLES, que l'entonnoir écarte.
@@ -111,11 +113,7 @@ pub fn dedoublonner(entrees: &[LigneEntree]) -> Result<Vec<&LigneEntree>, String
 
 /// Construit le pool éligible et l'entonnoir.
 ///
-/// Dédoublonnage : deux lignes STRICTEMENT identiques pour un même CF sont
-/// fondues en silence. En revanche un même CF porté par deux jours de cycle
-/// (ou deux adressages) différents est une incohérence de données, pas un cas
-/// nominal : **refus fort**, avec un message nommant le compte et les valeurs
-/// en conflit.
+/// Dédoublonnage par CF : voir `dedoublonner`.
 ///
 /// Les comptes rendus sont dans l'ordre d'apparition ; le tri de priorité est
 /// l'affaire de l'allocation.
