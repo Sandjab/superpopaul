@@ -240,12 +240,22 @@ détail ligne à ligne.
 ### Le choix du run cible
 
 Règle de moindre perturbation. Parmi les runs **utilisables** qui couvrent le
-nouveau jour de cycle :
+nouveau jour de cycle, celui dont la MEP est **la plus proche** de celle où la
+ligne se trouve déjà — distance nulle pour la MEP courante, qui l'emporte donc
+d'office et laisse le compte dans son lot. La date de run départage les
+ex æquo.
 
-1. d'abord celui rattaché à **la même MEP qu'aujourd'hui** — le compte reste
-   dans le même lot, seul son ordonnancement change ;
-2. à défaut, le run compatible dont la MEP est la plus proche ;
-3. **jamais un run déjà passé** — ça fabriquerait du gelé rétroactivement.
+**Double garde temporelle**, et la seconde n'est pas redondante :
+
+1. jamais un run déjà passé ;
+2. jamais un run dont la **MEP de rattachement** est passée.
+
+`calendrier::mep_de` rattache un run à la dernière MEP qui le précède : un run
+futur peut donc parfaitement porter une MEP passée. Sans la seconde garde, une
+ligne déplacée là recevrait une date de MEP antérieure à aujourd'hui et
+deviendrait **gelée sur-le-champ** — réputée appartenir à un lot déjà livré,
+soustraite aux corrections ultérieures, ses fichiers réécrits. C'est
+exactement le gel rétroactif que la règle prétend interdire.
 
 Les candidats viennent de `calendrier::runs_utilisables` : un run hors fenêtre
 est donc écarté en amont, sans traitement particulier.

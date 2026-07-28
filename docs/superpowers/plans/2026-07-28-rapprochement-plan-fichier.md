@@ -181,10 +181,11 @@ git commit -m "refactor(superpopaul): extraire plan::dedoublonner de construire_
 
 - [ ] **Étape 1 : déclarer le module**
 
-Dans `lib.rs`, à côté des autres `mod` (ordre alphabétique du bloc existant) :
+Dans `lib.rs`, à sa place alphabétique dans le bloc existant (entre `ppf` et
+`repartition`). Tous les modules du crate sont `pub mod` sans exception :
 
 ```rust
-mod rapprochement;
+pub mod rapprochement;
 ```
 
 - [ ] **Étape 2 : écrire le fichier avec les types et un `calculer` qui ne fait rien**
@@ -223,14 +224,25 @@ pub enum Action {
     Retirer { motif: String },
     Deplacer {
         run_num: String,
+        #[serde(serialize_with = "date_iso")]
         run_date: chrono::NaiveDate,
         mep_id: usize,
+        #[serde(serialize_with = "date_iso")]
         mep_date: chrono::NaiveDate,
     },
     /// Le champ est corrigé, la ligne ne bouge pas.
     Rafraichir,
     /// Vu, rien d'automatique — l'utilisateur tranche avec les outils existants.
     Signaler,
+}
+
+/// Les dates partent en ISO dans le JSON, comme partout ailleurs
+/// (`plan::DetailRun`, `timeline`), mais restent des `NaiveDate` en interne :
+/// `appliquer` les affecte telles quelles, sans reparser ce que ce module
+/// vient de produire. `chrono` est compilé sans sa feature `serde`, la
+/// conversion est donc explicite.
+fn date_iso<S: serde::Serializer>(d: &chrono::NaiveDate, s: S) -> Result<S::Ok, S::Error> {
+    s.serialize_str(&d.to_string())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -474,8 +486,10 @@ pub fn calculer(
             };
             r.ecarts.push(Ecart {
                 cf: l.cf.clone(),
-                nature: Nature::EligibilitePerdue { avant, apres },
-                action: Action::Retirer { motif: String::new() },
+                // `apres` sert deux fois : cloné pour la nature, déplacé dans
+                // le motif. L'ordre inverse ne compilerait pas.
+                nature: Nature::EligibilitePerdue { avant, apres: apres.clone() },
+                action: Action::Retirer { motif: apres },
                 gelee,
             });
             continue;
@@ -652,10 +666,15 @@ Ajouter dans `rapprochement.rs`, après `libelle_ctc` :
 ```rust
 /// Run cible pour un compte qui a changé de jour de cycle.
 ///
-/// Moindre perturbation : d'abord un run de la MÊME MEP que la ligne actuelle
-/// — le compte reste dans son lot, seul son ordonnancement change. À défaut,
-/// le run compatible dont la MEP est la plus proche. **Jamais un run déjà
-/// passé** : la ligne basculerait dans le gel avec effet rétroactif.
+/// Moindre perturbation : la MEP la plus proche de celle où la ligne se trouve
+/// déjà — distance nulle pour la MEP courante, qui l'emporte donc d'office et
+/// laisse le compte dans son lot.
+///
+/// **Double garde temporelle.** Ni un run déjà passé, ni un run dont la MEP de
+/// rattachement est passée. La seconde n'est pas redondante : `mep_de` rattache
+/// un run à la dernière MEP qui le précède, donc un run futur peut porter une
+/// MEP passée. Sans elle, la ligne déplacée deviendrait gelée sur-le-champ —
+/// réputée appartenir à un lot déjà livré.
 fn run_cible<'a>(
     jj: u8,
     mep_actuelle: usize,
@@ -667,10 +686,11 @@ fn run_cible<'a>(
         .iter()
         .filter(|r| r.couvre(jj) && r.date >= aujourdhui)
         .filter_map(|r| crate::calendrier::mep_de(r.date, meps).map(|(id, date)| (r, id, date)))
+        .filter(|(_, _, mep_date)| *mep_date >= aujourdhui)
         .collect();
-    // Clé composite plutôt qu'une suite de tris : la MEP courante d'abord,
-    // puis la MEP la plus proche, puis la date de run pour départager.
-    candidats.sort_by_key(|(r, id, _)| (*id != mep_actuelle, *id, r.date));
+    // Distance à la MEP courante, puis date de run pour départager. Pas de
+    // booléen « même MEP » en tête : une distance nulle est déjà le minimum.
+    candidats.sort_by_key(|(r, id, _)| (id.abs_diff(mep_actuelle), r.date));
     candidats.into_iter().next()
 }
 ```
@@ -1533,7 +1553,34 @@ Dans `lib.rs`, après `commands::plan_runs_compatibles,` :
             commands::plan_rapprocher_appliquer,
 ```
 
-- [ ] **Étape 4 : lancer, vérifier le succès**
+- [ ] **Étape 4 : un run exclu n'est jamais cible d'un déplacement**
+
+`rapprochement::run_cible` ne filtre pas `RunFacturation::exclu`, et c'est
+délibéré : `calendrier::runs_utilisables` (`calendrier.rs:182`) l'a déjà fait,
+et `plan::runs_compatibles` (`plan.rs:820`) suit la même convention — la règle
+vit à un seul endroit. Mais rien ne le prouve dans les tests du module pur,
+puisqu'il ne connaît pas son appelant.
+
+C'est ici que ça se prouve, `calendrier_du_plan` étant dans la chaîne :
+
+```rust
+    /// L'utilisateur exclut un run (férié, run annulé) et s'attend à ce que
+    /// rien n'y soit envoyé. La garantie vient de `runs_utilisables`, en
+    /// amont — ce test la verrouille au niveau où elle est observable.
+    #[test]
+    fn un_run_exclu_n_est_jamais_propose_comme_cible_de_deplacement() {
+        // … construire une méta de plan dont le calendrier porte un run exclu
+        // couvrant le nouveau jour de cycle, et vérifier que le rapprochement
+        // le signale au lieu de proposer un déplacement vers lui.
+    }
+```
+
+Écris ce test avec les fixtures réelles du module `commands` (voir
+`commands.rs:2285` pour le helper `meta`). S'il s'avère que la chaîne ne
+permet pas de l'exprimer sans monter un `Store` complet, dis-le et déplace la
+vérification en test d'intégration plutôt que de la laisser tomber.
+
+- [ ] **Étape 5 : lancer, vérifier le succès**
 
 ```bash
 cd client/src-tauri && cargo test 2>&1 | tail -25 && cargo clippy --all-targets 2>&1 | tail -15
@@ -1575,6 +1622,13 @@ Document HTML autonome, palette du client (`--bg:#0e1524`, `--card:#172136`,
   ampleur au-delà du quart, répartition par plateforme modifiée ;
 - l'action « Appliquer *n* changements » et « Annuler » ;
 - l'état d'erreur « le fichier a changé depuis le calcul ».
+
+**Piège de rendu à traiter explicitement** : un jour de cycle illisible dans le
+fichier produit `Nature::JourChange { avant: l.jj, apres: 0 }`. Zéro est une
+sentinelle hors domaine (les jours vont de 1 à 31), pas une valeur. Rendu
+littéralement, l'écran afficherait « jour de cycle : 5 → 0 », qui se lit comme
+un jour zéro réel. La maquette doit montrer ce cas et le nommer « jour de cycle
+illisible », jamais un chiffre.
 
 - [ ] **Étape 2 : la faire valider**
 
@@ -1667,6 +1721,13 @@ Mutations à passer une par une, en vérifiant qu'**au moins un test rougit** :
 6. `appliquer` : retirer l'affectation `l.jj = apres`
 7. `appliquer` : mettre `l.origine = Origine::Manuel` dans `Deplacer`
 8. `appliquer` : supprimer la boucle de vérification préalable
+9. `libelle_ctc` : changer la chaîne de la branche `_ => "non prêt"`
+   — trou relevé par la revue qualité de la tâche 2 et reporté ici. La branche
+   est inatteignable en production (`libelle_ctc` n'est appelée que si
+   `!ctc_ready`, et l'invariant du projet est
+   `ctc_ready == (ctc_status == "ready")`), mais elle est structurellement
+   nécessaire : un `match` sur `&str` exige un cas par défaut. Un test direct
+   suffit, sur le modèle de `libelle_ctc_distingue_expire_et_jamais_resolu`.
 
 Une mutation survivante peut être **équivalente** — le prouver avant de
 l'écarter, ne pas l'absorber par principe.
@@ -1703,6 +1764,23 @@ l'utilisateur de valider le parcours en GUI avant toute release :
 3. rapprocher, lire la revue, appliquer ;
 4. vérifier que les comptes inchangés n'ont pas bougé de run, que les fichiers
    MEP ont été réécrits, et que le bandeau « contenu différent » a disparu.
+
+**Un point que seul ce parcours peut prouver — le verrou d'empreinte.**
+
+`plan_rapprocher_appliquer` refuse d'appliquer si le fichier a changé entre le
+calcul et le clic. Cette garde n'est couverte par **aucun test automatisé** :
+`tauri::State` a un champ privé et `StateManager::new` est `pub(crate)`, donc
+une commande `#[tauri::command]` n'est pas appelable hors d'une application
+Tauri montée — et aucun test du projet ne le fait. Extraire la comparaison
+dans une fonction pure ne prouverait rien de plus : le risque n'est pas que
+`!=` se trompe, c'est qu'on **oublie d'appeler** la garde, ce qu'une fonction
+extraite ne détecte pas davantage.
+
+À vérifier donc à la main, au moins une fois :
+
+5. rapprocher, puis **modifier le fichier ouvert** avant de cliquer sur
+   « Appliquer » ; le refus doit être explicite et proposer de relancer le
+   rapprochement.
 
 ---
 

@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Maquette — Rapprochement du plan avec le fichier ouvert</title>
+<style>
+  :root{
+    --bg:#0e1524; --card:#172136; --border:#2b3752;
+    --fg:#eae9e2; --muted:#939cb4;
+    --green:#4cc268; --green-later:#2f8050; --gold:#d9a83f; --gold-hover:#e6bb5c; --on-gold:#241a02;
+    --amber:#e0873a; --red:#e5534b; --btn2:#1b2740; --track:#223050;
+    --pid:#e8e4d8; --ppf-l3:#a892ff;
+    color-scheme: dark;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:24px 16px 72px;background:var(--bg);color:var(--fg);
+       font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  .wrap{max-width:1000px;margin:0 auto}
+  h1{font-size:22px;margin:0 0 4px;letter-spacing:-.01em}
+  .lede{color:var(--muted);margin:0 0 28px}
+  h2{font-size:13px;text-transform:uppercase;letter-spacing:.09em;color:var(--gold);
+     margin:34px 0 4px;padding-top:18px;border-top:1px solid var(--border)}
+  .note{color:var(--muted);font-size:13px;margin:0 0 14px}
+  .note b{color:var(--fg);font-weight:600}
+
+  .app{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px}
+  .banner{border-radius:8px;padding:11px 13px;margin-bottom:14px;display:flex;
+          gap:12px;align-items:center;flex-wrap:wrap}
+  .banner.warn{background:rgba(224,135,58,.12);border:1px solid rgba(224,135,58,.45)}
+  .banner.err {background:rgba(229,83,75,.12); border:1px solid rgba(229,83,75,.5)}
+  .banner.ok  {background:rgba(76,194,104,.10);border:1px solid rgba(76,194,104,.4)}
+  .banner .txt{flex:1;min-width:220px}
+  button{font:inherit;background:var(--btn2);color:var(--fg);border:1px solid var(--border);
+         border-radius:7px;padding:7px 13px;cursor:pointer}
+  button.primary{background:var(--gold);color:var(--on-gold);border-color:var(--gold);font-weight:600}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  .btn-ghost{background:transparent;border-color:transparent;color:var(--muted)}
+
+  .grp{border:1px solid var(--border);border-radius:8px;margin-bottom:10px;overflow:hidden}
+  .grp-h{padding:9px 12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+         background:rgba(255,255,255,.025);border-bottom:1px solid var(--border)}
+  .grp-h .n{font-weight:700;font-size:15px;min-width:34px}
+  .grp-h .t{flex:1;min-width:180px}
+  .grp.mute .grp-h{background:transparent}
+  .grp.mute .grp-h .n,.grp.mute .grp-h .t{color:var(--muted)}
+  .dot{width:8px;height:8px;border-radius:99px;flex:0 0 auto}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  td{padding:6px 12px;border-bottom:1px solid rgba(43,55,82,.55);vertical-align:top}
+  tr:last-child td{border-bottom:0}
+  .cf{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--fg)}
+  .rs{color:var(--muted)}
+  .chg{color:var(--fg)}
+  .arrow{color:var(--gold);white-space:nowrap}
+  .more{color:var(--muted);font-style:italic}
+  .tag{display:inline-block;font-size:11px;padding:1px 7px;border-radius:99px;
+       border:1px solid var(--muted);color:var(--muted);white-space:nowrap}
+  .tag.frozen{color:var(--green-later);border-color:var(--green-later)}
+  .tag.removed{color:var(--red);border-color:var(--red)}
+  .tag.stale{color:var(--amber);border-color:var(--amber)}
+  .actions{display:flex;gap:9px;align-items:center;flex-wrap:wrap;margin-top:14px;
+           padding-top:14px;border-top:1px solid var(--border)}
+  .actions .spacer{flex:1}
+  .recap{color:var(--muted);font-size:12.5px}
+  .recap b{color:var(--gold)}
+  .avert{background:rgba(224,135,58,.09);border:1px solid rgba(224,135,58,.35);
+         border-radius:8px;padding:10px 12px;margin-bottom:10px;font-size:13px}
+  .avert.hard{background:rgba(229,83,75,.10);border-color:rgba(229,83,75,.45)}
+  .avert ul{margin:6px 0 0;padding-left:18px}
+  .avert li{margin-bottom:3px}
+  .why{color:var(--muted);font-size:12.5px;margin:8px 0 0;padding-left:12px;
+       border-left:2px solid var(--border)}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.92em;
+       background:rgba(255,255,255,.06);padding:1px 5px;border-radius:4px}
+  @media (max-width:620px){ body{padding:18px 12px 48px} }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Rapprocher le plan avec le fichier ouvert</h1>
+  <p class="lede">Maquette du 28/07/2026 — onglet « Comptes de facturation » de l'écran Plan de charge.
+     Le cœur métier est livré et testé ; cet écran est la seule chose qui manque.</p>
+
+  <!-- ===================================================== -->
+  <h2>1 · Le point d'entrée</h2>
+  <p class="note">Le déclencheur vit dans la barre d'outils du récap, à droite des filtres.
+     Il est <b>toujours disponible</b> — y compris quand le fichier ouvert est identique à celui
+     qui a produit le plan, car l'éligibilité dépend aussi de l'annuaire et des résolutions,
+     qui ont pu changer sans lui. Le bandeau, lui, s'adapte à l'état du fichier.</p>
+
+  <div class="app">
+    <div class="banner warn">
+      <span class="txt">⚠ Le fichier ouvert n'est pas celui qui a produit le plan —
+        <b>même nom, contenu différent</b>.</span>
+      <button class="primary">Rapprocher…</button>
+    </div>
+    <div class="banner warn">
+      <span class="txt">⚠ Le plan a été produit à partir de <code>comptes_2026-07.csv</code>,
+        le fichier ouvert est <code>comptes_2026-08.csv</code>.</span>
+      <button class="primary">Rapprocher…</button>
+    </div>
+    <div class="banner ok">
+      <span class="txt">Le fichier ouvert est bien celui qui a produit le plan.
+        Un rapprochement reste utile si l'annuaire PPF ou les résolutions ont changé depuis.</span>
+      <button>Rapprocher…</button>
+    </div>
+  </div>
+  <p class="why">Les deux premiers cas correspondent à <code>ContenuDifferent</code> et
+     <code>AutreFichier</code>. Le troisième est <code>Identique</code> : bouton présent mais
+     discret. Le quatrième état, <code>Inconnu</code> (fichier illisible), garde le bandeau
+     existant et masque le bouton — sans fichier, il n'y a rien à rapprocher.</p>
+
+  <!-- ===================================================== -->
+  <h2>2 · Rien à faire</h2>
+  <p class="note">Le calcul a tourné et n'a rien trouvé. Ce n'est pas une erreur : on le dit,
+     et l'application reste inerte.</p>
+
+  <div class="app">
+    <div class="banner ok">
+      <span class="txt">✓ Le plan est à jour avec le fichier ouvert.
+        <span class="recap">2 001 lignes actives, aucun écart.</span></span>
+    </div>
+    <div class="actions">
+      <span class="spacer"></span>
+      <button disabled>Appliquer</button>
+      <button class="btn-ghost">Fermer</button>
+    </div>
+  </div>
+
+  <!-- ===================================================== -->
+  <h2>3 · La revue — rien n'est encore appliqué</h2>
+  <p class="note">Un groupe par nature d'écart, chacun avec son compte. Lecture, puis
+     <b>application en bloc</b> : pas de décochage ligne à ligne.</p>
+
+  <div class="app">
+
+    <div class="avert hard">
+      <b>L'annuaire PPF a été construit par cumul de 3 fichiers.</b>
+      Une éligibilité PPF perdue n'y est pas détectable : le compte « 0 » ci-dessous
+      peut vouloir dire « je ne sais pas les voir ». Pour un rapprochement complet,
+      vide l'annuaire puis recharge le fichier le plus récent.
+    </div>
+
+    <div class="avert">
+      <b>Deux effets à connaître avant d'appliquer :</b>
+      <ul>
+        <li>4 comptes à retirer sont sur une <b>MEP déjà livrée</b> — leurs fichiers seront réécrits.</li>
+        <li>La répartition par plateforme change sans être rejouée : 6 de Cegedim vers Esker.</li>
+      </ul>
+    </div>
+
+    <div class="grp">
+      <div class="grp-h"><span class="dot" style="background:var(--red)"></span>
+        <span class="n">47</span><span class="t">à retirer — éligibilité perdue</span></div>
+      <table>
+        <tr><td class="cf">4711002031</td><td class="rs">ACME DISTRIBUTION</td>
+            <td class="chg">CTC prêt → <span class="tag removed">CTC prêt plus tard</span></td></tr>
+        <tr><td class="cf">4711884120</td><td class="rs">BÉTON DU SUD</td>
+            <td class="chg">PPF utilisable → <span class="tag removed">PPF non utilisable</span></td></tr>
+        <tr><td class="cf">4712550080</td><td class="rs">TRANSPORTS MOREL</td>
+            <td class="chg">CTC prêt → <span class="tag removed">CTC expiré</span></td></tr>
+        <tr><td colspan="3" class="more">… 44 autres</td></tr>
+      </table>
+    </div>
+
+    <div class="grp">
+      <div class="grp-h"><span class="dot" style="background:var(--red)"></span>
+        <span class="n">12</span><span class="t">à retirer — disparus du fichier</span></div>
+      <table>
+        <tr><td class="cf">4713001200</td><td class="rs">GARAGE LEROY</td>
+            <td class="chg">absent de <code>comptes_2026-08.csv</code></td></tr>
+        <tr><td colspan="3" class="more">… 11 autres</td></tr>
+      </table>
+    </div>
+
+    <div class="grp">
+      <div class="grp-h"><span class="dot" style="background:var(--gold)"></span>
+        <span class="n">83</span><span class="t">à déplacer — jour de cycle changé</span></div>
+      <table>
+        <tr><td class="cf">4712330019</td><td class="rs">SOGEMA</td>
+            <td class="chg">jour 5 → 12</td><td class="arrow">RF 03 → RF 07 · MEP 3 inchangée</td></tr>
+        <tr><td class="cf">4712009984</td><td class="rs">PLASTIQUES VAL</td>
+            <td class="chg">jour 22 → 3</td><td class="arrow">RF 05 → RF 02 · MEP 3 inchangée</td></tr>
+        <tr><td class="cf">4712774510</td><td class="rs">EDITIONS BLEU</td>
+            <td class="chg">jour 8 → 27</td><td class="arrow">RF 04 → RF 09 · <b>MEP 3 → 4</b></td></tr>
+        <tr><td colspan="4" class="more">… 80 autres</td></tr>
+      </table>
+    </div>
+
+    <div class="grp">
+      <div class="grp-h"><span class="dot" style="background:var(--amber)"></span>
+        <span class="n">9</span><span class="t">signalés — aucune action automatique</span></div>
+      <table>
+        <tr><td class="cf">4714220005</td><td class="rs">MENUISERIE OUEST</td>
+            <td class="chg">jour 5 → 17</td>
+            <td class="arrow">aucun run retenu ne couvre le 17</td></tr>
+        <tr><td class="cf">4714661180</td><td class="rs">CHIMIE NORD</td>
+            <td class="chg"><span class="tag stale">jour de cycle illisible</span></td>
+            <td class="arrow">valeur « n/a » dans le fichier</td></tr>
+        <tr><td class="cf">4710099002</td><td class="rs">PAPETERIE CENTRALE</td>
+            <td class="chg">jour 12 → 4 <span class="tag frozen">❄ gelé</span></td>
+            <td class="arrow">un lot livré ne se déplace pas</td></tr>
+        <tr><td colspan="4" class="more">… 6 autres</td></tr>
+      </table>
+    </div>
+
+    <div class="grp">
+      <div class="grp-h"><span class="dot" style="background:var(--ppf-l3)"></span>
+        <span class="n">6</span><span class="t">plateforme corrigée — la ligne ne bouge pas</span></div>
+      <table>
+        <tr><td class="cf">4715008800</td><td class="rs">OPTIQUE DU PARC</td>
+            <td class="chg">Cegedim → Esker</td></tr>
+        <tr><td colspan="3" class="more">… 5 autres</td></tr>
+      </table>
+    </div>
+
+    <div class="grp mute">
+      <div class="grp-h"><span class="dot" style="background:var(--green-later)"></span>
+        <span class="n">1&nbsp;844</span><span class="t">inchangés — non touchés</span></div>
+    </div>
+
+    <div class="actions">
+      <span class="recap">Après application : <b>1 942</b> lignes actives,
+        <b>59</b> retirées. Le reste du plan n'est pas retiré au sort.</span>
+      <span class="spacer"></span>
+      <button class="primary">Appliquer 148 changements</button>
+      <button class="btn-ghost">Annuler</button>
+    </div>
+  </div>
+
+  <p class="why">Le groupe « signalés » réunit trois causes distinctes plutôt que trois groupes
+     d'une poignée de lignes : dans les trois cas l'action est la même — aucune — et la cause
+     est dite sur la ligne. Le jour illisible s'affiche <b>en toutes lettres</b>, jamais comme
+     un chiffre : le cœur le code <code>0</code>, valeur hors du domaine 1–31, et l'afficher
+     tel quel se lirait comme un jour zéro réel.</p>
+
+  <!-- ===================================================== -->
+  <h2>4 · Le fichier a bougé entre-temps</h2>
+  <p class="note">L'application recalcule tout depuis zéro et compare l'empreinte du fichier à
+     celle vue au calcul. Si elle a changé, elle <b>refuse</b> — plutôt que d'appliquer autre
+     chose que ce qui a été lu.</p>
+
+  <div class="app">
+    <div class="banner err">
+      <span class="txt">Le fichier a changé depuis le calcul — relance le rapprochement
+        avant d'appliquer.</span>
+      <button class="primary">Rapprocher…</button>
+    </div>
+  </div>
+
+  <!-- ===================================================== -->
+  <h2>5 · Après application</h2>
+  <p class="note">Les fichiers par MEP sont réécrits, le classeur régénéré, et le plan décrit
+     désormais le nouveau fichier — le bandeau d'avertissement disparaît donc de lui-même.</p>
+
+  <div class="app">
+    <div class="banner ok">
+      <span class="txt">✓ Rapprochement appliqué : 59 comptes retirés, 83 déplacés,
+        6 plateformes corrigées. 4 fichiers de MEP réécrits, 1 fichier obsolète supprimé.</span>
+    </div>
+    <div class="recap">Les comptes retirés restent consultables via le filtre « retiré »,
+      avec leur motif daté, et peuvent être réactivés.</div>
+  </div>
+
+</div>
+</body>
+</html>
