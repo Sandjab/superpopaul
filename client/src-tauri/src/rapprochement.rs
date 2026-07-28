@@ -155,8 +155,14 @@ pub fn calculer(
 ///
 /// Moindre perturbation : d'abord un run de la MÊME MEP que la ligne actuelle
 /// — le compte reste dans son lot, seul son ordonnancement change. À défaut,
-/// le run compatible dont la MEP est la plus proche. **Jamais un run déjà
-/// passé** : la ligne basculerait dans le gel avec effet rétroactif.
+/// le run compatible dont la MEP est la plus PROCHE de la MEP actuelle (par
+/// distance, pas par ancienneté — une MEP plus tardive mais voisine perturbe
+/// moins qu'une MEP plus ancienne mais lointaine). **Ni un run déjà passé, ni
+/// un run rattaché à une MEP déjà passée** : dans les deux cas la ligne
+/// basculerait dans le gel avec effet rétroactif. Le second cas n'est pas
+/// qu'en théorie : `mep_de` rattache un run à la dernière MEP qui ne lui est
+/// pas postérieure, qui peut donc être passée même pour un run futur, si
+/// aucune MEP n'a été déclarée entre les deux.
 fn run_cible<'a>(
     jj: u8,
     mep_actuelle: usize,
@@ -168,10 +174,12 @@ fn run_cible<'a>(
         .iter()
         .filter(|r| r.couvre(jj) && r.date >= aujourdhui)
         .filter_map(|r| crate::calendrier::mep_de(r.date, meps).map(|(id, date)| (r, id, date)))
+        .filter(|(_, _, mep_date)| *mep_date >= aujourdhui)
         .collect();
-    // Clé composite plutôt qu'une suite de tris : la MEP courante d'abord,
-    // puis la MEP la plus proche, puis la date de run pour départager.
-    candidats.sort_by_key(|(r, id, _)| (*id != mep_actuelle, *id, r.date));
+    // Distance à la MEP actuelle, puis date de run pour départager. La MEP
+    // actuelle (distance 0) l'emporte donc déjà sur toute autre MEP sans
+    // indicateur séparé : une distance ne descend jamais sous zéro.
+    candidats.sort_by_key(|(r, id, _)| (id.abs_diff(mep_actuelle), r.date));
     candidats.into_iter().next()
 }
 
@@ -436,5 +444,49 @@ mod tests {
         let r = calculer(&plan, &entrees, &runs, &meps, auj).unwrap();
         assert_eq!(r.ecarts.len(), 1, "obtenu {:?}", r.ecarts);
         assert_eq!(r.ecarts[0].action, Action::Signaler);
+    }
+
+    /// DÉFAUT (démonstration) : `run_cible` filtre sur la date du RUN
+    /// (`r.date >= aujourdhui`), pas sur la date de la MEP à laquelle il est
+    /// rattaché. `mep_de` rattache un run à la dernière MEP qui ne lui est pas
+    /// postérieure — un run futur peut donc retomber sur une MEP déjà passée
+    /// si aucune MEP n'a été déclarée entre les deux. La ligne déplacée
+    /// hériterait alors d'un `mep_date` passé, et `gelee(aujourdhui)`
+    /// deviendrait vraie immédiatement : gel rétroactif d'un lot qui n'a
+    /// jamais été livré à ce jour.
+    #[test]
+    fn un_run_futur_rattache_a_une_mep_deja_passee_n_est_pas_choisi() {
+        // RF01 est un run FUTUR (10/08, après aujourd'hui 01/08), mais il
+        // précède la MEP 2 (01/09) : sa MEP de rattachement est la MEP 1
+        // (01/07), déjà passée à aujourd'hui.
+        let runs = vec![run("RF01", "2026-08-10", &[12])];
+        let meps = vec![d("2026-07-01"), d("2026-09-01")];
+        let plan = vec![ligne("CF1", 5, "Cegedim", "RF09", (2, "2026-09-01"))];
+        let entrees = vec![entree("CF1", "12", "Cegedim")];
+        let r = calculer(&plan, &entrees, &runs, &meps, d("2026-08-01")).unwrap();
+        assert_eq!(
+            r.ecarts[0].action,
+            Action::Signaler,
+            "le seul run compatible est rattaché à une MEP déjà passée : rien à faire automatiquement"
+        );
+    }
+
+    /// DÉFAUT (démonstration) : le tri départage les candidats hors MEP
+    /// courante par identifiant croissant (« la plus ancienne d'abord »),
+    /// pas par distance à la MEP courante (« la plus proche d'abord »).
+    #[test]
+    fn a_defaut_de_meme_mep_le_run_de_la_mep_la_plus_proche_est_choisi() {
+        let runs = vec![
+            run("RF_A", "2026-02-10", &[20]), // MEP 2 : distance 2 à la MEP 4
+            run("RF_B", "2026-03-10", &[20]), // MEP 3 : distance 1 à la MEP 4, la plus proche
+        ];
+        let meps = vec![d("2026-01-01"), d("2026-02-01"), d("2026-03-01"), d("2026-04-01")];
+        let plan = vec![ligne("CF1", 5, "Cegedim", "RF09", (4, "2026-04-01"))];
+        let entrees = vec![entree("CF1", "20", "Cegedim")];
+        let r = calculer(&plan, &entrees, &runs, &meps, d("2026-01-15")).unwrap();
+        let Action::Deplacer { run_num, .. } = &r.ecarts[0].action else {
+            panic!("attendu un déplacement, obtenu {:?}", r.ecarts[0].action);
+        };
+        assert_eq!(run_num, "RF_B", "la MEP 3 est plus proche de la MEP 4 que la MEP 2");
     }
 }
