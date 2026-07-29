@@ -25,6 +25,7 @@ pub mod securisation;
 pub mod store;
 pub mod telemetry;
 pub mod timeline;
+mod unitaire;
 
 use tauri::Manager;
 
