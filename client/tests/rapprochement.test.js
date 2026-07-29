@@ -54,7 +54,8 @@ test("l'empreinte survit à un re-rendu de l'écran", async () => {
         annuaire_incomplet: null,
       })})`);
     if (cmd === "plan_lignes") return ctx.evaluer(`(${JSON.stringify([ligne("CF1")])})`);
-    if (cmd === "plan_rapprocher_appliquer") return ctx.evaluer("[]");
+    if (cmd === "plan_rapprocher_appliquer")
+      return ctx.evaluer(`(${JSON.stringify({ obsoletes: [], rapport: "" })})`);
     return null;
   });
 
@@ -92,6 +93,35 @@ test("sans écart, le déclencheur d'application reste inerte", async () => {
   appliquer.click();
   assert.equal(ctx.invocations.find(([c]) => c === "plan_rapprocher_appliquer"), undefined,
     "sans écart, l'application ne doit jamais partir vers le backend");
+});
+
+test("le compte rendu nomme le rapport écrit", async () => {
+  // Une fois la modale fermée, le bandeau est la seule trace du livrable :
+  // sans son nom, l'utilisateur ne sait pas qu'un document est parti avec
+  // les fichiers, ni lequel retrouver dans le répertoire de sortie.
+  const ctx = ecran();
+  const CHEMIN = "/data/sortie/brm2607_rapprochement_2026-07-28_143205.html";
+  ctx.repondreAux((cmd) => {
+    if (cmd === "plan_rapprocher")
+      return ctx.evaluer(`(${JSON.stringify({
+        rapprochement: { ecarts: [ECART], inchangees: 0, avertissements: [] },
+        empreinte: "peu importe ici",
+        annuaire_incomplet: null,
+      })})`);
+    if (cmd === "plan_lignes") return ctx.evaluer(`(${JSON.stringify([ligne("CF1")])})`);
+    if (cmd === "plan_rapprocher_appliquer")
+      return ctx.evaluer(`(${JSON.stringify({ obsoletes: [], rapport: CHEMIN })})`);
+    return null;
+  });
+
+  await boutonRapprocher(ctx.$).click();
+  await boutonModale(ctx.$, "Appliquer").click();
+
+  const texte = ctx.$("plan-banner").textContent;
+  assert.match(texte, /brm2607_rapprochement_2026-07-28_143205\.html/,
+    "le bandeau doit nommer le rapport");
+  assert.ok(!texte.includes("/data/sortie/"),
+    "le chemin de la machine n'apprend rien : seul le nom compte");
 });
 
 test("une erreur backend s'affiche telle quelle, jamais via innerHTML", async () => {
