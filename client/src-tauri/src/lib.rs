@@ -85,6 +85,7 @@ pub fn run() {
             commands::set_proxy_creds,
             commands::update_api_key,
             commands::test_api,
+            commands::resoudre_adressage,
             commands::analyze_input,
             commands::calibrate_api,
             commands::cancel_calibration,

@@ -312,6 +312,103 @@ pub async fn test_api(state: State<'_, AppState>) -> Result<CallStats, String> {
     client.test_key().await.map_err(|e| e.to_string())
 }
 
+/// Cœur testable de la loupe (même motif que `calculer_rapprochement`) : prend
+/// ce dont il a besoin, pas un `State` — les commandes Tauri ne se fabriquent
+/// pas en test.
+///
+/// N'ÉCRIT RIEN : consulter un adressage ne doit pas le retirer du périmètre
+/// d'un run futur (les modes lisent `resolutions` pour savoir ce qui reste à
+/// faire).
+async fn resoudre_adressage_impl(
+    client: &ApiClient,
+    store: &Arc<Mutex<Store>>,
+    motifs: &[String],
+    mode: &str,
+    saisi: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<crate::unitaire::ResolutionUnitaire, String> {
+    let saisi = saisi.trim();
+    if saisi.is_empty() {
+        return Err("Saisissez un adressage.".into());
+    }
+    let canonique = crate::pid::canonical(saisi);
+    let valeur_0225 = crate::directory::parse_0225_value(&canonique);
+
+    // Annuaires d'abord : ils répondent même si le réseau ne répond pas.
+    let (charge, present, ppf_non_vide, flags) = {
+        let s = store.lock().unwrap();
+        let charge = s.peppol_directory_status()?.is_some();
+        let valeurs: Vec<String> = valeur_0225.iter().cloned().collect();
+        let present = if charge && !valeurs.is_empty() {
+            !s.directory_present(&valeurs)?.is_empty()
+        } else {
+            false
+        };
+        let ppf_non_vide = s.ppf_summary()?.distinct_addr > 0;
+        let flags = if ppf_non_vide && !valeurs.is_empty() {
+            s.ppf_flags(&valeurs, motifs)?
+                .get(valeurs[0].as_str())
+                .cloned()
+        } else {
+            None
+        };
+        (charge, present, ppf_non_vide, flags)
+    };
+
+    let t0 = std::time::Instant::now();
+    let reseau = match client.resolve_batch(&[canonique.clone()]).await {
+        Ok((items, _)) => {
+            let latence_ms = t0.elapsed().as_millis() as u64;
+            match items.first() {
+                Some(item) => {
+                    let r = crate::resolver::to_resolution(item, &canonique, now.timestamp());
+                    crate::unitaire::Reseau::Repond {
+                        champs: crate::unitaire::champs_reseau(&r, now),
+                        latence_ms,
+                    }
+                }
+                None => crate::unitaire::Reseau::Echec {
+                    message: "L'API n'a rien renvoyé pour cet adressage.".into(),
+                },
+            }
+        }
+        Err(e) => crate::unitaire::Reseau::Echec { message: e.to_string() },
+    };
+
+    Ok(crate::unitaire::ResolutionUnitaire {
+        saisi: saisi.to_string(),
+        canonique,
+        mode: mode.to_string(),
+        reseau,
+        annuaire_peppol: crate::unitaire::etat_annuaire_peppol(
+            valeur_0225.as_deref(),
+            charge,
+            present,
+        ),
+        ppf: crate::unitaire::etat_ppf(valeur_0225.as_deref(), ppf_non_vide, flags.as_ref()),
+    })
+}
+
+/// Résolution unitaire depuis la loupe de l'en-tête. Consultation seule.
+#[tauri::command]
+pub async fn resoudre_adressage(
+    saisi: String,
+    state: State<'_, AppState>,
+) -> Result<crate::unitaire::ResolutionUnitaire, String> {
+    let cfg = state.current_config()?;
+    let mode = if cfg.api.mode == ApiMode::Direct { "direct" } else { "api" };
+    let client = state.client()?;
+    resoudre_adressage_impl(
+        &client,
+        &state.store,
+        &cfg.ppf.motifs(),
+        mode,
+        &saisi,
+        chrono::Utc::now(),
+    )
+    .await
+}
+
 #[derive(Serialize)]
 pub struct InputStats {
     pub unique: usize,
@@ -2516,6 +2613,86 @@ mod tests {
     fn un_annuaire_ppf_charge_une_seule_fois_ne_declenche_rien() {
         assert!(avertissement_ppf_cumulatif(1).is_none());
         assert!(avertissement_ppf_cumulatif(0).is_none());
+    }
+
+    #[tokio::test]
+    async fn la_loupe_envoie_la_forme_canonique_et_survit_a_un_echec_reseau() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // Un SIREN nu doit partir en 0225 canonique : sans le préfixe, le hash
+        // SML porterait sur la valeur nue et tout ressortirait « absent ».
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/resolve/batch"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "results": [{
+                    "participant_id": "iso6523-actorid-upis::0225:552100554",
+                    "exists": true, "supports_extended_ctc_fr": true
+                }]
+            })))
+            .mount(&server)
+            .await;
+
+        let store = Arc::new(Mutex::new(Store::open_in_memory().expect("store en mémoire")));
+        let client = crate::api::ApiClient::new(&server.uri(), "K", None, None).unwrap();
+        let now = chrono::Utc::now();
+        let r = resoudre_adressage_impl(&client, &store, &["C".into()], "api", "552100554", now)
+            .await
+            .expect("la commande doit aboutir");
+
+        assert_eq!(r.canonique, "iso6523-actorid-upis::0225:552100554");
+        assert!(matches!(r.reseau, crate::unitaire::Reseau::Repond { .. }));
+        // Aucun annuaire chargé dans ce store neuf : muets, jamais « false ».
+        assert!(matches!(
+            r.annuaire_peppol,
+            crate::unitaire::Annuaire::Muette { raison: crate::unitaire::Muette::AnnuaireNonCharge }
+        ));
+        assert!(matches!(
+            r.ppf,
+            crate::unitaire::Ppf::Muette { raison: crate::unitaire::Muette::AnnuaireVide }
+        ));
+    }
+
+    #[tokio::test]
+    async fn un_echec_reseau_laisse_la_commande_aboutir() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // Le point : les annuaires ne dépendent pas du réseau. Rendre Err ici
+        // priverait l'utilisateur d'informations que la machine possède.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/resolve/batch"))
+            .respond_with(ResponseTemplate::new(403))
+            .mount(&server)
+            .await;
+
+        let store = Arc::new(Mutex::new(Store::open_in_memory().expect("store en mémoire")));
+        let client = crate::api::ApiClient::new(&server.uri(), "K", None, None).unwrap();
+        let r = resoudre_adressage_impl(
+            &client, &store, &["C".into()], "api", "552100554", chrono::Utc::now(),
+        )
+        .await
+        .expect("un échec réseau ne doit pas faire échouer la commande");
+
+        match r.reseau {
+            crate::unitaire::Reseau::Echec { ref message } => {
+                assert!(message.contains("navigateur"), "message inattendu : {message}");
+            }
+            other => panic!("attendu Echec, obtenu {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn une_saisie_vide_est_refusee() {
+        let store = Arc::new(Mutex::new(Store::open_in_memory().expect("store en mémoire")));
+        let client = crate::api::ApiClient::new("http://127.0.0.1:1", "K", None, None).unwrap();
+        let res = resoudre_adressage_impl(
+            &client, &store, &["C".into()], "api", "   ", chrono::Utc::now(),
+        )
+        .await;
+        assert!(res.is_err(), "une saisie vide ne doit pas partir sur le réseau");
     }
 }
 

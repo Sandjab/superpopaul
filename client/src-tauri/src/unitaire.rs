@@ -118,6 +118,30 @@ pub fn champs_reseau(r: &crate::store::Resolution, now: chrono::DateTime<chrono:
     }
 }
 
+/// Ce que le réseau a répondu. Un échec n'est PAS une erreur de commande : les
+/// annuaires locaux, eux, savent répondre sans réseau.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "etat", rename_all = "snake_case")]
+pub enum Reseau {
+    Repond { champs: ChampsReseau, latence_ms: u64 },
+    Echec { message: String },
+}
+
+/// Réponse complète de la loupe.
+#[derive(Debug, Clone, Serialize)]
+pub struct ResolutionUnitaire {
+    /// Tel que tapé (trim) — pour que l'écran puisse montrer l'écart avec la
+    /// forme canonique.
+    pub saisi: String,
+    pub canonique: String,
+    /// « api » | « direct » : le verdict n'est comparable à celui d'un run que
+    /// si le transport est le même, autant le dire.
+    pub mode: String,
+    pub reseau: Reseau,
+    pub annuaire_peppol: Annuaire,
+    pub ppf: Ppf,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
