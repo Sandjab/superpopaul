@@ -247,7 +247,10 @@ fn now_epoch() -> i64 {
 
 /// Convertit un item API en résolution à persister. `sent` = PID envoyé
 /// (repli si l'API ne renvoie pas participant_id).
-fn to_resolution(item: &ApiItem, sent: &str, at: i64) -> Resolution {
+/// `pub(crate)` pour la résolution unitaire (`commands::resoudre_adressage`) :
+/// elle DOIT produire la même Resolution qu'un run, sans quoi l'écran de la
+/// loupe et le fichier de sortie pourraient diverger.
+pub(crate) fn to_resolution(item: &ApiItem, sent: &str, at: i64) -> Resolution {
     let participant = item
         .participant_id
         .clone()

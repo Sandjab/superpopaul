@@ -84,13 +84,95 @@ pub fn etat_ppf(
     }
 }
 
+/// Les huit champs Peppol de l'export, plus la note diagnostique du résolveur
+/// (« ServiceGroup HTTP 403 on … » quand le catalogue SMP est illisible).
+/// Les noms sont ceux de `output::field_name` : l'écran ne doit pas inventer un
+/// vocabulaire parallèle.
+#[derive(Debug, Clone, Serialize)]
+pub struct ChampsReseau {
+    pub in_peppol: Option<bool>,
+    pub pa_code: Option<String>,
+    pub pa_name: Option<String>,
+    pub pa_country: Option<String>,
+    pub ubl_extended: Option<bool>,
+    pub ctc_activation: Option<String>,
+    pub ctc_expiration: Option<String>,
+    /// « ready » | « later » | « expired » | «  » — TOUJOURS via
+    /// `output::ctc_status`, jamais recalculé ici.
+    pub ctc_status: String,
+    pub note: Option<String>,
+}
+
+/// Traduit une résolution (celle qu'un run écrirait) en champs d'affichage.
+pub fn champs_reseau(r: &crate::store::Resolution, now: chrono::DateTime<chrono::Utc>) -> ChampsReseau {
+    ChampsReseau {
+        in_peppol: r.exists_in_peppol,
+        pa_code: r.pa_code.clone(),
+        pa_name: r.pa_name.clone(),
+        pa_country: r.pa_country.clone(),
+        ubl_extended: r.extended_ctc_fr,
+        ctc_activation: r.ctc_activation.clone(),
+        ctc_expiration: r.ctc_expiration.clone(),
+        ctc_status: crate::output::ctc_status(r, now).to_string(),
+        note: r.note.clone(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::store::PpfFlags;
+    use chrono::{TimeZone, Utc};
+    use crate::store::Resolution;
 
     fn flags(in_ppf: bool, active: bool, pdp_definie: bool, usable: bool) -> PpfFlags {
         PpfFlags { in_ppf, active, pdp_definie, usable }
+    }
+
+    fn resolution(activation: Option<&str>, expiration: Option<&str>, ctc: Option<bool>) -> Resolution {
+        Resolution {
+            participant: "iso6523-actorid-upis::0225:552100554".into(),
+            exists_in_peppol: Some(true),
+            pa_code: Some("PA0042".into()),
+            pa_name: Some("ACME Services".into()),
+            pa_country: Some("FR".into()),
+            extended_ctc_fr: ctc,
+            api_status: "ok".into(),
+            resolved_at: 0,
+            note: None,
+            ctc_activation: activation.map(str::to_string),
+            ctc_expiration: expiration.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn l_etat_ctc_est_celui_de_l_export_pour_les_quatre_cas() {
+        // Ces quatre valeurs SONT la colonne ctc_status du CSV. Les recalculer
+        // ici (par exemple « activation passée ⇒ ready » sans regarder
+        // ubl_extended) ferait diverger l'écran de l'export qu'il prétend
+        // montrer.
+        let now = Utc.with_ymd_and_hms(2026, 7, 29, 12, 0, 0).unwrap();
+        assert_eq!(champs_reseau(&resolution(None, None, Some(true)), now).ctc_status, "ready");
+        assert_eq!(
+            champs_reseau(&resolution(Some("2030-01-01T00:00:00Z"), None, Some(true)), now).ctc_status,
+            "later"
+        );
+        assert_eq!(
+            champs_reseau(&resolution(None, Some("2020-01-01T00:00:00Z"), Some(true)), now).ctc_status,
+            "expired"
+        );
+        // Sans déclaration CTC-FR, il n'y a aucun état à calculer.
+        assert_eq!(champs_reseau(&resolution(None, None, Some(false)), now).ctc_status, "");
+    }
+
+    #[test]
+    fn les_champs_du_pa_sont_recopies() {
+        let now = Utc.with_ymd_and_hms(2026, 7, 29, 12, 0, 0).unwrap();
+        let c = champs_reseau(&resolution(None, None, Some(true)), now);
+        assert_eq!(c.in_peppol, Some(true));
+        assert_eq!(c.pa_code.as_deref(), Some("PA0042"));
+        assert_eq!(c.pa_country.as_deref(), Some("FR"));
+        assert_eq!(c.ubl_extended, Some(true));
     }
 
     #[test]
