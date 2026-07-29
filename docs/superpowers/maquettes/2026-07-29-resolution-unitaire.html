@@ -1,0 +1,430 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Maquette — Résolution d'un adressage unitaire</title>
+<style>
+  :root{
+    --bg:#0e1524; --card:#172136; --border:#2b3752;
+    --fg:#eae9e2; --muted:#939cb4;
+    --green:#4cc268; --green-later:#2f8050; --gold:#d9a83f; --gold-hover:#e6bb5c; --on-gold:#241a02;
+    --amber:#e0873a; --red:#e5534b; --btn2:#1b2740; --track:#223050;
+    --pid:#e8e4d8; --ppf-l3:#a892ff;
+    color-scheme: dark;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:24px 16px 72px;background:var(--bg);color:var(--fg);
+       font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  .wrap{max-width:900px;margin:0 auto}
+  h1{font-size:22px;margin:0 0 4px;letter-spacing:-.01em}
+  .lede{color:var(--muted);margin:0 0 28px}
+  h2{font-size:13px;text-transform:uppercase;letter-spacing:.09em;color:var(--gold);
+     margin:34px 0 4px;padding-top:18px;border-top:1px solid var(--border)}
+  .note{color:var(--muted);font-size:13px;margin:0 0 14px}
+  .note b{color:var(--fg);font-weight:600}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--pid)}
+
+  /* --- en-tête de l'application ------------------------------------- */
+  .app{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:0;overflow:hidden}
+  .hdr{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--border)}
+  .step{background:transparent;border:1px solid transparent;color:var(--muted);
+        border-radius:7px;padding:6px 11px;font:inherit}
+  .step.active{color:var(--fg);border-color:var(--border);background:var(--btn2)}
+  .cfg-btns{margin-left:auto;display:flex;gap:4px}
+  /* Monochrome, strictement comme ⚙ : même couleur au repos, même hover. */
+  .btn-ghost{background:transparent;border:1px solid transparent;color:var(--muted);
+             border-radius:7px;padding:6px 10px;font-size:16px;cursor:pointer}
+  .btn-ghost:hover{color:var(--fg);background:var(--btn2)}
+  .body-ph{padding:26px 14px;color:var(--muted);font-size:13px;font-style:italic}
+
+  /* --- modale -------------------------------------------------------- */
+  .modal{background:var(--card);border:1px solid var(--border);border-radius:10px;
+         padding:16px;max-width:620px;margin:0 auto;box-shadow:0 18px 48px rgba(0,0,0,.5)}
+  .modal-h{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+  .modal-h h3{margin:0;font-size:16px;flex:1}
+  .saisie{display:flex;gap:8px;margin-bottom:6px}
+  input[type=text]{flex:1;font:inherit;background:var(--bg);color:var(--fg);
+        border:1px solid var(--border);border-radius:7px;padding:8px 11px}
+  input[type=text]::placeholder{color:#5d6884}
+  button{font:inherit;background:var(--btn2);color:var(--fg);border:1px solid var(--border);
+         border-radius:7px;padding:8px 14px;cursor:pointer}
+  button.primary{background:var(--gold);color:var(--on-gold);border-color:var(--gold);font-weight:600}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  .canon{font-size:12px;color:var(--muted);margin:0 0 14px}
+  .canon .v{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--pid)}
+  .hint{font-size:12px;color:var(--muted);margin:14px 0 0;padding-top:11px;
+        border-top:1px solid var(--border)}
+
+  /* --- sections de résultat ------------------------------------------ */
+  .sect{border:1px solid var(--border);border-radius:8px;margin-bottom:9px;overflow:hidden}
+  .sect-h{padding:7px 12px;background:rgba(255,255,255,.025);border-bottom:1px solid var(--border);
+          display:flex;align-items:center;gap:9px;font-size:12px;text-transform:uppercase;
+          letter-spacing:.07em;color:var(--muted)}
+  .sect-h .src{flex:1}
+  .sect.off .sect-h{background:transparent}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  td{padding:5px 12px;border-bottom:1px solid rgba(43,55,82,.55)}
+  tr:last-child td{border-bottom:0}
+  /* Tout le champ est survolable : le pointeur d'aide le signale sur la ligne
+     entière, pas seulement sur le nom — viser 8 caractères est pénible. */
+  tr[title]{cursor:help}
+  tr[title]:hover td{background:rgba(255,255,255,.035)}
+  td.k{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--muted);width:170px}
+  td.v{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--fg)}
+  .t{color:var(--green)}
+  .f{color:var(--muted)}
+  .na{color:var(--amber);font-style:italic;font-family:inherit}
+
+  /* --- les deux champs de verdict ------------------------------------- */
+  tr.cle td{background:rgba(217,168,63,.07);border-top:1px solid rgba(217,168,63,.25);
+            border-bottom:1px solid rgba(217,168,63,.25);padding:9px 12px}
+  tr.cle td.k{color:var(--fg);font-weight:600}
+  tr.cle td.k .lib{display:block;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+                   font-size:11px;font-weight:400;color:var(--muted);text-transform:uppercase;
+                   letter-spacing:.06em}
+  tr.cle td.v{font-size:15px;font-weight:700}
+  .verdict-ok{color:var(--green)}
+  .verdict-ko{color:var(--red)}
+  .verdict-later{color:var(--green-later)}
+  .verdict-nul{color:var(--amber);font-style:italic;
+               font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+               font-size:13px;font-weight:400}
+
+  .dot{width:8px;height:8px;border-radius:99px;flex:0 0 auto}
+  .dot.ok{background:var(--green)} .dot.no{background:var(--muted)}
+  .dot.warn{background:var(--amber)} .dot.err{background:var(--red)}
+  .banner{border-radius:8px;padding:10px 12px;margin-bottom:11px;font-size:13px}
+  .banner.err{background:rgba(229,83,75,.12);border:1px solid rgba(229,83,75,.5)}
+  .tag{display:inline-block;font-size:11px;padding:1px 7px;border-radius:99px;
+       border:1px solid var(--muted);color:var(--muted)}
+  .tag.gold{color:var(--gold);border-color:var(--gold)}
+  .spin{color:var(--muted);font-style:italic;padding:20px 0;text-align:center}
+  .legend{display:flex;gap:18px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin:10px 0 0}
+  .legend span b{font-weight:700}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Résolution d'un adressage unitaire</h1>
+<p class="lede">Une loupe dans l'en-tête, à côté de ⚙. On saisit un adressage, on le résout
+contre le réseau Peppol, l'annuaire Peppol et l'annuaire PPF, et on lit les champs
+<b>que l'export produirait pour cette ligne</b>. Consultation seule : rien n'est écrit.
+<b>Survolez les lignes de résultat</b> — chaque champ porte sa définition.</p>
+
+<h2>① L'entrée : une loupe à côté de l'engrenage</h2>
+<p class="note">Monochrome et de même graisse que ⚙ : deux outils de même rang, aucun des
+deux ne réclame l'attention. Disponible en permanence — l'outil ne dépend d'aucun fichier
+ouvert et reste atteignable aux trois étapes.</p>
+<div class="app">
+  <div class="hdr">
+    <button class="step active">1. Fichiers</button>
+    <button class="step">2. Format</button>
+    <button class="step">3. Run</button>
+    <span class="cfg-btns">
+      <button class="btn-ghost" title="Résoudre un adressage — consultation seule.">🔍</button>
+      <button class="btn-ghost" title="Réglages — appliqués et enregistrés à la fermeture.">⚙</button>
+    </span>
+  </div>
+  <div class="body-ph">— écran courant, inchangé —</div>
+</div>
+
+<h2>② À l'ouverture</h2>
+<p class="note">Le champ prend le focus. Trois formes acceptées, comme partout dans
+l'application : SIREN nu, <span class="mono">0225:…</span>, ou l'identifiant complet.</p>
+<div class="modal">
+  <div class="modal-h">
+    <h3>Résoudre un adressage</h3>
+    <span class="tag gold">consultation seule</span>
+    <button class="btn-ghost">✕</button>
+  </div>
+  <div class="saisie">
+    <input type="text" placeholder="SIREN, 0225:… ou identifiant complet">
+    <button class="primary" disabled>Résoudre</button>
+  </div>
+  <p class="hint">Le résultat n'est pas enregistré : consulter un compte ici ne le retire
+  pas du périmètre d'un run futur.</p>
+</div>
+
+<h2>③ Pendant l'appel</h2>
+<p class="note">Le transport est celui des réglages — API ou résolution directe. Le dire
+évite de se demander d'où vient le verdict.</p>
+<div class="modal">
+  <div class="modal-h">
+    <h3>Résoudre un adressage</h3>
+    <span class="tag gold">consultation seule</span>
+    <button class="btn-ghost">✕</button>
+  </div>
+  <div class="saisie">
+    <input type="text" value="552100554">
+    <button class="primary" disabled>Résoudre</button>
+  </div>
+  <p class="canon">Résolu comme <span class="v">iso6523-actorid-upis::0225:552100554</span></p>
+  <div class="spin">Interrogation du réseau Peppol (mode direct SML + SMP)…</div>
+</div>
+
+<h2>④ Le résultat, nominal</h2>
+<p class="note">Trois sections, une par source. Les libellés sont <b>ceux de l'export</b> :
+ce que l'écran affiche est littéralement ce que le fichier de sortie contiendrait pour cette
+ligne. <b>Chaque ligne porte en infobulle la définition de <span class="mono">docs/legende_champs.md</span></b>
+— une seule source pour le CSV, le PDF de légende et cet écran.<br>
+<b>Deux champs sont mis en vedette</b> — <span class="mono">ctc_status</span> et
+<span class="mono">ppf_usable</span> — parce que ce sont eux qui décident de l'éligibilité
+d'un compte. Ils portent leur libellé humain et leur valeur est colorée par le verdict.</p>
+<div class="modal">
+  <div class="modal-h">
+    <h3>Résoudre un adressage</h3>
+    <span class="tag gold">consultation seule</span>
+    <button class="btn-ghost">✕</button>
+  </div>
+  <div class="saisie">
+    <input type="text" value="552100554">
+    <button class="primary">Résoudre</button>
+  </div>
+  <p class="canon">Résolu comme <span class="v">iso6523-actorid-upis::0225:552100554</span>
+    · mode direct · 412 ms</p>
+
+  <div class="sect">
+    <div class="sect-h"><span class="dot ok"></span><span class="src">Réseau Peppol</span>
+      <span class="tag">SMP 200</span></div>
+    <table>
+      <tr title="existe — L'adressage est-il provisionné dans le réseau Peppol (le SMP répond pour cet identifiant).">
+        <td class="k">in_peppol</td><td class="v t">true</td></tr>
+      <tr title="code PA — Code du point d'accès (Access Point) qui dessert l'adressage.">
+        <td class="k">pa_code</td><td class="v">PA0042</td></tr>
+      <tr title="nom PA — Nom du point d'accès.">
+        <td class="k">pa_name</td><td class="v">ACME Services</td></tr>
+      <tr title="pays PA — Code pays du point d'accès.">
+        <td class="k">pa_country</td><td class="v">FR</td></tr>
+      <tr title="CTC-FR — L'adressage déclare-t-il le support de l'extension française France Invoice UBL Extension (CTC-FR).">
+        <td class="k">ubl_extended</td><td class="v t">true</td></tr>
+      <tr title="activation CTC — Date d'activation déclarée du support CTC (chaîne SMP brute, ISO 8601).">
+        <td class="k">ctc_activation</td><td class="v">2026-09-01T00:00:00Z</td></tr>
+      <tr title="expiration CTC — Date d'expiration déclarée du support.">
+        <td class="k">ctc_expiration</td><td class="v">2036-09-01T00:00:00Z</td></tr>
+      <tr class="cle" title="état CTC — État du support calculé à l'instant de la consultation. ready : actif aujourd'hui. later : activation dans le futur, basculera seul. expired : expiration dépassée. Vide : l'adressage ne déclare pas CTC-FR.">
+        <td class="k">ctc_status<span class="lib">état CTC</span></td>
+        <td class="v"><span class="verdict-ok">ready</span></td></tr>
+    </table>
+  </div>
+
+  <div class="sect">
+    <div class="sect-h"><span class="dot ok"></span><span class="src">Annuaire Peppol</span>
+      <span class="tag">chargé le 24/07/2026</span></div>
+    <table>
+      <tr title="annuaire Peppol — L'adressage 0225 figure-t-il dans l'annuaire Peppol chargé.">
+        <td class="k">in_directory</td><td class="v t">true</td></tr>
+    </table>
+  </div>
+
+  <div class="sect">
+    <div class="sect-h"><span class="dot warn"></span><span class="src">Annuaire PPF</span>
+      <span class="tag">2 fichiers cumulés</span></div>
+    <table>
+      <tr title="annuaire PPF — Adressage présent dans l'annuaire PPF chargé (au moins une ligne).">
+        <td class="k">annuaire_ppf</td><td class="v t">true</td></tr>
+      <tr title="PPF actif — Au moins une ligne à un motif de présence actif (ensemble configurable dans les réglages, par défaut C / P).">
+        <td class="k">ppf_active</td><td class="v t">true</td></tr>
+      <tr title="PDP définie — Au moins une ligne avec une PDP réelle (pdp_fictive = 0).">
+        <td class="k">pdp_definie</td><td class="v f">false</td></tr>
+      <tr class="cle" title="PPF utilisable — Au moins une MÊME ligne à un motif actif configuré (défaut C / P) ET PDP réelle (pdp_fictive = 0).">
+        <td class="k">ppf_usable<span class="lib">PPF utilisable</span></td>
+        <td class="v"><span class="verdict-ko">false</span></td></tr>
+    </table>
+  </div>
+  <p class="hint">Le résultat n'est pas enregistré : consulter un compte ici ne le retire
+  pas du périmètre d'un run futur.</p>
+</div>
+
+<h2>⑤ Les quatre verdicts possibles de <span class="mono">ctc_status</span></h2>
+<p class="note"><b>Écart assumé par rapport au « vert ou rouge ».</b>
+<span class="mono">ctc_status</span> a quatre issues, pas deux, et deux d'entre elles ne sont
+ni bonnes ni mauvaises. Peindre <span class="mono">later</span> en rouge dirait « ce compte
+est disqualifié » alors qu'il basculera seul le jour de l'activation. Je reprends donc la
+palette que le cockpit utilise déjà pour ces mêmes états : vert, vert éteint, rouge, ambre.
+Dis-moi si tu préfères malgré tout deux couleurs seulement.</p>
+<div class="modal">
+  <table>
+    <tr class="cle"><td class="k">ctc_status<span class="lib">état CTC</span></td>
+      <td class="v"><span class="verdict-ok">ready</span></td>
+      <td class="v" style="font-family:inherit;font-size:12.5px;font-weight:400;color:var(--muted)">actif aujourd'hui</td></tr>
+    <tr class="cle"><td class="k">ctc_status<span class="lib">état CTC</span></td>
+      <td class="v"><span class="verdict-later">later</span></td>
+      <td class="v" style="font-family:inherit;font-size:12.5px;font-weight:400;color:var(--muted)">basculera seul à l'activation</td></tr>
+    <tr class="cle"><td class="k">ctc_status<span class="lib">état CTC</span></td>
+      <td class="v"><span class="verdict-ko">expired</span></td>
+      <td class="v" style="font-family:inherit;font-size:12.5px;font-weight:400;color:var(--muted)">expiration dépassée</td></tr>
+    <tr class="cle"><td class="k">ctc_status<span class="lib">état CTC</span></td>
+      <td class="v"><span class="verdict-nul">ne déclare pas CTC-FR</span></td>
+      <td class="v" style="font-family:inherit;font-size:12.5px;font-weight:400;color:var(--muted)">rien à calculer</td></tr>
+  </table>
+  <p class="legend">
+    <span><b class="verdict-ok">■</b> prêt</span>
+    <span><b class="verdict-later">■</b> prêt plus tard</span>
+    <span><b class="verdict-ko">■</b> non</span>
+    <span><b class="verdict-nul">■</b> indéterminé</span>
+  </p>
+</div>
+
+<h2>⑥ Quand une source ne peut pas répondre</h2>
+<p class="note">Un annuaire jamais chargé ne dit pas <span class="mono">false</span> — il ne
+dit rien. Afficher « false » ferait lire « ce compte n'y est pas » là où il faut lire « je ne
+peux pas savoir ». Les champs de vedette suivent la même règle : ni vert ni rouge, ambre.</p>
+<div class="modal">
+  <div class="modal-h">
+    <h3>Résoudre un adressage</h3>
+    <span class="tag gold">consultation seule</span>
+    <button class="btn-ghost">✕</button>
+  </div>
+  <div class="saisie">
+    <input type="text" value="0225:000122308">
+    <button class="primary">Résoudre</button>
+  </div>
+  <p class="canon">Résolu comme <span class="v">iso6523-actorid-upis::0225:000122308</span>
+    · mode API · 233 ms</p>
+
+  <div class="sect">
+    <div class="sect-h"><span class="dot no"></span><span class="src">Réseau Peppol</span></div>
+    <table>
+      <tr title="existe — L'adressage est-il provisionné dans le réseau Peppol (le SMP répond pour cet identifiant).">
+        <td class="k">in_peppol</td><td class="v f">false</td></tr>
+      <tr class="cle" title="état CTC — Vide quand l'adressage ne déclare pas l'extension CTC-FR : il n'y a aucun état à calculer.">
+        <td class="k">ctc_status<span class="lib">état CTC</span></td>
+        <td class="v"><span class="verdict-nul">ne déclare pas CTC-FR</span></td></tr>
+    </table>
+  </div>
+
+  <div class="sect off">
+    <div class="sect-h"><span class="dot warn"></span><span class="src">Annuaire Peppol</span></div>
+    <table>
+      <tr title="annuaire Peppol — L'adressage 0225 figure-t-il dans l'annuaire Peppol chargé.">
+        <td class="k">in_directory</td><td class="v na">annuaire jamais chargé</td></tr>
+    </table>
+  </div>
+
+  <div class="sect off">
+    <div class="sect-h"><span class="dot warn"></span><span class="src">Annuaire PPF</span></div>
+    <table>
+      <tr title="annuaire PPF — Adressage présent dans l'annuaire PPF chargé (au moins une ligne).">
+        <td class="k">annuaire_ppf</td><td class="v na">annuaire vide</td></tr>
+      <tr class="cle" title="PPF utilisable — Indéterminable tant qu'aucun fichier PPF n'est chargé.">
+        <td class="k">ppf_usable<span class="lib">PPF utilisable</span></td>
+        <td class="v"><span class="verdict-nul">annuaire vide</span></td></tr>
+    </table>
+  </div>
+</div>
+
+<h2>⑦ Un adressage qui n'est pas un 0225</h2>
+<p class="note"><b>Troisième indétermination, trouvée en écrivant la spec.</b> Les deux
+annuaires sont français et indexés sur la valeur <span class="mono">0225</span> nue : un
+adressage d'un autre ICD n'y est pas « absent », il n'y est <b>pas cherchable</b>. Dans le
+traitement de masse, <span class="mono">filter_map</span> l'écarte en silence ; ici il doit
+se dire. Le réseau Peppol, lui, répond normalement — il n'a pas cette limite.</p>
+<div class="modal">
+  <div class="modal-h">
+    <h3>Résoudre un adressage</h3>
+    <span class="tag gold">consultation seule</span>
+    <button class="btn-ghost">✕</button>
+  </div>
+  <div class="saisie">
+    <input type="text" value="0007:5567321707">
+    <button class="primary">Résoudre</button>
+  </div>
+  <p class="canon">Résolu comme <span class="v">iso6523-actorid-upis::0007:5567321707</span>
+    · mode API · 189 ms</p>
+
+  <div class="sect">
+    <div class="sect-h"><span class="dot ok"></span><span class="src">Réseau Peppol</span></div>
+    <table>
+      <tr title="existe — L'adressage est-il provisionné dans le réseau Peppol (le SMP répond pour cet identifiant).">
+        <td class="k">in_peppol</td><td class="v t">true</td></tr>
+      <tr title="pays PA — Code pays du point d'accès.">
+        <td class="k">pa_country</td><td class="v">SE</td></tr>
+      <tr class="cle" title="état CTC — Vide quand l'adressage ne déclare pas l'extension CTC-FR : il n'y a aucun état à calculer.">
+        <td class="k">ctc_status<span class="lib">état CTC</span></td>
+        <td class="v"><span class="verdict-nul">ne déclare pas CTC-FR</span></td></tr>
+    </table>
+  </div>
+
+  <div class="sect off">
+    <div class="sect-h"><span class="dot warn"></span><span class="src">Annuaire Peppol</span></div>
+    <table>
+      <tr title="annuaire Peppol — L'annuaire chargé n'indexe que les adressages 0225.">
+        <td class="k">in_directory</td><td class="v na">hors périmètre des annuaires (0225)</td></tr>
+    </table>
+  </div>
+
+  <div class="sect off">
+    <div class="sect-h"><span class="dot warn"></span><span class="src">Annuaire PPF</span></div>
+    <table>
+      <tr title="annuaire PPF — L'annuaire PPF n'indexe que les adressages 0225.">
+        <td class="k">annuaire_ppf</td><td class="v na">hors périmètre des annuaires (0225)</td></tr>
+      <tr class="cle" title="PPF utilisable — Indéterminable pour un adressage qui n'est pas un 0225.">
+        <td class="k">ppf_usable<span class="lib">PPF utilisable</span></td>
+        <td class="v"><span class="verdict-nul">hors périmètre</span></td></tr>
+    </table>
+  </div>
+</div>
+
+<h2>⑧ Quand l'appel échoue</h2>
+<p class="note">L'erreur remonte telle quelle — les annuaires locaux, eux, répondent quand
+même : ils ne dépendent pas du réseau.</p>
+<div class="modal">
+  <div class="modal-h">
+    <h3>Résoudre un adressage</h3>
+    <span class="tag gold">consultation seule</span>
+    <button class="btn-ghost">✕</button>
+  </div>
+  <div class="saisie">
+    <input type="text" value="552100554">
+    <button class="primary">Résoudre</button>
+  </div>
+  <p class="canon">Résolu comme <span class="v">iso6523-actorid-upis::0225:552100554</span></p>
+  <div class="banner err">❌ La requête n'a pas atteint l'API : un intermédiaire l'a refusée
+    (HTTP 403). C'est en général la page de confirmation d'un proxy d'entreprise : ouvrez
+    https://peppol2.gavini.cloud dans votre navigateur, validez la page, puis relancez.</div>
+
+  <div class="sect">
+    <div class="sect-h"><span class="dot ok"></span><span class="src">Annuaire Peppol</span></div>
+    <table>
+      <tr title="annuaire Peppol — L'adressage 0225 figure-t-il dans l'annuaire Peppol chargé.">
+        <td class="k">in_directory</td><td class="v t">true</td></tr>
+    </table>
+  </div>
+  <div class="sect">
+    <div class="sect-h"><span class="dot ok"></span><span class="src">Annuaire PPF</span></div>
+    <table>
+      <tr title="annuaire PPF — Adressage présent dans l'annuaire PPF chargé (au moins une ligne).">
+        <td class="k">annuaire_ppf</td><td class="v t">true</td></tr>
+      <tr title="PPF actif — Au moins une ligne à un motif de présence actif (défaut C / P).">
+        <td class="k">ppf_active</td><td class="v t">true</td></tr>
+      <tr title="PDP définie — Au moins une ligne avec une PDP réelle (pdp_fictive = 0).">
+        <td class="k">pdp_definie</td><td class="v t">true</td></tr>
+      <tr class="cle" title="PPF utilisable — Au moins une MÊME ligne à un motif actif configuré ET PDP réelle.">
+        <td class="k">ppf_usable<span class="lib">PPF utilisable</span></td>
+        <td class="v"><span class="verdict-ok">true</span></td></tr>
+    </table>
+  </div>
+</div>
+
+<h2>Ce que la maquette engage</h2>
+<p class="note">
+• <b>Loupe monochrome</b>, de même rang visuel que ⚙.<br>
+• <b>Chaque champ porte sa définition en infobulle</b>, prise dans
+<span class="mono">docs/legende_champs.md</span> — pas de texte réécrit pour l'occasion,
+sinon les deux divergeront.<br>
+• <b>Deux champs de vedette</b> (<span class="mono">ctc_status</span>,
+<span class="mono">ppf_usable</span>) : libellé humain, valeur agrandie, couleur du verdict.<br>
+• <b>Quatre couleurs pour quatre issues</b>, pas deux — <span class="mono">later</span> n'est
+pas un échec.<br>
+• <b>« Je ne sais pas » ne s'écrit jamais « false »</b>, y compris sur les champs de vedette
+— trois causes distinctes : annuaire non chargé, annuaire vide, adressage hors 0225.<br>
+• <b>La forme canonique retenue est affichée</b> — c'est souvent là qu'est l'explication d'un
+« absent de Peppol ».<br>
+• <b>Le transport et la latence sont dits</b> ; <b>rien n'est écrit</b>.
+</p>
+
+</div>
+</body>
+</html>
