@@ -565,7 +565,9 @@ impl Engine {
                                     ))
                                     .await;
                                 }
-                                ApiError::Auth(_) | ApiError::ProxyAuth => {
+                                ApiError::Auth(_)
+                                | ApiError::ProxyAuth
+                                | ApiError::UpstreamAuth { .. } => {
                                     // Si une mise à jour (clé ou client) est
                                     // arrivée pendant que cette requête
                                     // (partie avec l'ancien client) était en
@@ -593,7 +595,22 @@ impl Engine {
                                         // workers ; un seul événement émis.
                                         sys_paused.store(true, Ordering::Relaxed);
                                         if !suspended.swap(true, Ordering::Relaxed) {
-                                            let reason = if matches!(e, ApiError::ProxyAuth) {
+                                            // UpstreamAuth suit `auth_proxy` et
+                                            // non `auth_api` : l'IHM propose
+                                            // alors de ressaisir les
+                                            // identifiants proxy — inutile ici,
+                                            // mais inoffensif, là où
+                                            // `auth_api` proposerait de
+                                            // remplacer une clé qui est bonne.
+                                            // Le `message` affiché au-dessus du
+                                            // bouton porte, lui, la vraie
+                                            // manœuvre (ouvrir l'URL). Une
+                                            // troisième raison dédiée exige une
+                                            // branche d'IHM, donc une maquette.
+                                            let reason = if matches!(
+                                                e,
+                                                ApiError::ProxyAuth | ApiError::UpstreamAuth { .. }
+                                            ) {
                                                 "auth_proxy"
                                             } else {
                                                 "auth_api"
@@ -1297,7 +1314,10 @@ mod tests_engine {
             .await;
         Mock::given(method("POST"))
             .and(path("/resolve/batch"))
-            .respond_with(ResponseTemplate::new(401))
+            // Signé comme l'API signe ses 401 (peppol_api.py::_error) : c'est
+            // ce qui en fait un refus de CLÉ, seul cas où proposer d'en saisir
+            // une nouvelle a un sens. Un 401 nu suspendrait en `auth_proxy`.
+            .respond_with(ResponseTemplate::new(401).insert_header("WWW-Authenticate", "Bearer"))
             .mount(&server)
             .await;
 

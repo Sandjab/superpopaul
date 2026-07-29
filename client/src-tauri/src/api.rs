@@ -24,6 +24,17 @@ pub enum ApiError {
     Auth(u16),
     #[error("Le proxy demande une authentification (HTTP 407).")]
     ProxyAuth,
+    /// 401 qui n'émane PAS de l'API : celle-ci répond toujours avec
+    /// `WWW-Authenticate: Bearer` (peppol_api.py::_error). Sans ce marqueur, un
+    /// intermédiaire a répondu à sa place — page de confirmation d'un proxy
+    /// d'entreprise, portail captif, auth Basic d'un reverse proxy. Le dire
+    /// évite d'accuser une clé qui est bonne.
+    #[error(
+        "Une authentification a été demandée avant d'atteindre l'API (HTTP 401). \
+         C'est en général la page de confirmation d'un proxy d'entreprise : ouvrez \
+         {url} dans votre navigateur, validez la page, puis relancez."
+    )]
+    UpstreamAuth { url: String },
     #[error("Rate limit atteint (HTTP 429), Retry-After {retry_after_s}s.")]
     RateLimited { retry_after_s: f64 },
     #[error("Erreur de requête (HTTP {0}) — non retentable.")]
@@ -41,6 +52,7 @@ impl ApiError {
         match self {
             ApiError::Auth(s) | ApiError::Client(s) | ApiError::Server(s) => *s,
             ApiError::ProxyAuth => 407,
+            ApiError::UpstreamAuth { .. } => 401,
             ApiError::RateLimited { .. } => 429,
             ApiError::Network(_) => 0,
         }
@@ -259,7 +271,7 @@ impl HttpTransport {
                     },
                 ))
             }
-            s => Err(Self::status_to_error(s, resp.headers())),
+            s => Err(self.status_to_error(s, resp.headers())),
         }
     }
 
@@ -285,7 +297,7 @@ impl HttpTransport {
                 smp_http: None,
             })
         } else {
-            Err(Self::status_to_error(status, resp.headers()))
+            Err(self.status_to_error(status, resp.headers()))
         }
     }
 
@@ -307,12 +319,28 @@ impl HttpTransport {
                 smp_http: None,
             })
         } else {
-            Err(Self::status_to_error(status, resp.headers()))
+            Err(self.status_to_error(status, resp.headers()))
         }
     }
 
-    fn status_to_error(status: u16, headers: &reqwest::header::HeaderMap) -> ApiError {
+    /// L'API signe ses 401 d'un `WWW-Authenticate: Bearer`
+    /// (peppol_api.py::_error). On reconnaît donc le refus de clé de façon
+    /// POSITIVE : tout autre 401 a été émis avant elle, et n'a rien à dire de
+    /// la clé. Le 403 reste groupé avec le 401 authentique tant qu'on n'a pas
+    /// observé d'intermédiaire qui l'émette — requalifier à l'aveugle un code
+    /// que l'API produit peut-être légitimement ferait mentir l'inverse.
+    fn est_refus_de_l_api(headers: &reqwest::header::HeaderMap) -> bool {
+        headers
+            .get(reqwest::header::WWW_AUTHENTICATE)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v.trim_start().to_ascii_lowercase().starts_with("bearer"))
+    }
+
+    fn status_to_error(&self, status: u16, headers: &reqwest::header::HeaderMap) -> ApiError {
         match status {
+            401 if !Self::est_refus_de_l_api(headers) => ApiError::UpstreamAuth {
+                url: self.base.clone(),
+            },
             401 | 403 => ApiError::Auth(status),
             407 => ApiError::ProxyAuth,
             429 => {
@@ -404,7 +432,12 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/resolve/batch"))
-            .respond_with(ResponseTemplate::new(401))
+            // `WWW-Authenticate: Bearer` est la signature que l'API met sur
+            // TOUS ses 401 (peppol_api.py::_error) : sans lui, ce 401 serait
+            // celui d'un intermédiaire, pas un refus de clé.
+            .respond_with(
+                ResponseTemplate::new(401).insert_header("WWW-Authenticate", "Bearer"),
+            )
             .mount(&server)
             .await;
         let c = ApiClient::new(&server.uri(), "MAUVAISE", None, None).unwrap();
@@ -412,6 +445,47 @@ mod tests {
             c.resolve_batch(&pids(&["0009:1"])).await,
             Err(ApiError::Auth(401))
         ));
+    }
+
+    #[tokio::test]
+    async fn erreur_401_sans_bearer_accuse_l_amont_pas_la_cle() {
+        // Un 401 de l'API porte TOUJOURS `WWW-Authenticate: Bearer`
+        // (peppol_api.py::_error). Sans lui, le 401 vient d'un intermédiaire —
+        // typiquement la page de confirmation d'un proxy d'entreprise — et
+        // annoncer « clé invalide » envoie chercher au mauvais endroit.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/resolve/batch"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+        let c = ApiClient::new(&server.uri(), "BONNE_CLE", None, None).unwrap();
+        match c.resolve_batch(&pids(&["0009:1"])).await {
+            Err(e @ ApiError::UpstreamAuth { .. }) => {
+                let m = e.to_string();
+                assert!(m.contains("navigateur"), "le message doit dire quoi faire : {m}");
+                assert!(
+                    m.contains(&server.uri()),
+                    "le message doit porter l'URL à ouvrir : {m}"
+                );
+                assert!(
+                    !m.contains("Clé"),
+                    "le message ne doit pas accuser la clé : {m}"
+                );
+            }
+            other => panic!("attendu UpstreamAuth, obtenu {other:?}"),
+        }
+    }
+
+    #[test]
+    fn un_401_d_amont_compte_pour_401_au_dashboard() {
+        // L'histogramme HTTP du run vient de http_status() : classer ce refus
+        // en 0 (erreur réseau) ferait disparaître un 401 bien réel des codes
+        // affichés.
+        assert_eq!(
+            ApiError::UpstreamAuth { url: "https://x".into() }.http_status(),
+            401
+        );
     }
 
     #[tokio::test]
