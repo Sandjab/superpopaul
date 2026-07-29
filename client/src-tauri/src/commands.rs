@@ -1677,7 +1677,19 @@ pub async fn plan_runs_compatibles(
 /// identifiant qui en sort, ou passe à un motif inactif, conserve sa ligne et
 /// reste utilisable. Au-delà d'un fichier chargé, la perte d'éligibilité PPF
 /// n'est donc pas détectable — et un « 0 » se lirait comme « il n'y en a
-/// pas ». La correction du chargement est un lot séparé ; ici on le dit.
+/// pas ».
+///
+/// Le cumul est **assumé** (décision du 29/07/2026) : il sert la simple
+/// résolution d'adressages, où un annuaire large maximise la couverture. Pour
+/// générer un plan, la procédure est de vider l'annuaire puis de charger le
+/// seul fichier le plus récent — et cet avertissement est ce qui **contrôle
+/// qu'elle a été suivie**, pas un pis-aller en attendant un mode de
+/// chargement en remplacement (lot abandonné).
+///
+/// Le seuil ne tient que parce que `store::reset_ppf` vide `ppf_files` en même
+/// temps que `ppf_directory` : après reset + 1 fichier le compteur repart à 1,
+/// donc silence. Préserver l'historique au reset désarmerait ce contrôle sans
+/// qu'aucun test d'ici ne rougisse.
 fn avertissement_ppf_cumulatif(fichiers: usize) -> Option<String> {
     (fichiers > 1).then(|| {
         format!(
