@@ -685,8 +685,8 @@ $("btn-test-api").addEventListener("click", async () => {
   } catch (err) {
     if (err && err.proxyCancelled) out.textContent = "Test annulé.";
     else {
-      // Échec d'auth proxy probable : re-demander les identifiants au prochain clic.
-      if (/407|proxy/i.test(String(err))) proxyCredsGiven = false;
+      // Refus du proxy lui-même : re-demander les identifiants au prochain clic.
+      if (estRefusDuProxy(err)) proxyCredsGiven = false;
       out.textContent = `❌ ${err}`;
     }
   } finally {
@@ -869,13 +869,28 @@ async function runCalibration() {
     cleanup();
     if (err && err.proxyCancelled) out.textContent = "Calibration annulée.";
     else {
-      // Échec d'auth proxy probable : re-demander les identifiants au prochain clic.
-      if (/407|proxy/i.test(String(err))) proxyCredsGiven = false;
+      // Refus du proxy lui-même : re-demander les identifiants au prochain clic.
+      if (estRefusDuProxy(err)) proxyCredsGiven = false;
       out.textContent = `❌ ${err}`;
     }
   }
 }
 $("btn-calibrate").addEventListener("click", runCalibration);
+
+/** Vrai pour les seuls messages qui valent une ressaisie des identifiants du
+ *  proxy : « … (HTTP 407) » (ApiError::ProxyAuth) et « … (407) »
+ *  (DirectClient::preflight_proxy).
+ *
+ *  Motif étroit à dessein. Chercher « proxy » dans le texte attraperait aussi
+ *  le refus venu d'un INTERMÉDIAIRE, dont le message nomme la « page de
+ *  confirmation d'un proxy d'entreprise » : aucune ressaisie ne le débloque, et
+ *  la modale s'ouvrirait pour rien. Chercher « 407 » nu se déclencherait sur
+ *  une URL qui porte ce nombre — l'URL de l'API figure dans le message, et
+ *  c'est le piège déjà rencontré côté Rust
+ *  (api.rs::url_contenant_407_ne_declenche_pas_proxyauth). */
+function estRefusDuProxy(err) {
+  return /\((?:HTTP )?407\)/.test(String(err));
+}
 
 /** Si un proxy est configuré et les identifiants pas encore saisis dans cette
  *  session — ou saisis pour une autre URL de proxy —, les demander (mémoire

@@ -567,7 +567,7 @@ impl Engine {
                                 }
                                 ApiError::Auth(_)
                                 | ApiError::ProxyAuth
-                                | ApiError::UpstreamAuth { .. } => {
+                                | ApiError::UpstreamRefusal { .. } => {
                                     // Si une mise à jour (clé ou client) est
                                     // arrivée pendant que cette requête
                                     // (partie avec l'ancien client) était en
@@ -595,7 +595,7 @@ impl Engine {
                                         // workers ; un seul événement émis.
                                         sys_paused.store(true, Ordering::Relaxed);
                                         if !suspended.swap(true, Ordering::Relaxed) {
-                                            // UpstreamAuth suit `auth_proxy` et
+                                            // UpstreamRefusal suit `auth_proxy` et
                                             // non `auth_api` : l'IHM propose
                                             // alors de ressaisir les
                                             // identifiants proxy — inutile ici,
@@ -609,7 +609,7 @@ impl Engine {
                                             // branche d'IHM, donc une maquette.
                                             let reason = if matches!(
                                                 e,
-                                                ApiError::ProxyAuth | ApiError::UpstreamAuth { .. }
+                                                ApiError::ProxyAuth | ApiError::UpstreamRefusal { .. }
                                             ) {
                                                 "auth_proxy"
                                             } else {

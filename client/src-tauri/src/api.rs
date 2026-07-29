@@ -24,17 +24,21 @@ pub enum ApiError {
     Auth(u16),
     #[error("Le proxy demande une authentification (HTTP 407).")]
     ProxyAuth,
-    /// 401 qui n'émane PAS de l'API : celle-ci répond toujours avec
-    /// `WWW-Authenticate: Bearer` (peppol_api.py::_error). Sans ce marqueur, un
-    /// intermédiaire a répondu à sa place — page de confirmation d'un proxy
-    /// d'entreprise, portail captif, auth Basic d'un reverse proxy. Le dire
-    /// évite d'accuser une clé qui est bonne.
+    /// Refus émis AVANT l'API — page de confirmation d'un proxy d'entreprise,
+    /// portail captif, refus de tunnel CONNECT. Deux codes y mènent, reconnus
+    /// différemment :
+    /// - **403** : l'API n'en émet aucun (ses codes : 200/400/401/404/405/429/
+    ///   500/503, cf. peppol_api.py), donc tout 403 vient d'ailleurs ;
+    /// - **401** non signé : l'API signe les siens d'un
+    ///   `WWW-Authenticate: Bearer` (peppol_api.py::_error).
+    ///
+    /// Le dire évite d'accuser une clé qui est bonne.
     #[error(
-        "Une authentification a été demandée avant d'atteindre l'API (HTTP 401). \
+        "La requête n'a pas atteint l'API : un intermédiaire l'a refusée (HTTP {status}). \
          C'est en général la page de confirmation d'un proxy d'entreprise : ouvrez \
          {url} dans votre navigateur, validez la page, puis relancez."
     )]
-    UpstreamAuth { url: String },
+    UpstreamRefusal { status: u16, url: String },
     #[error("Rate limit atteint (HTTP 429), Retry-After {retry_after_s}s.")]
     RateLimited { retry_after_s: f64 },
     #[error("Erreur de requête (HTTP {0}) — non retentable.")]
@@ -52,7 +56,7 @@ impl ApiError {
         match self {
             ApiError::Auth(s) | ApiError::Client(s) | ApiError::Server(s) => *s,
             ApiError::ProxyAuth => 407,
-            ApiError::UpstreamAuth { .. } => 401,
+            ApiError::UpstreamRefusal { status, .. } => *status,
             ApiError::RateLimited { .. } => 429,
             ApiError::Network(_) => 0,
         }
@@ -326,9 +330,7 @@ impl HttpTransport {
     /// L'API signe ses 401 d'un `WWW-Authenticate: Bearer`
     /// (peppol_api.py::_error). On reconnaît donc le refus de clé de façon
     /// POSITIVE : tout autre 401 a été émis avant elle, et n'a rien à dire de
-    /// la clé. Le 403 reste groupé avec le 401 authentique tant qu'on n'a pas
-    /// observé d'intermédiaire qui l'émette — requalifier à l'aveugle un code
-    /// que l'API produit peut-être légitimement ferait mentir l'inverse.
+    /// la clé.
     fn est_refus_de_l_api(headers: &reqwest::header::HeaderMap) -> bool {
         headers
             .get(reqwest::header::WWW_AUTHENTICATE)
@@ -338,10 +340,20 @@ impl HttpTransport {
 
     fn status_to_error(&self, status: u16, headers: &reqwest::header::HeaderMap) -> ApiError {
         match status {
-            401 if !Self::est_refus_de_l_api(headers) => ApiError::UpstreamAuth {
+            // 403 : l'API n'en émet aucun (200/400/401/404/405/429/500/503,
+            // cf. peppol_api.py) — il vient donc forcément d'un intermédiaire,
+            // sans qu'aucun header n'ait à l'attester. Observé derrière un
+            // proxy d'entreprise dont la page de confirmation n'a pas encore
+            // été validée (v1.5.0, retour d'usage du 29/07/2026).
+            403 => ApiError::UpstreamRefusal {
+                status,
                 url: self.base.clone(),
             },
-            401 | 403 => ApiError::Auth(status),
+            401 if !Self::est_refus_de_l_api(headers) => ApiError::UpstreamRefusal {
+                status,
+                url: self.base.clone(),
+            },
+            401 => ApiError::Auth(status),
             407 => ApiError::ProxyAuth,
             429 => {
                 let retry_after_s = headers
@@ -461,7 +473,7 @@ mod tests {
             .await;
         let c = ApiClient::new(&server.uri(), "BONNE_CLE", None, None).unwrap();
         match c.resolve_batch(&pids(&["0009:1"])).await {
-            Err(e @ ApiError::UpstreamAuth { .. }) => {
+            Err(e @ ApiError::UpstreamRefusal { .. }) => {
                 let m = e.to_string();
                 assert!(m.contains("navigateur"), "le message doit dire quoi faire : {m}");
                 assert!(
@@ -473,7 +485,32 @@ mod tests {
                     "le message ne doit pas accuser la clé : {m}"
                 );
             }
-            other => panic!("attendu UpstreamAuth, obtenu {other:?}"),
+            other => panic!("attendu UpstreamRefusal, obtenu {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn erreur_403_vient_forcement_d_un_intermediaire() {
+        // L'API n'émet AUCUN 403 : ses codes sont 200/400/401/404/405/429/
+        // 500/503 (peppol_api.py). Un 403 a donc toujours été produit avant
+        // elle — page de confirmation d'un proxy d'entreprise, refus de tunnel
+        // CONNECT (cf. commands.rs, run du 15/07/2026). Aucun header à
+        // interroger : le code seul suffit à conclure.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/resolve/0225:000122308"))
+            .respond_with(ResponseTemplate::new(403))
+            .mount(&server)
+            .await;
+        let c = ApiClient::new(&server.uri(), "BONNE_CLE", None, None).unwrap();
+        match c.test_key().await {
+            Err(e @ ApiError::UpstreamRefusal { .. }) => {
+                let m = e.to_string();
+                assert!(m.contains("navigateur"), "le message doit dire quoi faire : {m}");
+                assert!(m.contains("403"), "le message doit porter le code reçu : {m}");
+                assert!(!m.contains("Clé"), "le message ne doit pas accuser la clé : {m}");
+            }
+            other => panic!("attendu UpstreamRefusal, obtenu {other:?}"),
         }
     }
 
@@ -483,7 +520,7 @@ mod tests {
         // en 0 (erreur réseau) ferait disparaître un 401 bien réel des codes
         // affichés.
         assert_eq!(
-            ApiError::UpstreamAuth { url: "https://x".into() }.http_status(),
+            ApiError::UpstreamRefusal { status: 401, url: "https://x".into() }.http_status(),
             401
         );
     }
