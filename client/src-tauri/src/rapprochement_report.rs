@@ -581,6 +581,41 @@ mod tests {
     const T_PLATEFORMES: &str = "<h2>Plateformes corrigées</h2>";
 
     #[test]
+    fn la_sentinelle_de_jour_illisible_ne_sort_jamais_en_chiffre() {
+        // `jour()` est défensive : aujourd'hui un jour illisible produit
+        // toujours `Signaler`, jamais `Deplacer`, donc aucun rendu ne lui
+        // passe 0 — le « illisible » de la section « à traiter » est écrit en
+        // dur. Testée directement, sans quoi son garde-fou pourrait
+        // disparaître sans qu'un seul test rougisse, et le jour où un
+        // `Deplacer` porterait la sentinelle, le rapport dirait « 0 ».
+        assert_eq!(jour(0), "illisible");
+        assert_eq!(jour(1), "1");
+        assert_eq!(jour(31), "31");
+    }
+
+    #[test]
+    fn un_numero_de_run_est_echappe_une_seule_fois() {
+        // Le n° de run vient du CSV des runs, entrée non fiable comme le
+        // reste. `destination` ne l'échappe pas — `chg` le fait au point
+        // d'insertion. Échapper aux deux endroits n'ouvre aucune faille mais
+        // afficherait « R&amp;13 » au lecteur, ce qui ne se remarque que sur
+        // les rares runs concernés.
+        let mut r = vide();
+        r.ecarts = vec![ecart_deplace("4100000001", 8, 15, "R&13", "2026-09-22", 3)];
+        let origines = origines_de(&[("4100000001", "R&12", "2026-09-15", 3)]);
+        let mut d = donnees(&r);
+        d.origines = &origines;
+        let html = render(&d);
+        let c = corps(&html);
+        assert!(c.contains("R&amp;13"), "le run d'arrivée doit être échappé");
+        assert!(c.contains("R&amp;12"), "le run d'origine doit être échappé");
+        assert!(
+            !c.contains("&amp;amp;"),
+            "échappé deux fois : le lecteur verrait « R&amp;13 » au lieu de « R&13 »"
+        );
+    }
+
+    #[test]
     fn les_avertissements_du_calcul_et_de_l_annuaire_ne_se_confondent_pas() {
         // Décision verrouillée au chantier précédent : les premiers décrivent
         // ce que le rapprochement FAIT, le second prévient qu'il est
