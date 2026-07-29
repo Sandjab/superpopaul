@@ -2449,11 +2449,15 @@ function rapproRecapTexte(rapprochement) {
 }
 
 /** Bandeau de compte rendu après application. Les comptages viennent du calcul
- *  déjà affiché à l'écran (retirés/déplacés/plateformes) ; `obsoletes` est le
- *  seul retour de `plan_rapprocher_appliquer`, comme pour `plan_retirer` et
- *  `plan_deplacer` — le nombre de fichiers de MEP réécrits n'est pas remonté
- *  par le backend, et ne se devine pas : on ne l'affiche donc pas. */
-function compteRenduRapprochement(rapprochement, obsoletes) {
+ *  déjà affiché à l'écran (retirés/déplacés/plateformes) ; `obsoletes` et
+ *  `rapport` sont ce que remonte `plan_rapprocher_appliquer` — le nombre de
+ *  fichiers de MEP réécrits n'est pas remonté par le backend, et ne se devine
+ *  pas : on ne l'affiche donc pas.
+ *
+ *  Le rapport, lui, se nomme : une fois la modale fermée, le bandeau est la
+ *  seule trace qu'un document est parti avec les fichiers. Réduit à son nom —
+ *  le chemin de la machine qui a produit le lot n'apprend rien. */
+function compteRenduRapprochement(rapprochement, obsoletes, rapport) {
   const g = grouperEcarts(rapprochement.ecarts);
   const parts = [];
   const retraits = g.eligibilite.length + g.disparus.length;
@@ -2463,6 +2467,7 @@ function compteRenduRapprochement(rapprochement, obsoletes) {
   let texte = parts.length ? `✓ Rapprochement appliqué : ${parts.join(", ")}.` : "✓ Rapprochement appliqué.";
   const noms = (obsoletes ?? []).map((c) => c.split(/[/\\]/).pop());
   if (noms.length) texte += ` ${noms.length} fichier(s) obsolète(s) supprimé(s) : ${noms.join(", ")}.`;
+  if (rapport) texte += ` Rapport : ${rapport.split(/[/\\]/).pop()}.`;
   planBanner("ok", texte);
 }
 
@@ -2499,11 +2504,11 @@ function renderRevueRapprochement(rapprochement, empreinte, annuaireIncomplet) {
   const appliquerBtn = h("button", { class: "btn-primary", onclick: (ev) =>
     occupe(ev.currentTarget, "Application en cours…", async () => {
       try {
-        const obsoletes = await invoke("plan_rapprocher_appliquer", { empreinte });
+        const { obsoletes, rapport } = await invoke("plan_rapprocher_appliquer", { empreinte });
         closeModal();
         plan.rapportFichier = "identique"; // le backend vient d'aligner meta.hash dessus
         await rechargerRecap();
-        compteRenduRapprochement(rapprochement, obsoletes);
+        compteRenduRapprochement(rapprochement, obsoletes, rapport);
       } catch (e) {
         // Refus (empreinte périmée) ou autre échec : la revue affichée décrit
         // un calcul qui n'est plus valide, la fermer évite de laisser croire
