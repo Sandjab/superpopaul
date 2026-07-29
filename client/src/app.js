@@ -949,6 +949,159 @@ function ensureProxyCreds(force = false) {
   return pendingCreds;
 }
 
+// --- Loupe : résolution d'un adressage unitaire ---------------------------
+// Consultation seule : la commande n'écrit rien, et l'écran le rappelle.
+$("btn-resolve").addEventListener("click", () => {
+  const champ = h("input", {
+    type: "text", id: "resolve-input",
+    placeholder: "SIREN, 0225:… ou identifiant complet",
+  });
+  const sortie = h("div", { id: "resolve-result" });
+  const go = h("button", {
+    id: "resolve-go", class: "btn-primary",
+    onclick: () => lancerResolution(champ, sortie, go),
+  }, "Résoudre");
+  champ.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") lancerResolution(champ, sortie, go);
+  });
+  modal(
+    h("div", { class: "modal-h" },
+      h("h3", {}, "Résoudre un adressage"),
+      h("span", { class: "tag gold" }, "consultation seule"),
+      h("button", { class: "btn-ghost", onclick: closeModal }, "✕")),
+    h("div", { class: "resolve-saisie" }, champ, go),
+    sortie,
+    h("p", { class: "resolve-hint" },
+      "Le résultat n'est pas enregistré : consulter un compte ici ne le retire "
+      + "pas du périmètre d'un run futur."));
+  champ.focus();
+});
+
+async function lancerResolution(champ, sortie, go) {
+  const saisi = champ.value.trim();
+  if (!saisi) return;
+  go.disabled = true;
+  sortie.replaceChildren(h("div", { class: "resolve-spin" }, "Résolution en cours…"));
+  try {
+    const r = await invoke("resoudre_adressage", { saisi });
+    sortie.replaceChildren(...rendreResolution(r));
+  } catch (err) {
+    // Erreur de commande (saisie refusée, config absente) : le backend rend
+    // déjà un texte en français, on ne le réécrit pas.
+    sortie.replaceChildren(h("div", { class: "banner err" }, `❌ ${err}`));
+  } finally {
+    go.disabled = false;
+  }
+}
+
+/** Définitions des champs, RECOPIÉES de `docs/legende_champs.md` — une seule
+ *  source pour le CSV, le PDF de légende et cet écran. Toute modification là-bas
+ *  doit être reportée ici : `client/tests/legende_parite.test.js` échoue sinon. */
+const LEGENDE = {
+  in_peppol: "existe — L'adressage est-il provisionné dans le réseau Peppol (le SMP répond pour cet identifiant).",
+  pa_code: "code PA — Code du point d'accès (Access Point) qui dessert l'adressage.",
+  pa_name: "nom PA — Nom du point d'accès.",
+  pa_country: "pays PA — Code pays du point d'accès.",
+  ubl_extended: "CTC-FR — L'adressage déclare-t-il le support de l'extension française France Invoice UBL Extension (CTC-FR).",
+  ctc_activation: "activation CTC — Date d'activation déclarée du support CTC (chaîne SMP brute, ISO 8601).",
+  ctc_expiration: "expiration CTC — Date d'expiration déclarée du support.",
+  ctc_status: "état CTC — État du support calculé à l'instant de l'export à partir des dates ci-dessus.",
+  in_directory: "annuaire Peppol — L'adressage 0225 figure-t-il dans l'annuaire Peppol chargé.",
+  annuaire_ppf: "annuaire PPF — Adressage présent dans l'annuaire PPF chargé (au moins une ligne).",
+  ppf_active: "PPF actif — Au moins une ligne à un motif de présence actif (ensemble configurable dans les réglages, par défaut C / P).",
+  pdp_definie: "PDP définie — Au moins une ligne avec une PDP réelle (pdp_fictive = 0).",
+  ppf_usable: "PPF utilisable — Au moins une même ligne à un motif actif configuré (défaut C / P) ET PDP réelle (pdp_fictive = 0).",
+};
+
+/** Libellé humain des deux champs de vedette (2e ligne, sous le nom technique). */
+const VEDETTE = { ctc_status: "état CTC", ppf_usable: "PPF utilisable" };
+
+/** Pourquoi une source se tait. Jamais « false » : « je ne sais pas » et « non »
+ *  sont deux réponses différentes. */
+const MUETTE = {
+  annuaire_non_charge: "annuaire jamais chargé",
+  annuaire_vide: "annuaire vide",
+  hors_perimetre_0225: "hors périmètre des annuaires (0225)",
+};
+
+/** Classe de couleur d'un verdict. Quatre issues, pas deux : `later` basculera
+ *  seul le jour de l'activation, le peindre en rouge dirait « disqualifié ». */
+function classeVerdict(nom, valeur) {
+  if (valeur === null || valeur === undefined || valeur === "") return "verdict-nul";
+  if (nom === "ctc_status") {
+    return { ready: "verdict-ok", later: "verdict-later", expired: "verdict-ko" }[valeur]
+      || "verdict-nul";
+  }
+  return valeur === true ? "verdict-ok" : "verdict-ko";
+}
+
+/** Une ligne de champ. `vedette` agrandit et colore ; sinon rendu discret. */
+function ligneChamp(nom, valeur, vedette = false) {
+  const texte = valeur === null || valeur === undefined || valeur === "" ? "—" : String(valeur);
+  const cle = vedette
+    ? h("td", { class: "k" }, nom, h("span", { class: "lib" }, VEDETTE[nom]))
+    : h("td", { class: "k" }, nom);
+  const val = vedette
+    ? h("td", { class: "v" }, h("span", { class: classeVerdict(nom, valeur) }, texte))
+    : h("td", { class: `v ${valeur === true ? "t" : valeur === false ? "f" : ""}` }, texte);
+  return h("tr", { title: LEGENDE[nom], class: vedette ? "cle" : "" }, cle, val);
+}
+
+/** Une source muette : la raison, jamais une valeur. */
+function ligneMuette(nom, raison, vedette = false) {
+  const cle = vedette
+    ? h("td", { class: "k" }, nom, h("span", { class: "lib" }, VEDETTE[nom]))
+    : h("td", { class: "k" }, nom);
+  return h("tr", { title: LEGENDE[nom], class: vedette ? "cle" : "" },
+    cle,
+    h("td", { class: "v" }, h("span", { class: "verdict-nul" }, MUETTE[raison] || raison)));
+}
+
+function section(titre, ...lignes) {
+  return h("div", { class: "resolve-sect" },
+    h("div", { class: "resolve-sect-h" }, titre),
+    h("table", {}, ...lignes));
+}
+
+/** Rendu complet. Les trois sections sont toujours présentes : une source
+ *  muette se dit, elle ne disparaît pas. */
+function rendreResolution(r) {
+  const out = [];
+  out.push(h("p", { class: "resolve-canon" },
+    "Résolu comme ", h("span", { class: "v" }, r.canonique), ` · mode ${r.mode}`));
+
+  if (r.reseau.etat === "repond") {
+    const c = r.reseau.champs;
+    out.push(section(`Réseau Peppol · ${c.note ? c.note : `${r.reseau.latence_ms} ms`}`,
+      ligneChamp("in_peppol", c.in_peppol),
+      ligneChamp("pa_code", c.pa_code),
+      ligneChamp("pa_name", c.pa_name),
+      ligneChamp("pa_country", c.pa_country),
+      ligneChamp("ubl_extended", c.ubl_extended),
+      ligneChamp("ctc_activation", c.ctc_activation),
+      ligneChamp("ctc_expiration", c.ctc_expiration),
+      ligneChamp("ctc_status", c.ctc_status, true)));
+  } else {
+    out.push(h("div", { class: "banner err" }, `❌ ${r.reseau.message}`));
+  }
+
+  out.push(r.annuaire_peppol.etat === "repond"
+    ? section("Annuaire Peppol", ligneChamp("in_directory", r.annuaire_peppol.in_directory))
+    : section("Annuaire Peppol", ligneMuette("in_directory", r.annuaire_peppol.raison)));
+
+  out.push(r.ppf.etat === "repond"
+    ? section("Annuaire PPF",
+      ligneChamp("annuaire_ppf", r.ppf.annuaire_ppf),
+      ligneChamp("ppf_active", r.ppf.ppf_active),
+      ligneChamp("pdp_definie", r.ppf.pdp_definie),
+      ligneChamp("ppf_usable", r.ppf.ppf_usable, true))
+    : section("Annuaire PPF",
+      ligneMuette("annuaire_ppf", r.ppf.raison),
+      ligneMuette("ppf_usable", r.ppf.raison, true)));
+
+  return out;
+}
+
 // --- Profils de chargement : sauvegarde / chargement explicites -------------------
 // Un profil décrit COMMENT traiter un fichier (colonne des adressages, signature
 // de colonnes, colonnes de sortie, encodage/séparateur) ; sans chemin — un profil
