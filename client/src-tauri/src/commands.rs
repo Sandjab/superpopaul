@@ -2617,14 +2617,19 @@ mod tests {
 
     #[tokio::test]
     async fn la_loupe_envoie_la_forme_canonique_et_survit_a_un_echec_reseau() {
-        use wiremock::matchers::{method, path};
+        use wiremock::matchers::{body_partial_json, method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
         // Un SIREN nu doit partir en 0225 canonique : sans le préfixe, le hash
         // SML porterait sur la valeur nue et tout ressortirait « absent ».
+        // Le filtre porte sur le CORPS ENVOYÉ : `r.canonique` est recalculé au
+        // retour et resterait juste même si la requête partait en clair.
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/resolve/batch"))
+            .and(body_partial_json(serde_json::json!({
+                "participants": ["iso6523-actorid-upis::0225:552100554"]
+            })))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "results": [{
                     "participant_id": "iso6523-actorid-upis::0225:552100554",

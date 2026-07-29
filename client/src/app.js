@@ -113,10 +113,11 @@ function banner(kind, text, ...actionNodes) {
 }
 function hideBanner() { $("banner").className = "hidden"; }
 function modal(...nodes) {
-  // Le contenant est partagé par toutes les modales : la variante large d'une
-  // ouverture précédente doit tomber, sinon la confirmation suivante l'hérite.
+  // Le contenant est partagé par toutes les modales : les variantes d'une
+  // ouverture précédente doivent tomber, sinon la confirmation suivante en
+  // hérite. Toute nouvelle variante de `#modal` s'ajoute ici.
   const el = $("modal");
-  el.classList.remove("modal-wide");
+  el.classList.remove("modal-wide", "modal-resolve");
   el.replaceChildren(...nodes);
   $("modal-backdrop").classList.remove("hidden");
 }
@@ -961,8 +962,15 @@ $("btn-resolve").addEventListener("click", () => {
     id: "resolve-go", class: "btn-primary",
     onclick: () => lancerResolution(champ, sortie, go),
   }, "Résoudre");
+  // Le champ est vide à l'ouverture : un bouton d'apparence active qui ne fait
+  // rien laisse croire à une panne. C'est la saisie qui l'ouvre.
+  go.disabled = true;
+  champ.addEventListener("input", () => { go.disabled = !champ.value.trim(); });
   champ.addEventListener("keydown", (ev) => {
-    if (ev.key === "Enter") lancerResolution(champ, sortie, go);
+    // Même garde que le clic : sans elle, Entrée relance pendant qu'une
+    // résolution est en vol, et la réponse la plus lente s'affiche sous la
+    // forme canonique de la plus récente.
+    if (ev.key === "Enter" && !go.disabled) lancerResolution(champ, sortie, go);
   });
   modal(
     h("div", { class: "modal-h" },
@@ -974,6 +982,9 @@ $("btn-resolve").addEventListener("click", () => {
     h("p", { class: "resolve-hint" },
       "Le résultat n'est pas enregistré : consulter un compte ici ne le retire "
       + "pas du périmètre d'un run futur."));
+  // Contenu le plus haut de l'application : sans plafond de hauteur il déborde
+  // par le haut, hors d'atteinte (cf. `#modal.modal-resolve` dans styles.css).
+  $("modal").classList.add("modal-resolve");
   champ.focus();
 });
 
@@ -990,7 +1001,9 @@ async function lancerResolution(champ, sortie, go) {
     // déjà un texte en français, on ne le réécrit pas.
     sortie.replaceChildren(h("div", { class: "banner err" }, `❌ ${err}`));
   } finally {
-    go.disabled = false;
+    // Rouvert selon le champ, pas inconditionnellement : vidé pendant que la
+    // requête était en vol, il redeviendrait actif au-dessus d'une saisie vide.
+    go.disabled = !champ.value.trim();
   }
 }
 
@@ -1013,8 +1026,11 @@ const LEGENDE = {
   ppf_usable: "PPF utilisable — Au moins une même ligne à un motif actif configuré (défaut C / P) ET PDP réelle (pdp_fictive = 0).",
 };
 
-/** Libellé humain des deux champs de vedette (2e ligne, sous le nom technique). */
-const VEDETTE = { ctc_status: "état CTC", ppf_usable: "PPF utilisable" };
+/** Libellé humain d'un champ (2e ligne d'une vedette, sous le nom technique) :
+ *  la première moitié de sa légende. DÉRIVÉ, jamais recopié — une table à part
+ *  se périmerait en silence le jour où un libellé change dans
+ *  `docs/legende_champs.md`, que seul `LEGENDE` est tenu de suivre. */
+function libelle(nom) { return LEGENDE[nom].split(" — ")[0]; }
 
 /** Pourquoi une source se tait. Jamais « false » : « je ne sais pas » et « non »
  *  sont deux réponses différentes. */
@@ -1039,7 +1055,7 @@ function classeVerdict(nom, valeur) {
 function ligneChamp(nom, valeur, vedette = false) {
   const texte = valeur === null || valeur === undefined || valeur === "" ? "—" : String(valeur);
   const cle = vedette
-    ? h("td", { class: "k" }, nom, h("span", { class: "lib" }, VEDETTE[nom]))
+    ? h("td", { class: "k" }, nom, h("span", { class: "lib" }, libelle(nom)))
     : h("td", { class: "k" }, nom);
   const val = vedette
     ? h("td", { class: "v" }, h("span", { class: classeVerdict(nom, valeur) }, texte))
@@ -1050,16 +1066,21 @@ function ligneChamp(nom, valeur, vedette = false) {
 /** Une source muette : la raison, jamais une valeur. */
 function ligneMuette(nom, raison, vedette = false) {
   const cle = vedette
-    ? h("td", { class: "k" }, nom, h("span", { class: "lib" }, VEDETTE[nom]))
+    ? h("td", { class: "k" }, nom, h("span", { class: "lib" }, libelle(nom)))
     : h("td", { class: "k" }, nom);
   return h("tr", { title: LEGENDE[nom], class: vedette ? "cle" : "" },
     cle,
     h("td", { class: "v" }, h("span", { class: "verdict-nul" }, MUETTE[raison] || raison)));
 }
 
-function section(titre, ...lignes) {
+/** Une section, avec une `note` facultative du résolveur SOUS l'en-tête et non
+ *  dedans : `.resolve-sect-h` est en capitales espacées, où une note technique
+ *  devient illisible — et ces notes portent une URL, seule chaîne dont perdre
+ *  des caractères fait perdre la réponse à « pourquoi ce verdict ». */
+function section(titre, note, ...lignes) {
   return h("div", { class: "resolve-sect" },
     h("div", { class: "resolve-sect-h" }, titre),
+    ...(note ? [h("p", { class: "resolve-note" }, note)] : []),
     h("table", {}, ...lignes));
 }
 
@@ -1072,7 +1093,9 @@ function rendreResolution(r) {
 
   if (r.reseau.etat === "repond") {
     const c = r.reseau.champs;
-    out.push(section(`Réseau Peppol · ${c.note ? c.note : `${r.reseau.latence_ms} ms`}`,
+    // La latence reste dans l'en-tête : une note ne la remplace pas, les deux
+    // se lisent ensemble (un 403 en 2 s ne se diagnostique pas comme en 90 ms).
+    out.push(section(`Réseau Peppol · ${r.reseau.latence_ms} ms`, c.note,
       ligneChamp("in_peppol", c.in_peppol),
       ligneChamp("pa_code", c.pa_code),
       ligneChamp("pa_name", c.pa_name),
@@ -1086,16 +1109,16 @@ function rendreResolution(r) {
   }
 
   out.push(r.annuaire_peppol.etat === "repond"
-    ? section("Annuaire Peppol", ligneChamp("in_directory", r.annuaire_peppol.in_directory))
-    : section("Annuaire Peppol", ligneMuette("in_directory", r.annuaire_peppol.raison)));
+    ? section("Annuaire Peppol", null, ligneChamp("in_directory", r.annuaire_peppol.in_directory))
+    : section("Annuaire Peppol", null, ligneMuette("in_directory", r.annuaire_peppol.raison)));
 
   out.push(r.ppf.etat === "repond"
-    ? section("Annuaire PPF",
+    ? section("Annuaire PPF", null,
       ligneChamp("annuaire_ppf", r.ppf.annuaire_ppf),
       ligneChamp("ppf_active", r.ppf.ppf_active),
       ligneChamp("pdp_definie", r.ppf.pdp_definie),
       ligneChamp("ppf_usable", r.ppf.ppf_usable, true))
-    : section("Annuaire PPF",
+    : section("Annuaire PPF", null,
       ligneMuette("annuaire_ppf", r.ppf.raison),
       ligneMuette("ppf_usable", r.ppf.raison, true)));
 
