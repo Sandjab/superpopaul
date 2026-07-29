@@ -42,9 +42,56 @@ pub fn etat_annuaire_peppol(valeur_0225: Option<&str>, charge: bool, present: bo
     }
 }
 
+/// Ce que l'annuaire PPF a à dire. Les quatre drapeaux sont ceux de
+/// `store::ppf_flags`, recopiés tels quels.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "etat", rename_all = "snake_case")]
+pub enum Ppf {
+    Repond {
+        annuaire_ppf: bool,
+        ppf_active: bool,
+        pdp_definie: bool,
+        ppf_usable: bool,
+    },
+    Muette { raison: Muette },
+}
+
+/// Verdict de l'annuaire PPF. `non_vide` vient de
+/// `store::ppf_summary().distinct_addr > 0` ; `flags` de `store::ppf_flags`,
+/// qui n'a d'entrée que pour les identifiants trouvés.
+pub fn etat_ppf(
+    valeur_0225: Option<&str>,
+    non_vide: bool,
+    flags: Option<&crate::store::PpfFlags>,
+) -> Ppf {
+    match (valeur_0225, non_vide) {
+        (None, _) => Ppf::Muette { raison: Muette::HorsPerimetre0225 },
+        (Some(_), false) => Ppf::Muette { raison: Muette::AnnuaireVide },
+        (Some(_), true) => match flags {
+            Some(f) => Ppf::Repond {
+                annuaire_ppf: f.in_ppf,
+                ppf_active: f.active,
+                pdp_definie: f.pdp_definie,
+                ppf_usable: f.usable,
+            },
+            None => Ppf::Repond {
+                annuaire_ppf: false,
+                ppf_active: false,
+                pdp_definie: false,
+                ppf_usable: false,
+            },
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::PpfFlags;
+
+    fn flags(in_ppf: bool, active: bool, pdp_definie: bool, usable: bool) -> PpfFlags {
+        PpfFlags { in_ppf, active, pdp_definie, usable }
+    }
 
     #[test]
     fn hors_0225_prime_sur_l_annuaire_non_charge() {
@@ -73,6 +120,52 @@ mod tests {
         assert_eq!(
             etat_annuaire_peppol(Some("552100554"), true, false),
             Annuaire::Repond { in_directory: false }
+        );
+    }
+
+    #[test]
+    fn ppf_hors_0225_est_muet() {
+        assert_eq!(
+            etat_ppf(None, true, None),
+            Ppf::Muette { raison: Muette::HorsPerimetre0225 }
+        );
+    }
+
+    #[test]
+    fn ppf_vide_ne_dit_pas_false() {
+        assert_eq!(
+            etat_ppf(Some("552100554"), false, None),
+            Ppf::Muette { raison: Muette::AnnuaireVide }
+        );
+    }
+
+    #[test]
+    fn absent_d_un_annuaire_charge_est_un_vrai_non() {
+        // `ppf_flags` ne rend une entrée QUE pour les identifiants trouvés :
+        // absent de la map, annuaire non vide = il n'y est pas, pour de bon.
+        assert_eq!(
+            etat_ppf(Some("552100554"), true, None),
+            Ppf::Repond {
+                annuaire_ppf: false,
+                ppf_active: false,
+                pdp_definie: false,
+                ppf_usable: false,
+            }
+        );
+    }
+
+    #[test]
+    fn les_quatre_drapeaux_sont_recopies_sans_recalcul() {
+        // ppf_usable ne se déduit pas de active && pdp_definie : le store exige
+        // les deux sur la MÊME ligne. Recalculer ici inventerait un `true`.
+        assert_eq!(
+            etat_ppf(Some("x"), true, Some(&flags(true, true, true, false))),
+            Ppf::Repond {
+                annuaire_ppf: true,
+                ppf_active: true,
+                pdp_definie: true,
+                ppf_usable: false,
+            }
         );
     }
 }
