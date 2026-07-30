@@ -15,7 +15,13 @@
       <button data-step="run"     class="step" disabled>3. Run</button>
     </nav>
     <span class="cfg-btns">
-      <button id="btn-resolve" class="btn-ghost" title="Résoudre un adressage — consultation seule.">🔍</button>
+      <!-- Loupe en TRACÉ et non en emoji : 🔍 (U+1F50D) n'existe qu'en
+           présentation couleur, rendu par la police emoji du système, alors que
+           ⚙ (U+2699, sans sélecteur de variante) est un glyphe texte
+           monochrome. Deux polices, donc deux chasses et deux couleurs, qu'aucune
+           règle CSS ne peut réconcilier. Le SVG suit `currentColor`, donc la
+           couleur du bouton et son survol. -->
+      <button id="btn-resolve" class="btn-ghost" title="Résoudre un adressage — consultation seule."><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.6"/><path d="M10.5 10.5 L14 14"/></svg></button>
       <button id="btn-settings" class="btn-ghost" title="Réglages — appliqués et enregistrés à la fermeture.">⚙</button>
     </span>
   </header>
