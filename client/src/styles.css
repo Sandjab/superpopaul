@@ -58,7 +58,7 @@ button:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
    que la hauteur du bouton vienne de la même ligne de texte que son voisin
    (sinon les deux boîtes divergent), et descend sous la ligne de base pour
    s'aligner optiquement sur le centre du glyphe. */
-#btn-resolve svg { vertical-align: -0.2em; }
+#btn-resolve svg { vertical-align: -0.15em; }
 input, select {
   background: var(--bg); color: var(--fg); border: 1px solid var(--border);
   border-radius: 6px; padding: 5px 8px;
