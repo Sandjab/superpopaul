@@ -966,6 +966,16 @@ pub fn annuler_retrait(plan: &mut [LignePlan], cfs: &[String]) -> Result<(), Str
     Ok(())
 }
 
+/// Les comptes actifs d'un run, toutes origines confondues — la matière des
+/// gestes en lot (« exclure le run », « ne garder que… »). Les retirées sont
+/// exclues : on ne retire pas deux fois.
+pub fn cfs_actifs_du_run(plan: &[LignePlan], run_num: &str) -> Vec<String> {
+    plan.iter()
+        .filter(|l| l.run_num == run_num && !l.retiree())
+        .map(|l| l.cf.clone())
+        .collect()
+}
+
 fn ligne_de(
     c: &CfCandidat,
     run: &RunFacturation,
@@ -2559,6 +2569,44 @@ mod tests {
         retirer(&mut plan, &["CF1".into(), "CF3".into()], "lot", 1).unwrap();
         assert!(plan[0].retiree() && plan[2].retiree());
         assert!(!plan[1].retiree());
+    }
+
+    /// `lp` fige le run à « R1 » : ce qui suit trie précisément par run.
+    fn l_run(cf: &str, run: &str, pa: &str, origine: Origine) -> LignePlan {
+        let mut l = lp(cf, 5, pa, "2026-09-01", origine);
+        l.run_num = run.into();
+        l
+    }
+
+    #[test]
+    fn cfs_actifs_du_run_exclut_les_retirees_et_les_autres_runs() {
+        let mut retiree = l_run("CF2", "RF01", "Esalink", Origine::Auto);
+        retiree.retire = Some(Retrait { le: 1, motif: "déjà sorti".into() });
+        let plan = vec![
+            l_run("CF1", "RF01", "Esalink", Origine::Auto),
+            retiree,
+            l_run("CF3", "RF02", "Esalink", Origine::Auto),
+            // Origines confondues : exclure un run, c'est TOUT le run,
+            // épinglées comprises.
+            l_run("CF4", "RF01", "Serensia", Origine::Manuel),
+        ];
+        assert_eq!(cfs_actifs_du_run(&plan, "RF01"), vec!["CF1", "CF4"]);
+    }
+
+    #[test]
+    fn un_retrait_en_lot_pose_le_meme_horodatage_sur_toutes_ses_lignes() {
+        // VERROU DU REGROUPEMENT. Le rapport regroupe les retraits manuels par
+        // (le, motif) : un geste n'existe comme geste QUE parce que `retirer`
+        // reçoit un seul `maintenant` pour tout le lot. Si l'horloge se mettait
+        // à être lue par ligne, un run exclu deviendrait 143 gestes d'un compte.
+        let mut plan = vec![
+            l_run("CF1", "RF01", "Esalink", Origine::Auto),
+            l_run("CF2", "RF01", "Esalink", Origine::Auto),
+            l_run("CF3", "RF01", "Serensia", Origine::Auto),
+        ];
+        retirer(&mut plan, &["CF1".into(), "CF2".into(), "CF3".into()], "run exclu", 1_786_017_600)
+            .unwrap();
+        assert!(plan.iter().all(|l| l.retire.as_ref().unwrap().le == 1_786_017_600));
     }
 
     #[test]
