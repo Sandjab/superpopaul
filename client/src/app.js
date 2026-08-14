@@ -2449,7 +2449,7 @@ function ouvrirRetrait() {
     // Les fichiers sont cumulatifs : retirer d'une MEP livrée change un
     // fichier déjà transmis. C'est assumé, mais ça se dit au moment de l'acte.
     noeuds.push(h("div", { class: "danger-note" },
-      `⚠ ${geles.length} compte(s) appartiennent à une MEP gelée (${[...new Set(geles.map((l) => l.mep_date))].join(", ")}). `
+      `⚠ ${geles.length} compte(s) appartiennent à une MEP gelée (${[...new Set(geles.map((l) => fmtDateFr(l.mep_date)))].join(", ")}). `
       + "Son fichier a déjà été transmis : il changera au prochain tirage."));
   }
   noeuds.push(h("label", { class: "field-hint" }, "Motif du retrait (obligatoire)"), zone,
@@ -2990,11 +2990,23 @@ async function ouvrirAjoutRun(run, jour) {
 }
 
 /** Date du jour au format ISO, en heure LOCALE. `toISOString()` rendrait la
- *  date UTC : en soirée d'été, un run du jour passerait pour joué. */
+ *  date UTC : en soirée d'été, un run du jour passerait pour joué.
+ *
+ *  Aucun test ne verrouille ce choix : le harnais tourne dans le fuseau de la
+ *  machine, et le figer demanderait de piloter l'horloge du realm. Le verrou
+ *  est la lecture de cette ligne, puis l'application. */
 function aujourdhuiIso() {
   const d = new Date();
   const p = (n) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/** Epoch en SECONDES → « JJ/MM/AAAA », en heure locale pour la même raison
+ *  qu'`aujourdhuiIso`. */
+function fmtDateEpochFr(secondes) {
+  const d = new Date(secondes * 1000);
+  const p = (n) => String(n).padStart(2, "0");
+  return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()}`;
 }
 
 /** Badge d'origine d'une ligne, ou `null` pour une ligne simplement allouée —
@@ -3003,6 +3015,17 @@ function badgeOrigineAlleger(l) {
   if (l?.origine === "manuel") return h("span", { class: "epingle" }, "📌 ajouté à la main");
   if (l?.origine === "couverture") return h("span", { class: "epingle" }, "📌 couverture");
   return null;
+}
+
+/** Pourquoi CE compte est proposé au retrait plutôt qu'un autre : les deux
+ *  critères de l'ordre de sortie du décimage (`plan.rs`, l'inverse de
+ *  `trier_par_priorite`) — hors annuaire d'abord, puis les résolutions les
+ *  plus anciennes. Sans cette colonne, la proposition est à prendre ou à
+ *  laisser sans qu'on sache sur quoi l'amender. */
+function justificationRetrait(l) {
+  return l?.in_directory
+    ? h("span", { class: "why" }, `résolu le ${fmtDateEpochFr(l.resolved_at)}`)
+    : h("span", { class: "st st-none" }, "hors annuaire");
 }
 
 /** Alléger un run : retirer plusieurs comptes d'un coup, en UN SEUL retrait —
@@ -3047,9 +3070,14 @@ function ouvrirAllegerRun(run, jour) {
     if (mode === "selection") return actifs.filter((l) => !gardes.has(l.cf)).map((l) => l.cf);
     return (proposition ?? []).flatMap((g) => g.retirer);
   };
-  const motifSuffisant = () => (mode === "exclure"
-    ? zone.value.trim().length > PREREMPLI.trim().length
-    : zone.value.trim() !== "");
+  // En mode exclusion, il ne suffit pas d'écrire : il faut avoir écrit
+  // AUTRE CHOSE que ce qui était proposé. Comparer des longueurs refuserait
+  // « Run joué sans les comptes », plus court que le pré-remplissage et
+  // pourtant une cause. C'est l'intention qui se mesure, pas le volume.
+  const motifSuffisant = () => {
+    const m = zone.value.trim();
+    return mode === "exclure" ? m !== "" && m !== PREREMPLI.trim() : m !== "";
+  };
 
   const btn = h("button", { class: "btn-danger", onclick: (ev) =>
     occupe(ev.currentTarget, "Retrait en cours…", async () => {
@@ -3103,7 +3131,10 @@ function ouvrirAllegerRun(run, jour) {
         ? candidats.map((l) => h("div", { class: "cand" },
             h("span", { class: "cf" }, l.cf),
             h("span", { class: "rs" }, l.raison_sociale),
-            badgeOrigineAlleger(l) ?? h("span", { class: "why" }, `jour de cycle ${l.jj}`),
+            justificationRetrait(l),
+            // `append(null)` insérerait le texte « null » dans un vrai DOM —
+            // une chaîne vide est le motif du reste du fichier.
+            badgeOrigineAlleger(l) ?? "",
             h("button", { class: "lien", onclick: () => {
               g.retirer[g.retirer.indexOf(cf)] = l.cf;
               echangeOuvert = null;
@@ -3124,7 +3155,8 @@ function ouvrirAllegerRun(run, jour) {
       lignes.push(h("div", { class: "pa-row" },
         h("span", { class: "cf" }, cf),
         h("span", { class: "rs" }, l?.raison_sociale ?? ""),
-        badgeOrigineAlleger(l) ?? h("span", { class: "why" }, `jour de cycle ${l?.jj ?? "?"}`),
+        justificationRetrait(l),
+        badgeOrigineAlleger(l),
         h("button", { class: "lien", onclick: () => {
           echangeOuvert = ouvert ? null : cf;
           dessinerCorps();
@@ -3189,13 +3221,17 @@ function ouvrirAllegerRun(run, jour) {
           dessinerCorps();
         } });
         cb.checked = gardes.has(l.cf);
+        const epingle = badgeOrigineAlleger(l);
         return h("tr", { class: gardes.has(l.cf) ? "sel" : "" },
           h("td", {}, cb),
           h("td", { class: "cf" }, l.cf),
           h("td", {}, l.raison_sociale),
           h("td", { class: "pa" }, l.pa),
           h("td", { class: "jj" }, String(l.jj)),
-          h("td", {}, badgeOrigineAlleger(l) ?? h("span", { class: "pa" }, "tirage")));
+          // `table.plan-data td.pa` atténue la cellule : la classe se pose sur
+          // le `td`, pas sur un span à l'intérieur, sinon « tirage » ressort
+          // autant qu'une origine qui, elle, mérite le regard.
+          epingle ? h("td", {}, epingle) : h("td", { class: "pa" }, "tirage"));
       }))),
   ];
 
@@ -3228,8 +3264,10 @@ function ouvrirAllegerRun(run, jour) {
       h("h3", { style: "margin:2px 0 0" }, `Alléger le run ${run.num}`),
       h("div", { class: "add-run" },
         h("span", {}, "Run ", h("b", {}, run.num), " du ", h("b", {}, fmtDateFr(jour.date))),
-        h("span", { class: "jjs" }, "jours de cycle ",
-          ...(run.jjs ?? []).map((j) => h("code", {}, String(j)))),
+        // Les jours de cycle disent ce qu'on POURRAIT encore placer sur ce
+        // run : sans objet pour un run déjà joué, qu'on ne fait que quitter.
+        ...(passe ? [] : [h("span", { class: "jjs" }, "jours de cycle ",
+          ...(run.jjs ?? []).map((j) => h("code", {}, String(j))))]),
         h("span", { class: "jjs" }, `${fmtN(actifs.length)} comptes actifs`)),
       bascule),
     corps, avert,

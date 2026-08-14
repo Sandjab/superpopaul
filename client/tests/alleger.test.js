@@ -16,6 +16,12 @@ function ligne(cf, extra = {}) {
     cf, participant: `iso6523-actorid-upis::0225:${cf}`, raison_sociale: `Société ${cf}`,
     jj: 5, pa: "Cegedim", mep_id: 1, mep_date: "2026-09-01", run_num: "RF01",
     run_date: "2026-09-10", origine: "auto", etat: "eligible", gelee: false,
+    // Les deux critères de l'ordre de sortie du décimage, que la modale
+    // affiche en clair. `resolved_at` est un epoch en SECONDES, posé à midi
+    // UTC : le JOUR reste hors de portée de presque tous les fuseaux — mais
+    // pas de tous (l'amplitude des fuseaux dépasse 24 h), d'où des assertions
+    // sur le format et l'année, jamais sur le quantième.
+    in_directory: true, resolved_at: 1_773_144_000, // 10/03/2026 à 12h00 UTC
     retire_motif: null, ...extra,
   };
 }
@@ -139,7 +145,10 @@ test("run passé : seul l'exclusion est offerte, et le motif reste à compléter
   // entier — épinglées comprises. Et le motif pré-rempli dit QUEL run est
   // exclu, jamais POURQUOI : c'est la cause que le rapport transmettra.
   const ctx = ecran([
-    ligne("CF1"), ligne("CF2"), ligne("CF3"),
+    ligne("CF1"), ligne("CF2"),
+    // Exclure un run, c'est TOUT le run : une ligne ajoutée à la main, que la
+    // régénération préserverait, part avec les autres.
+    ligne("CF3", { origine: "manuel" }),
     ligne("CF4", { retire_motif: "retiré la semaine dernière" }),
   ]);
   ctx.app.ouvrirAllegerRun(RUN, JOUR_PASSE);
@@ -162,8 +171,30 @@ test("run passé : seul l'exclusion est offerte, et le motif reste à compléter
 
   const partis = retraits(ctx);
   assert.equal(partis.length, 1, "un geste = un seul retrait, c'est ce que le rapport regroupe");
-  assert.deepEqual(partis[0].cfs, ["CF1", "CF2", "CF3"]);
+  assert.deepEqual(partis[0].cfs, ["CF1", "CF2", "CF3"], "CF3 est épinglée et part quand même");
   assert.match(partis[0].motif, /incident chez le prestataire$/);
+  // Régression classique du projet : le geste passe, l'écran reste sur l'état
+  // d'avant et l'utilisateur le refait.
+  assert.ok(ctx.invocations.some(([c]) => c === "plan_lignes"),
+    "le récap doit être rechargé après le retrait");
+});
+
+test("un motif plus court que le pré-remplissage reste un motif", async () => {
+  // Le prédicat a d'abord comparé des LONGUEURS : « Run joué sans les comptes »
+  // laissait le bouton inerte sans rien dire, alors que la cause est écrite.
+  // Ce qui se mesure est l'intention — avoir écrit autre chose que ce qui
+  // était proposé —, pas le volume de texte.
+  const ctx = ecran([ligne("CF1")]);
+  ctx.app.ouvrirAllegerRun(RUN, JOUR_PASSE);
+  const COURT = "Run joué sans les comptes";
+  assert.ok(COURT.length < champMotif(ctx.$).value.trim().length,
+    "le motif de ce test doit bien être plus court que le pré-remplissage");
+
+  taperMotif(ctx.$, COURT);
+  assert.equal(bouton(ctx.$, "Retirer 1 compte(s)").disabled, false);
+
+  await bouton(ctx.$, "Retirer 1 compte(s)").click();
+  assert.equal(retraits(ctx)[0].motif, COURT);
 });
 
 test("run à venir, mode sélection : ce qui n'est pas coché part au retrait", async () => {
@@ -189,16 +220,70 @@ test("run à venir, mode sélection : ce qui n'est pas coché part au retrait", 
   assert.deepEqual(partis[0].cfs, ["CF2", "CF3"], "on coche ce qu'on GARDE, le reste part");
 });
 
+test("l'origine « tirage » est atténuée par la cellule, pas par un span", () => {
+  // `table.plan-data td.pa` cible le TD : posée sur un span, la classe ne
+  // rencontre jamais sa règle et « tirage » ressort autant qu'une épingle,
+  // qui elle mérite le regard.
+  const ctx = ecran([ligne("CF1")]);
+  ctx.app.ouvrirAllegerRun(RUN, JOUR_FUTUR);
+  bouton(ctx.$, "Ne garder que ma sélection").click();
+
+  const cellule = trouver(ctx.$("modal"),
+    (n) => n.tagName === "td" && n.textContent === "tirage");
+  assert.ok(cellule, "une ligne simplement allouée annonce son origine");
+  assert.equal(cellule.className, "pa");
+});
+
+test("un run passé n'annonce pas ses jours de cycle", () => {
+  // Ils disent ce qu'on POURRAIT encore placer sur ce run : sans objet pour un
+  // run déjà joué, qu'on ne fait que quitter.
+  const ctx = ecran([ligne("CF1")]);
+  ctx.app.ouvrirAllegerRun(RUN, JOUR_PASSE);
+  assert.ok(!ctx.$("modal").textContent.includes("jours de cycle"),
+    "l'en-tête d'un run passé se limite au run, à sa date et à ses comptes actifs");
+
+  ctx.app.ouvrirAllegerRun(RUN, JOUR_FUTUR);
+  assert.ok(ctx.$("modal").textContent.includes("jours de cycle"),
+    "un run à venir, lui, les annonce — sinon ce test ne prouverait rien");
+});
+
+test("tout garder n'est pas un geste : le bouton se referme", () => {
+  // « Retirer 0 compte(s) » partirait au backend écrire un motif pour rien.
+  const ctx = ecran([ligne("CF1"), ligne("CF2")]);
+  ctx.app.ouvrirAllegerRun(RUN, JOUR_FUTUR);
+  bouton(ctx.$, "Ne garder que ma sélection").click();
+  taperMotif(ctx.$, "un motif parfaitement valable");
+
+  const cases = casesACocher(ctx.$("modal"));
+  cocher(cases[0]);
+  assert.equal(bouton(ctx.$, "Retirer 1 compte(s)").disabled, false,
+    "il reste un compte à retirer : le geste existe");
+
+  cocher(casesACocher(ctx.$("modal"))[1]);
+  assert.equal(bouton(ctx.$, "Retirer 0 compte(s)").disabled, true,
+    "tout est gardé, il n'y a plus rien à retirer");
+});
+
+/** La ligne de la proposition qui porte ce compte. */
+function ligneProposee(ctx, cf) {
+  const l = trouver(ctx.$("modal"),
+    (n) => n.className === "pa-row" && n.textContent.includes(cf));
+  assert.ok(l, `aucune ligne proposée pour ${cf}`);
+  return l;
+}
+
 /** Proposition du backend : 1 Cegedim sur 2 actifs, 1 Esalink sur 1 actif. */
 const PROPOSITION = [
   { pa: "Cegedim", retirer: ["CF3"], actifs: 2 },
   { pa: "Esalink", retirer: ["CF2"], actifs: 1 },
 ];
 
-/** Run à venir de 3 comptes, deux plateformes, prêt pour le mode prorata. */
+/** Run à venir de 3 comptes, deux plateformes, prêt pour le mode prorata.
+ *  CF3 est hors annuaire : c'est le premier critère de sortie du décimage, et
+ *  la modale doit le dire là où elle propose de le retirer. */
 function ecranProrata() {
   const ctx = ecran(
-    [ligne("CF1"), ligne("CF2", { pa: "Esalink" }), ligne("CF3")],
+    [ligne("CF1"), ligne("CF2", { pa: "Esalink" }), ligne("CF3", { in_directory: false })],
     (cmd) => (cmd === "plan_proposer_retrait"
       ? ctx.evaluer(`(${JSON.stringify(PROPOSITION)})`) : null));
   ctx.app.ouvrirAllegerRun(RUN, JOUR_FUTUR);
@@ -219,6 +304,16 @@ test("run à venir, mode prorata : la proposition part au retrait telle quelle",
   assert.deepEqual({ ...demande[1] }, { runNum: "RF01", n: 2 });
   assert.match(ctx.$("modal").textContent, /Cegedim.*1 sur 2/s,
     "la proposition se lit par plateforme : c'est ce qui prouve la répartition conservée");
+  // Sans la justification, la proposition est à prendre ou à laisser sans
+  // qu'on sache sur quoi l'amender. Chaque motif est vérifié SUR SA LIGNE :
+  // les chercher dans la modale entière laisserait passer une justification
+  // attribuée au mauvais compte.
+  assert.match(ligneProposee(ctx, "CF3").textContent, /hors annuaire/,
+    "CF3 est hors annuaire : le premier critère de sortie du décimage");
+  assert.match(ligneProposee(ctx, "CF2").textContent, /résolu le \d{2}\/\d{2}\/2026/,
+    "CF2 est dans l'annuaire : sa date de résolution se lit en clair, jamais en epoch ni en ISO");
+  assert.ok(!ligneProposee(ctx, "CF2").textContent.includes("hors annuaire"),
+    "et les deux justifications ne se confondent pas");
 
   taperMotif(ctx.$, "volume du run revu à la baisse");
   await bouton(ctx.$, "Retirer 2 compte(s)").click();

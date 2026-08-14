@@ -1441,6 +1441,12 @@ pub struct LigneRecap {
     /// « eligible » · « ctc_non_pret » · « ppf_non_utilisable » ·
     /// « absent_du_fichier ».
     pub etat: String,
+    /// Les deux critères d'ordre de `proposer_retrait_proportionnel` (hors
+    /// annuaire d'abord, puis les résolutions les plus anciennes) : la modale
+    /// « alléger un run » s'en sert pour dire POURQUOI un compte est proposé
+    /// au retrait plutôt qu'un autre. `resolved_at` est un epoch en secondes.
+    pub in_directory: bool,
+    pub resolved_at: i64,
 }
 
 /// Un compte du fichier absent du plan, proposable à l'ajout.
@@ -1496,6 +1502,8 @@ pub async fn plan_lignes(state: State<'_, AppState>) -> Result<Vec<LigneRecap>, 
                 .into(),
                 mep_date: l.mep_date.to_string(),
                 run_date: l.run_date.to_string(),
+                in_directory: l.in_directory,
+                resolved_at: l.resolved_at,
                 cf: l.cf,
                 participant: l.participant,
                 raison_sociale: l.raison_sociale,
