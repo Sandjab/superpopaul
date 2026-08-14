@@ -888,16 +888,24 @@ mod tests {
         // autres tableaux sont générés par le code (`format!`), celui-ci est
         // tapé dans une boîte de dialogue. Un `esc` oublié ici injecte du
         // balisage dans une pièce transmise.
-        // Le geste MULTIPLE écrit son motif au chapeau, le geste isolé dans sa
-        // cellule : deux points d'insertion, tous deux exercés ici.
+        // QUATRE points d'insertion, tous exercés ici : le chapeau du geste
+        // multiple et la cellule du geste isolé, dans le tableau ; les deux
+        // branches de l'alerte rouge, agrégée et unitaire. Les comptes sont
+        // donc GELÉS — un fixture entièrement non gelé ne rend pas la section
+        // d'alerte du tout, et ses deux `esc` peuvent alors disparaître sans
+        // qu'un test rougisse.
         let r = vide();
         let gestes = vec![
             geste(
                 "2026-07-31",
                 "A&B <script>alert(2)</script>",
-                &[("<script>alert(1)</script>", false), ("4100243662", false)],
+                &[("<script>alert(1)</script>", true), ("4100243662", true)],
             ),
-            geste("2026-08-06", "A&B <script>alert(3)</script>", &[("4100247788", false)]),
+            geste(
+                "2026-08-06",
+                "A&B <script>alert(3)</script>",
+                &[("<script>alert(4)</script>", true)],
+            ),
         ];
         let mut d = donnees(&r);
         d.gestes_manuels = &gestes;

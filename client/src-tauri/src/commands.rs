@@ -2643,6 +2643,18 @@ mod tests {
     }
 
     #[test]
+    fn un_retrait_le_jour_meme_de_sa_mep_n_est_pas_gele() {
+        // BORNE STRICTE, alignée sur `LignePlan::gelee` (`mep_date <
+        // aujourdhui`) : le fichier de la MEP du jour n'est pas encore un
+        // fichier d'hier. Retirer un compte le matin de sa MEP ne dément aucun
+        // fichier déjà transmis — passer la comparaison à `<=` ferait basculer
+        // en alerte rouge tous les retraits du jour de leur mise en production.
+        let lignes = vec![ligne_retiree("4100238091", "2026-08-06", LE_6_AOUT, "litige")];
+        let g = gestes_manuels_depuis(&lignes, None);
+        assert!(!g[0].comptes[0].gelee);
+    }
+
+    #[test]
     fn un_retrait_posterieur_a_sa_mep_est_gele() {
         // MEP du 12/06, retrait le 06/08 : le fichier transmis contenait le
         // compte. C'est ce drapeau qui envoie la ligne dans l'alerte rouge.
