@@ -111,12 +111,17 @@ arrivent formatées.
 
 ```rust
 /// Un compte retiré à la main, tel que le rapport en parle.
-pub struct RetraitManuel<'a> {
-    pub cf: &'a str,
-    /// Date du retrait, déjà formatée — ce module n'a pas d'horloge.
-    pub le: &'a str,
+///
+/// **Propriétaire de ses chaînes**, comme `PositionAvant` et contrairement à
+/// `FichierLivre` : la date est calculée par la commande — conversion d'un
+/// horodatage stocké — et n'existe donc nulle part où l'emprunter.
+pub struct RetraitManuel {
+    pub cf: String,
+    /// Date du retrait, **en ISO**, comme `PositionAvant::run_date` et
+    /// `FichierLivre::mep_date`. La mise en forme est celle du module.
+    pub le: String,
     /// Saisi par l'utilisateur. **Texte libre**, échappé au point d'insertion.
-    pub motif: &'a str,
+    pub motif: String,
     /// La MEP de la ligne est passée : le compte figure dans un fichier déjà
     /// transmis. Même conséquence qu'un `Ecart.gelee`, même traitement.
     pub gelee: bool,
@@ -124,21 +129,39 @@ pub struct RetraitManuel<'a> {
 
 /// Ce que la liste des retraits manuels prend pour origine. Le document écrit
 /// la date ET ce qu'elle désigne : « depuis le 28/07 » ne dit pas au lecteur
-/// pourquoi la liste commence là.
-pub enum Depuis<'a> {
-    DernierRapprochement(&'a str),
+/// pourquoi la liste commence là. Dates ISO, comme partout dans le module.
+pub enum Depuis {
+    DernierRapprochement(String),
     /// Le plan n'a jamais été rapproché.
-    GenerationDuPlan(&'a str),
+    GenerationDuPlan(String),
 }
 ```
 
 `RapprochementReportData` gagne deux champs :
 
 ```rust
-    /// Triés par date de retrait puis n° de CF.
-    pub retraits_manuels: &'a [RetraitManuel<'a>],
-    pub depuis: Depuis<'a>,
+    /// Triés par la commande — date de retrait puis n° de CF. Le rendu ne
+    /// réordonne pas.
+    pub retraits_manuels: &'a [RetraitManuel],
+    pub depuis: &'a Depuis,
 ```
+
+Le tri appartient au producteur et non au rendu : c'est la commande qui connaît
+les horodatages bruts, et un module de rendu qui trie devient un module qui
+décide.
+
+### La déduction est une fonction pure
+
+Le filigrane vit dans `commands::retraits_manuels_depuis(lignes, rapproche_le,
+aujourdhui)`, fonction **libre**, sans `tauri::State` — donc testable, comme
+`fichiers_obsoletes` et `avertissement_ppf_cumulatif`. C'est la condition pour
+que la règle centrale du lot soit couverte par des tests plutôt que par un
+parcours d'IHM.
+
+Elle rend les dates en ISO **du fuseau local** : les horodatages sont posés en
+UTC, mais le document est lu par celui qui a fait le geste, à son heure. La
+conversion passe par `Utc` avant `Local` — un instant UTC n'est jamais ambigu,
+là où `Local.timestamp_opt` l'est deux heures par an.
 
 `RapprochementVue` (`commands.rs:1803`) gagne un **compte**, pas une liste — le
 lot 2 en a besoin pour décider si son bouton est actif, et l'écran n'affiche pas
