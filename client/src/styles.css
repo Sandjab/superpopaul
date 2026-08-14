@@ -472,6 +472,73 @@ table.plan-data tr.warn td.cf::after {
 .add-count .warn-n { color: var(--amber); }
 .add-foot .spacer { flex: 1; }
 
+/* --- Alléger un run (maquette du 14/08/2026) --------------------------------
+   La fenêtre reprend l'ossature de l'ajout (.add-head/.add-scroll/.add-foot) ;
+   seul le corps est propre à ce geste. */
+.alleger-corps { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
+
+/* Bascule entre les deux modes d'un run à venir. Segments plutôt que liste
+   déroulante : les deux modes doivent être lisibles sans être ouverts, ils
+   décrivent deux gestes différents et non deux valeurs d'un même réglage.
+   L'or marque le segment actif, comme il marque déjà la colonne triée. */
+.modes {
+  display: flex; gap: 0; margin: 2px 0 10px; border: 1px solid var(--border);
+  border-radius: 7px; overflow: hidden; width: fit-content; max-width: 100%;
+}
+.modes button {
+  border: 0; border-radius: 0; background: transparent; color: var(--muted);
+  padding: 7px 14px; font-size: 13px;
+}
+.modes button + button { border-left: 1px solid var(--border); }
+.modes button.on { background: var(--btn2); color: var(--gold); font-weight: 600; }
+.modes button:hover:not(.on) { color: var(--fg); }
+
+/* Mode unique d'un run passé : pas de bascule à offrir, mais le geste se nomme
+   quand même — sinon la modale n'annonce pas ce qu'elle va faire. */
+.mode-uniq {
+  background: var(--btn2); border: 1px solid var(--border); border-left: 3px solid var(--red);
+  border-radius: 7px; padding: 9px 13px; font-size: 13px; margin: 2px 0 8px;
+}
+.mode-uniq b { color: var(--fg); }
+
+.prop-saisie { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; margin: 2px 0 4px; }
+/* Porté par `#modal` : la règle générique `#modal input` (width: 100 %) est
+   plus spécifique qu'un simple sélecteur de classe, et étirerait le champ. */
+#modal .prop-saisie input[type="number"] { width: 82px; text-align: right; margin: 0; }
+
+/* Proposition, groupée par plateforme. Le groupe porte le compte « retirés sur
+   actifs » : c'est lui qui prouve que la répartition est conservée. */
+.pa-grp { border: 1px solid var(--border); border-radius: 8px; margin: 0 0 8px; overflow: hidden; }
+.pa-grp-h {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 7px 12px;
+  background: var(--track); border-bottom: 1px solid var(--border); font-size: 13px;
+}
+.pa-grp-h .pa-n { font-weight: 700; color: var(--fg); }
+.pa-grp-h .pa-part { color: var(--muted); font-size: 12.5px; }
+.pa-grp.vide .pa-grp-h { background: transparent; border-bottom: none; color: var(--muted); }
+.pa-grp.vide .pa-grp-h .pa-n { color: var(--muted); font-weight: 600; }
+.pa-row {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 6px 12px;
+  border-bottom: 1px solid var(--border); font-size: 13px;
+}
+.pa-grp .pa-row:last-child { border-bottom: none; }
+.pa-row .cf { font-variant-numeric: tabular-nums; min-width: 98px; }
+.pa-row .rs { flex: 1; min-width: 170px; color: var(--fg); }
+.pa-row .why, .echange .why { color: var(--muted); font-size: 12px; }
+.lien {
+  background: none; border: 0; padding: 0; color: var(--gold); font-size: 12.5px;
+  text-decoration: underline; cursor: pointer;
+}
+.lien:hover { color: var(--gold-hover); border-color: transparent; }
+/* Panneau d'échange, ouvert sous le compte qu'il remplace : les candidats sont
+   ceux de LA MÊME plateforme, sinon l'échange casse la répartition. */
+.echange { padding: 8px 12px 10px; background: var(--bg); border-bottom: 1px solid var(--border); }
+.echange .t { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+.echange .cand { display: flex; align-items: center; gap: 10px; padding: 4px 0; font-size: 13px; }
+.echange .cand .cf { min-width: 98px; font-variant-numeric: tabular-nums; }
+.echange .cand .rs { flex: 1; min-width: 150px; }
+.epingle { color: var(--gold); font-size: 12px; white-space: nowrap; }
+
 /* --- Banc d'essai du calibrage (modale) ------------------------------------
    Une colonne par palier : valeur (adr/s), barre, label (nb de sessions).
    Hauteurs pilotées par app.js (normalisées sur le meilleur débit vu). */

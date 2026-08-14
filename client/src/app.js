@@ -2980,6 +2980,258 @@ async function ouvrirAjoutRun(run, jour) {
   $("modal").classList.add("modal-wide");
 }
 
+/** Date du jour au format ISO, en heure LOCALE. `toISOString()` rendrait la
+ *  date UTC : en soirée d'été, un run du jour passerait pour joué. */
+function aujourdhuiIso() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/** Badge d'origine d'une ligne, ou `null` pour une ligne simplement allouée —
+ *  ce qu'une ligne épinglée coûte à retirer se lit là. */
+function badgeOrigineAlleger(l) {
+  if (l?.origine === "manuel") return h("span", { class: "epingle" }, "📌 ajouté à la main");
+  if (l?.origine === "couverture") return h("span", { class: "epingle" }, "📌 couverture");
+  return null;
+}
+
+/** Alléger un run : retirer plusieurs comptes d'un coup, en UN SEUL retrait —
+ *  une date, un motif, une écriture. C'est ce qui permet au rapport de
+ *  rapprochement de regrouper les comptes sous un chapeau au lieu de répéter
+ *  143 fois la même phrase.
+ *
+ *  La date du run décide de ce qui est offert : un run déjà joué ne se
+ *  rééquilibre pas, il s'exclut en entier ; un run à venir se décime
+ *  (répartition des plateformes conservée) ou se réduit à une sélection.
+ *  Aucune répartition n'est calculée ici : elle vient de
+ *  `plan_proposer_retrait`, l'IHM ne fait qu'afficher et amender. */
+function ouvrirAllegerRun(run, jour) {
+  const actifs = plan.lignes.filter((l) => l.run_num === run.num && l.retire_motif == null);
+  if (!actifs.length)
+    return planBanner("info", `Aucun compte actif sur le run ${run.num} : rien à alléger.`);
+
+  const passe = jour.date < aujourdhuiIso();
+  // Dit QUEL run est exclu, jamais POURQUOI : le bouton reste inerte tant que
+  // rien n'est écrit après le tiret, car c'est la cause que le rapport
+  // transmettra au destinataire six mois plus tard.
+  const PREREMPLI = `Run ${run.num} du ${fmtDateFr(jour.date)} exclu a posteriori — `;
+
+  let mode = passe ? "exclure" : "prorata";
+  const gardes = new Set();   // mode « ne garder que » : les comptes cochés
+  let proposition = null;     // mode prorata : [{pa, retirer[], actifs}], amendable
+  let erreurProposition = null;
+  let echangeOuvert = null;   // compte dont le panneau d'échange est déplié
+
+  // Le pré-remplissage passe par la PROPRIÉTÉ : un textarea ignore un attribut
+  // `value`, son contenu est son enfant texte.
+  const zone = h("textarea", { rows: "3", style: "width:100%;margin:8px 0" });
+  zone.value = passe ? PREREMPLI : "";
+  const champN = h("input", { type: "number", min: "1", max: String(actifs.length - 1) });
+  const corps = h("div", { class: "alleger-corps" });
+  const avert = h("div", {});
+  const compte = h("span", { class: "add-count" });
+  const bascule = h("div", { class: "modes" });
+
+  const cfsARetirer = () => {
+    if (mode === "exclure") return actifs.map((l) => l.cf);
+    if (mode === "selection") return actifs.filter((l) => !gardes.has(l.cf)).map((l) => l.cf);
+    return (proposition ?? []).flatMap((g) => g.retirer);
+  };
+  const motifSuffisant = () => (mode === "exclure"
+    ? zone.value.trim().length > PREREMPLI.trim().length
+    : zone.value.trim() !== "");
+
+  const btn = h("button", { class: "btn-danger", onclick: (ev) =>
+    occupe(ev.currentTarget, "Retrait en cours…", async () => {
+      try {
+        const obsoletes = await invoke("plan_retirer", { cfs: cfsARetirer(), motif: zone.value });
+        plan.sel.clear(); signalerObsoletes(obsoletes); await rechargerRecap();
+      } catch (e) { planBanner("error", String(e)); }
+      closeModal();
+    }) }, "");
+
+  /** Ce qui dépend de l'état sans dépendre du mode : l'avertissement de MEP
+   *  gelée, le pied compteur et le bouton. Les nœuds sont STABLES — un bouton
+   *  reconstruit perdrait l'écouteur qui vient de le rouvrir. */
+  function rafraichir() {
+    const cfs = cfsARetirer();
+    const geles = actifs.filter((l) => cfs.includes(l.cf) && l.gelee);
+    // Les fichiers sont cumulatifs : retirer d'une MEP livrée change un fichier
+    // déjà transmis. C'est assumé, mais ça se dit au moment de l'acte.
+    avert.replaceChildren(...(geles.length ? [h("div", { class: "danger-note" },
+      `⚠ ${fmtN(geles.length)} compte(s) appartiennent à une MEP gelée `
+      + `(${[...new Set(geles.map((l) => fmtDateFr(l.mep_date)))].join(", ")}). `
+      + "Son fichier a déjà été transmis : il changera au prochain tirage.")] : []));
+    compte.replaceChildren(...(mode === "selection"
+      ? [h("b", {}, fmtN(gardes.size)), " gardé(s) — ", h("b", {}, fmtN(cfs.length)), " seront retiré(s)"]
+      : mode === "prorata" && cfs.length
+        ? [h("b", {}, fmtN(cfs.length)), " seront retiré(s) — ",
+           h("b", {}, fmtN(actifs.length - cfs.length)), " resteront actifs sur ce run"]
+        : []));
+    btn.textContent = `Retirer ${fmtN(cfs.length)} compte(s)`;
+    btn.disabled = !cfs.length || !motifSuffisant();
+  }
+
+  const corpsExclure = () => [
+    h("div", { class: "mode-uniq" }, h("b", {}, "Exclure le run"),
+      ` — les ${fmtN(actifs.length)} lignes actives du run sont retirées du plan, épinglées comprises.`),
+    h("p", { class: "field-hint" },
+      "Les lignes restent consultables via le filtre « retiré » et ne seront pas replacées "
+      + "par une régénération. Le retrait est annulable."),
+  ];
+
+  /** Candidats à l'échange : les actifs de LA MÊME plateforme que la
+   *  proposition n'a pas retenus. Un échange ne change pas le nombre de
+   *  retirés de la plateforme — la répartition, et le plancher d'un compte
+   *  actif, tiennent quel que soit le choix. */
+  function panneauEchange(g, cf) {
+    const candidats = actifs.filter((l) => l.pa === g.pa && !g.retirer.includes(l.cf));
+    return h("div", { class: "echange" },
+      h("div", { class: "t" }, "Remplacer ", h("b", {}, cf),
+        ` par un autre compte ${g.pa} de ce run :`),
+      ...(candidats.length
+        ? candidats.map((l) => h("div", { class: "cand" },
+            h("span", { class: "cf" }, l.cf),
+            h("span", { class: "rs" }, l.raison_sociale),
+            badgeOrigineAlleger(l) ?? h("span", { class: "why" }, `jour de cycle ${l.jj}`),
+            h("button", { class: "lien", onclick: () => {
+              g.retirer[g.retirer.indexOf(cf)] = l.cf;
+              echangeOuvert = null;
+              dessinerCorps();
+            } }, "choisir")))
+        : [h("div", { class: "cand" }, h("span", { class: "why" },
+            "aucun autre compte actif de cette plateforme sur ce run"))]));
+  }
+
+  /** Un groupe de la proposition. Le compte « retirés sur actifs » porté par
+   *  l'en-tête est ce qui prouve la répartition conservée. */
+  function groupeProposition(g) {
+    const part = Math.round((g.actifs / actifs.length) * 100);
+    const lignes = [];
+    for (const cf of g.retirer) {
+      const l = actifs.find((x) => x.cf === cf);
+      const ouvert = echangeOuvert === cf;
+      lignes.push(h("div", { class: "pa-row" },
+        h("span", { class: "cf" }, cf),
+        h("span", { class: "rs" }, l?.raison_sociale ?? ""),
+        badgeOrigineAlleger(l) ?? h("span", { class: "why" }, `jour de cycle ${l?.jj ?? "?"}`),
+        h("button", { class: "lien", onclick: () => {
+          echangeOuvert = ouvert ? null : cf;
+          dessinerCorps();
+        } }, ouvert ? "fermer" : "échanger")));
+      if (ouvert) lignes.push(panneauEchange(g, cf));
+    }
+    return h("div", { class: `pa-grp${g.retirer.length ? "" : " vide"}` },
+      h("div", { class: "pa-grp-h" },
+        h("span", { class: "pa-n" }, g.pa),
+        h("span", {}, `— ${fmtN(g.retirer.length)} sur ${fmtN(g.actifs)}`),
+        h("span", { style: "flex:1" }),
+        h("span", { class: "pa-part" }, g.retirer.length
+          ? `${part} % du run · ${fmtN(g.actifs - g.retirer.length)} resteront actifs`
+          : `${part} % du run · aucun compte proposé`)),
+      ...lignes);
+  }
+
+  const proposer = h("button", { onclick: (ev) =>
+    occupe(ev.currentTarget, "Calcul en cours…", async () => {
+      const n = Number(champN.value);
+      proposition = null; echangeOuvert = null; erreurProposition = null;
+      if (!Number.isInteger(n) || n < 1) {
+        erreurProposition = "Indique le nombre de comptes à retirer (au moins 1).";
+      } else {
+        try {
+          // La proposition est COPIÉE : l'échange l'amende sur place, et le
+          // retour du backend n'est pas à nous.
+          proposition = (await invoke("plan_proposer_retrait", { runNum: run.num, n }))
+            .map((g) => ({ pa: g.pa, actifs: g.actifs, retirer: [...g.retirer] }));
+        } catch (e) { erreurProposition = String(e); }
+      }
+      // La modale reste ouverte : le champ que le message invite à corriger
+      // est dedans, et le bandeau du plan est derrière elle.
+      dessinerCorps();
+    }) }, "Proposer");
+
+  const corpsProrata = () => [
+    h("div", { class: "prop-saisie" },
+      h("label", {}, "Retirer"), champN,
+      h("span", { class: "field-hint", style: "margin:0" }, `compte(s) sur ${fmtN(actifs.length)} actifs`),
+      proposer),
+    h("p", { class: "field-hint" },
+      "La part de chaque plateforme dans le run est conservée. Une plateforme n'est jamais "
+      + "vidée : son dernier compte actif reste."),
+    ...(erreurProposition ? [h("div", { class: "danger-note" }, erreurProposition)] : []),
+    ...(proposition ? [h("div", { class: "add-scroll" }, ...proposition.map(groupeProposition))] : []),
+  ];
+
+  const corpsSelection = () => [
+    h("p", { class: "field-hint" },
+      "Cochez les comptes à garder. Tous les autres seront retirés du plan. La répartition "
+      + "des plateformes n'est pas préservée : c'est votre choix qui décide."),
+    h("div", { class: "add-scroll" }, h("table", { class: "plan-data" },
+      h("tr", {}, h("th", { style: "width:34px" }, "Garder"), h("th", {}, "N° de CF"),
+        h("th", {}, "Raison sociale"), h("th", {}, "Plateforme"), h("th", {}, "Jour"),
+        h("th", {}, "Origine")),
+      ...actifs.map((l) => {
+        // L'état d'une case ne vient QUE de `checked` : `setAttribute("checked",
+        // false)` la COCHE.
+        const cb = h("input", { type: "checkbox", onchange: (ev) => {
+          ev.target.checked ? gardes.add(l.cf) : gardes.delete(l.cf);
+          dessinerCorps();
+        } });
+        cb.checked = gardes.has(l.cf);
+        return h("tr", { class: gardes.has(l.cf) ? "sel" : "" },
+          h("td", {}, cb),
+          h("td", { class: "cf" }, l.cf),
+          h("td", {}, l.raison_sociale),
+          h("td", { class: "pa" }, l.pa),
+          h("td", { class: "jj" }, String(l.jj)),
+          h("td", {}, badgeOrigineAlleger(l) ?? h("span", { class: "pa" }, "tirage")));
+      }))),
+  ];
+
+  function dessinerCorps() {
+    corps.replaceChildren(...(mode === "exclure" ? corpsExclure()
+      : mode === "prorata" ? corpsProrata() : corpsSelection()));
+    rafraichir();
+  }
+
+  /** Deux gestes différents, pas deux valeurs d'un même réglage : des segments
+   *  lisibles sans être ouverts, plutôt qu'une liste déroulante. */
+  function majBascule() {
+    if (passe) return;
+    bascule.replaceChildren(...[["prorata", "Retirer N — répartition conservée"],
+                                ["selection", "Ne garder que ma sélection"]]
+      .map(([cle, libelle]) => h("button", { class: mode === cle ? "on" : "", onclick: () => {
+        if (mode === cle) return;
+        mode = cle;
+        majBascule();
+        dessinerCorps();
+      } }, libelle)));
+  }
+
+  zone.addEventListener("input", rafraichir);
+  majBascule();
+  dessinerCorps();
+
+  modal(
+    h("div", { class: "add-head" },
+      h("h3", { style: "margin:2px 0 0" }, `Alléger le run ${run.num}`),
+      h("div", { class: "add-run" },
+        h("span", {}, "Run ", h("b", {}, run.num), " du ", h("b", {}, fmtDateFr(jour.date))),
+        h("span", { class: "jjs" }, "jours de cycle ",
+          ...(run.jjs ?? []).map((j) => h("code", {}, String(j)))),
+        h("span", { class: "jjs" }, `${fmtN(actifs.length)} comptes actifs`)),
+      bascule),
+    corps, avert,
+    h("label", { class: "field-hint" }, "Motif du retrait (obligatoire)"), zone,
+    h("div", { class: "add-foot" }, compte, h("span", { class: "spacer" }), btn,
+      h("button", { class: "btn-ghost", onclick: closeModal }, "Annuler")));
+  // Un run passé n'affiche aucune liste : la modale garde sa largeur de
+  // confirmation. Les deux autres modes listent des comptes.
+  if (!passe) $("modal").classList.add("modal-wide");
+}
+
 // --- Cycle de vie de l'écran -------------------------------------------------
 let planRecalcTimer = null;
 /** Recalcul débounce : chaque frappe déclencherait sinon un scan complet. */
