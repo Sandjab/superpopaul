@@ -1971,7 +1971,30 @@ pub async fn plan_rapprocher_appliquer(
                 )
             })
             .collect();
+        // Capturés AVANT le réalignement de `meta` plus bas, qui écrase
+        // `rapproche_le` : c'est LUI qui borne « pas encore documenté ». Les
+        // lire après ferait une liste systématiquement vide.
+        //
+        // Lus sur `lignes` avant `appliquer` : celle-ci ne touche jamais une
+        // ligne déjà retirée — les écarts ne peuvent pas en désigner,
+        // `calculer` les ayant sautées (`rapprochement.rs:94`) — mais capturer
+        // au même endroit que `fichier_avant` et `origines` évite d'avoir à
+        // redémontrer cette étanchéité à chaque relecture.
+        let aujourdhui = chrono::Local::now().date_naive();
+        let retraits_manuels = retraits_manuels_depuis(&lignes, meta.rapproche_le, aujourdhui);
+        let depuis = match meta.rapproche_le {
+            Some(t) => crate::rapprochement_report::Depuis::DernierRapprochement(jour_local_iso(t)),
+            None => {
+                crate::rapprochement_report::Depuis::GenerationDuPlan(jour_local_iso(meta.genere_le))
+            }
+        };
 
+        // UNE SEULE lecture de l'horloge, posée à la fois sur les retraits que
+        // le rapprochement crée et sur `meta.rapproche_le` ci-dessous. C'est
+        // cette égalité qui permet à `retraits_manuels_depuis` de distinguer un
+        // retrait manuel d'un retrait calculé. Lire l'horloge deux fois, avec
+        // `rapproche_le` calculé AVANT `appliquer`, ferait réapparaître les
+        // retraits de CE rapprochement dans le rapport du suivant.
         let maintenant = chrono::Utc::now().timestamp();
         crate::rapprochement::appliquer(&mut lignes, &r, maintenant)?;
         // Le plan décrit désormais le fichier ouvert : sans ça,
@@ -2011,9 +2034,8 @@ pub async fn plan_rapprocher_appliquer(
                 fichiers: &fichiers,
                 obsoletes: &noms_obsoletes,
                 origines: &origines,
-                // Provisoire : la tâche 5 du plan branche la vraie capture.
-                retraits_manuels: &[],
-                depuis: &crate::rapprochement_report::Depuis::GenerationDuPlan(String::new()),
+                retraits_manuels: &retraits_manuels,
+                depuis: &depuis,
                 annuaire_incomplet: annuaire_incomplet.as_deref(),
             },
         );
