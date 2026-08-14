@@ -1865,6 +1865,11 @@ pub struct RapprochementVue {
     /// peut vouloir dire « l'annuaire ne sait pas la voir ». Les fondre ferait
     /// disparaître cette nuance.
     pub annuaire_incomplet: Option<String>,
+    /// Retraits faits à la main que ce rapprochement documentera. Un **compte**
+    /// et non une liste : l'écran n'en affiche pas le détail — celui qui
+    /// applique vient de les faire — mais ce nombre décide si l'application a
+    /// quelque chose à écrire quand il n'y a aucun écart.
+    pub retraits_manuels: usize,
 }
 
 /// Cœur partagé par le calcul et l'application. Rend aussi le plan et sa méta,
@@ -1918,9 +1923,14 @@ pub async fn plan_rapprocher(state: State<'_, AppState>) -> Result<Rapprochement
     let input = state.input_path()?;
     let store = state.store.clone();
     tokio::task::spawn_blocking(move || {
-        let (rapprochement, empreinte, _, _, annuaire_incomplet) =
+        let (rapprochement, empreinte, lignes, meta, annuaire_incomplet) =
             calculer_rapprochement(&store, &input, &cfg)?;
-        Ok(RapprochementVue { rapprochement, empreinte, annuaire_incomplet })
+        // Le compte, pas la liste : l'écran s'en sert pour savoir si appliquer
+        // a quelque chose à écrire, pas pour afficher le détail.
+        let aujourdhui = chrono::Local::now().date_naive();
+        let retraits_manuels =
+            retraits_manuels_depuis(&lignes, meta.rapproche_le, aujourdhui).len();
+        Ok(RapprochementVue { rapprochement, empreinte, annuaire_incomplet, retraits_manuels })
     })
     .await
     .map_err(|e| e.to_string())?
