@@ -333,7 +333,42 @@ pub fn render(d: &RapprochementReportData) -> String {
     }
     fin_section(&mut html, disparus_l.is_empty());
 
-    // ③ Déplacés.
+    // ③ Retirés à la main. Groupé avec ① et ② : le document range par
+    // CONSÉQUENCE pour le destinataire, et les trois répondent à « quels
+    // comptes ne sont plus dans mes fichiers ». La colonne « Retiré le » est ce
+    // qui distingue ce tableau — ses comptes ont pu quitter le plan des
+    // semaines avant ce rapprochement, là où les deux autres sont retirés à
+    // l'instant.
+    let sous_titre_manuels = match d.depuis {
+        Depuis::DernierRapprochement(iso) => format!(
+            "Retirés à la main depuis le {}, dernier rapprochement. \
+             Ces comptes ne figurent dans aucun fichier de ce lot.",
+            date_fr(iso)
+        ),
+        Depuis::GenerationDuPlan(iso) => format!(
+            "Retirés à la main depuis la génération du plan, le {}. \
+             Ces comptes ne figurent dans aucun fichier de ce lot.",
+            date_fr(iso)
+        ),
+    };
+    section(
+        &mut html,
+        "Comptes retirés — décision manuelle",
+        &sous_titre_manuels,
+        &["N° de CF", "Retiré le", "Motif"],
+        d.retraits_manuels.is_empty(),
+    );
+    for m in d.retraits_manuels {
+        html.push_str(&format!(
+            "<tr><td>{}</td><td class=\"date\">{}</td><td>{}</td></tr>\n",
+            esc(&m.cf),
+            esc(&date_fr(&m.le)),
+            esc(&m.motif),
+        ));
+    }
+    fin_section(&mut html, d.retraits_manuels.is_empty());
+
+    // ④ Déplacés.
     let deplaces_l = par_action(r, |a| matches!(a, Action::Deplacer { .. }));
     section(
         &mut html,
@@ -379,7 +414,7 @@ pub fn render(d: &RapprochementReportData) -> String {
     }
     fin_section(&mut html, deplaces_l.is_empty());
 
-    // ④ Plateformes corrigées.
+    // ⑤ Plateformes corrigées.
     let plat_l = par_action(r, |a| matches!(a, Action::Rafraichir));
     section(
         &mut html,
@@ -688,6 +723,97 @@ mod tests {
     /// Chercher « jour de cycle changé » nu passerait sans qu'aucune section
     /// existe : le libellé du KPI « comptes déplacés » porte déjà ces mots.
     /// Le premier jet de ces tests s'y est laissé prendre.
+    const T_MANUELS: &str = "<h2>Comptes retirés — décision manuelle</h2>";
+
+    #[test]
+    fn le_tableau_des_retraits_manuels_donne_date_et_motif() {
+        let r = vide();
+        let manuels = vec![
+            retrait_manuel(
+                "4100238091",
+                "2026-07-31",
+                "Exclusion décidée en comité — périmètre repoussé à 2027",
+                false,
+            ),
+            retrait_manuel("4100247788", "2026-08-06", "Litige commercial en cours", true),
+        ];
+        let mut d = donnees(&r);
+        d.retraits_manuels = &manuels;
+        let html = render(&d);
+        let c = corps(&html);
+        assert!(c.contains(T_MANUELS), "section des retraits manuels absente");
+        assert!(c.contains("4100238091"));
+        // La date est rendue en clair : elle est ce qui distingue ce tableau
+        // des deux autres, dont les comptes sont retirés à l'instant.
+        assert!(c.contains("31/07/2026"), "date du retrait absente ou non mise en forme");
+        assert!(c.contains("06/08/2026"));
+        assert!(c.contains("Exclusion décidée en comité"), "motif absent");
+    }
+
+    #[test]
+    fn le_tableau_des_retraits_manuels_dit_depuis_quand() {
+        // La date de référence n'est pas décorative : sans elle, le lecteur ne
+        // sait pas si la liste couvre une semaine ou six mois.
+        let r = vide();
+        let manuels = vec![retrait_manuel("4100238091", "2026-07-31", "décision métier", false)];
+        let mut d = donnees(&r);
+        d.retraits_manuels = &manuels;
+
+        let apres_rappro = Depuis::DernierRapprochement("2026-07-28".into());
+        d.depuis = &apres_rappro;
+        let h1 = render(&d);
+        let c1 = corps(&h1);
+        assert!(c1.contains("28/07/2026"), "date de référence absente");
+        assert!(
+            c1.contains("dernier rapprochement"),
+            "la nature de la date de référence doit se lire"
+        );
+
+        let jamais = Depuis::GenerationDuPlan("2026-06-02".into());
+        d.depuis = &jamais;
+        let h2 = render(&d);
+        let c2 = corps(&h2);
+        assert!(c2.contains("02/06/2026"));
+        assert!(
+            c2.contains("génération du plan"),
+            "un plan jamais rapproché doit le dire, pas inventer un rapprochement"
+        );
+        assert!(
+            !c2.contains("dernier rapprochement"),
+            "les deux formulations ne doivent jamais coexister"
+        );
+    }
+
+    #[test]
+    fn sans_retrait_manuel_le_tableau_n_existe_pas() {
+        let r = vide();
+        let html = render(&donnees(&r));
+        assert!(!corps(&html).contains(T_MANUELS));
+    }
+
+    #[test]
+    fn un_motif_saisi_par_l_utilisateur_sort_echappe() {
+        // Première chaîne d'origine HUMAINE du document : les motifs des deux
+        // autres tableaux sont générés par le code (`format!`), celui-ci est
+        // tapé dans une boîte de dialogue. Un `esc` oublié ici injecte du
+        // balisage dans une pièce transmise.
+        let r = vide();
+        let manuels = vec![retrait_manuel(
+            "<script>alert(1)</script>",
+            "2026-07-31",
+            "A&B <script>alert(2)</script>",
+            false,
+        )];
+        let mut d = donnees(&r);
+        d.retraits_manuels = &manuels;
+        let html = render(&d);
+        let c = corps(&html);
+        assert!(!c.contains("<script>"), "motif ou n° de CF non échappé");
+        assert!(c.contains("&lt;script&gt;"));
+        assert!(c.contains("A&amp;B"), "l'esperluette du motif doit être échappée");
+        assert!(!c.contains("&amp;amp;"), "échappé deux fois");
+    }
+
     const T_ELIG: &str = "<h2>Comptes retirés — éligibilité perdue</h2>";
     const T_DISPARUS: &str = "<h2>Comptes retirés — disparus du fichier</h2>";
     const T_DEPLACES: &str = "<h2>Comptes déplacés — jour de cycle changé</h2>";
