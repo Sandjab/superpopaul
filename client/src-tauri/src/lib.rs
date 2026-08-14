@@ -109,6 +109,7 @@ pub fn run() {
             commands::plan_deplacer,
             commands::plan_retirer,
             commands::plan_annuler_retrait,
+            commands::plan_proposer_retrait,
             commands::plan_runs_compatibles,
             commands::plan_rapprocher,
             commands::plan_rapprocher_appliquer,

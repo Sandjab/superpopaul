@@ -1750,6 +1750,59 @@ pub async fn plan_annuler_retrait(
     .map_err(|e| e.to_string())?
 }
 
+/// Proposition de retrait proportionnel, groupée par plateforme pour l'écran.
+#[derive(Serialize)]
+pub struct PropositionPa {
+    pub pa: String,
+    /// Comptes proposés au retrait, dans l'ordre de sortie.
+    pub retirer: Vec<String>,
+    /// Effectif actif de la plateforme sur ce run — le « 4 sur 12 » de l'écran.
+    pub actifs: usize,
+}
+
+/// Regroupement d'affichage, séparé de la commande pour être testable sans
+/// `tauri::State` — même motif que `gestes_manuels_depuis`.
+fn grouper_proposition(
+    lignes: &[crate::plan::LignePlan],
+    run_num: &str,
+    cfs: &[String],
+) -> Vec<PropositionPa> {
+    let mut par_pa: std::collections::BTreeMap<String, PropositionPa> = Default::default();
+    for l in lignes.iter().filter(|l| l.run_num == run_num && !l.retiree()) {
+        par_pa
+            .entry(l.pa.clone())
+            .or_insert_with(|| PropositionPa {
+                pa: l.pa.clone(),
+                retirer: Vec::new(),
+                actifs: 0,
+            })
+            .actifs += 1;
+    }
+    for cf in cfs {
+        let pa = &lignes.iter().find(|l| &l.cf == cf).expect("cf issu du plan").pa;
+        par_pa.get_mut(pa).expect("pa issue du plan").retirer.push(cf.clone());
+    }
+    par_pa.into_values().collect()
+}
+
+#[tauri::command]
+pub async fn plan_proposer_retrait(
+    state: State<'_, AppState>,
+    run_num: String,
+    n: usize,
+) -> Result<Vec<PropositionPa>, String> {
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || {
+        let (lignes, meta) = charger_pour_retouche(&store)?;
+        // Même seed que la génération : proposition reproductible.
+        let seed = crate::plan::PlanParams::depuis_yaml(&meta.params_yaml)?.seed;
+        let cfs = crate::plan::proposer_retrait_proportionnel(&lignes, &run_num, n, seed)?;
+        Ok(grouper_proposition(&lignes, &run_num, &cfs))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Runs compatibles avec un jour de cycle — le sélecteur de l'IHM ne propose
 /// que ceux-là (la garde dure est dans le moteur).
 #[tauri::command]
@@ -2939,6 +2992,53 @@ mod tests {
         )
         .await;
         assert!(res.is_err(), "une saisie vide ne doit pas partir sur le réseau");
+    }
+
+    /// Une ligne de plan dont seuls le run et la plateforme comptent — la
+    /// matière du regroupement d'affichage.
+    fn ligne_pa(cf: &str, run_num: &str, pa: &str) -> crate::plan::LignePlan {
+        let mut l = ligne_mep(cf, 1, "2026-09-01");
+        l.run_num = run_num.into();
+        l.pa = pa.into();
+        l
+    }
+
+    #[test]
+    fn la_proposition_est_groupee_par_plateforme_avec_les_effectifs() {
+        let plan = vec![
+            ligne_pa("E1", "RF01", "Esalink"),
+            ligne_pa("E2", "RF01", "Esalink"),
+            ligne_pa("S1", "RF01", "Serensia"),
+            ligne_pa("S2", "RF01", "Serensia"),
+        ];
+        let props = grouper_proposition(&plan, "RF01", &["E1".into(), "S2".into()]);
+        assert_eq!(props.len(), 2);
+        assert_eq!(
+            (props[0].pa.as_str(), props[0].actifs, props[0].retirer.as_slice()),
+            ("Esalink", 2, ["E1".to_string()].as_slice())
+        );
+        assert_eq!((props[1].pa.as_str(), props[1].actifs), ("Serensia", 2));
+    }
+
+    /// L'effectif affiché est le « sur 12 » du « 4 sur 12 » : il doit compter
+    /// ce qui reste à retirer, pas ce qui l'a déjà été. Une ligne retirée
+    /// gonflerait le dénominateur et ferait passer la proposition pour plus
+    /// modeste qu'elle n'est.
+    #[test]
+    fn une_ligne_retiree_ne_compte_pas_dans_les_actifs() {
+        let mut deja_sortie = ligne_pa("E2", "RF01", "Esalink");
+        deja_sortie.retire =
+            Some(crate::plan::Retrait { le: LE_28_JUILLET, motif: "litige".into() });
+        let plan = vec![
+            ligne_pa("E1", "RF01", "Esalink"),
+            deja_sortie,
+            ligne_pa("E3", "RF01", "Esalink"),
+            // Un autre run, qui ne doit pas non plus être compté.
+            ligne_pa("E4", "RF02", "Esalink"),
+        ];
+        let props = grouper_proposition(&plan, "RF01", &["E1".into()]);
+        assert_eq!(props.len(), 1);
+        assert_eq!(props[0].actifs, 2, "E2 est retirée et E4 est sur un autre run");
     }
 }
 
