@@ -275,7 +275,12 @@ pub fn render(d: &RapprochementReportData) -> String {
     // entre les mains, et c'est la seule information du rapport qui l'oblige
     // à agir sur ce qu'il a déjà reçu.
     let geles: Vec<&&Ecart> = retires.iter().filter(|e| e.gelee).collect();
-    if !geles.is_empty() {
+    // Même conséquence, même section : le destinataire tient une version
+    // antérieure du fichier, que le retrait vienne du calcul ou d'une décision.
+    // La section dit ce qui arrive au lecteur, pas d'où vient la cause.
+    let geles_manuels: Vec<&RetraitManuel> =
+        d.retraits_manuels.iter().filter(|m| m.gelee).collect();
+    if !geles.is_empty() || !geles_manuels.is_empty() {
         html.push_str(
             "<section class=\"warn danger\">\n\
              <h2>Retrait portant sur une mise en production déjà transmise</h2>\n<ul>\n",
@@ -287,6 +292,18 @@ pub fn render(d: &RapprochementReportData) -> String {
                  fichier de ce lot. Motif : <b>{}</b>.</li>\n",
                 esc(&e.cf),
                 esc(motif(&e.action)),
+            ));
+        }
+        // Les manuels à la suite des calculés — ordre déterministe. Le motif
+        // est ici la phrase de l'utilisateur, qui dit la décision mieux qu'un
+        // libellé généré.
+        for m in &geles_manuels {
+            html.push_str(&format!(
+                "<li>Le compte <b>{}</b> figurait dans un fichier qui vous a déjà été \
+                 transmis. Les fichiers étant cumulatifs, il ne figure plus dans aucun \
+                 fichier de ce lot. Motif : <b>{}</b>.</li>\n",
+                esc(&m.cf),
+                esc(&m.motif),
             ));
         }
         html.push_str("</ul>\n</section>\n");
@@ -955,6 +972,58 @@ mod tests {
             avant_tableaux.contains("4100238877"),
             "le compte gelé doit apparaître AVANT les tableaux d'écarts"
         );
+    }
+
+    #[test]
+    fn un_retrait_manuel_gele_rejoint_l_alerte_des_mep_transmises() {
+        // L'alerte existe pour une CONSÉQUENCE, pas pour une provenance : les
+        // fichiers étant cumulatifs, le destinataire tient une version
+        // antérieure où le compte figurait. Un retrait manuel sur une MEP
+        // passée produit exactement cette situation.
+        let r = vide();
+        let manuels = vec![
+            retrait_manuel(
+                "4100247788",
+                "2026-08-06",
+                "Litige commercial en cours — ne pas facturer",
+                true,
+            ),
+            retrait_manuel("4100238091", "2026-07-31", "périmètre 2027", false),
+        ];
+        let mut d = donnees(&r);
+        d.retraits_manuels = &manuels;
+        let html = render(&d);
+        let c = corps(&html);
+        assert!(c.contains(T_ALERTE), "section d'alerte absente");
+        let alerte = c
+            .split(T_ALERTE)
+            .nth(1)
+            .expect("alerte absente")
+            .split("</section>")
+            .next()
+            .unwrap_or("");
+        assert!(alerte.contains("4100247788"), "le gelé doit être dans l'alerte");
+        assert!(
+            alerte.contains("Litige commercial en cours"),
+            "le motif de l'utilisateur dit la décision mieux qu'un libellé généré"
+        );
+        assert!(
+            !alerte.contains("4100238091"),
+            "un retrait manuel NON gelé n'a rien à faire dans l'alerte"
+        );
+        // Dans l'alerte ET dans le tableau : la mise en évidence ne dispense
+        // pas du tableau — c'est déjà le sort des retraits calculés gelés.
+        assert!(c.contains(T_MANUELS), "le gelé doit AUSSI figurer au tableau");
+    }
+
+    #[test]
+    fn sans_retrait_gele_ni_calcule_ni_manuel_l_alerte_n_existe_pas() {
+        let r = vide();
+        let manuels = vec![retrait_manuel("4100238091", "2026-07-31", "périmètre 2027", false)];
+        let mut d = donnees(&r);
+        d.retraits_manuels = &manuels;
+        let html = render(&d);
+        assert!(!corps(&html).contains(T_ALERTE));
     }
 
     #[test]
