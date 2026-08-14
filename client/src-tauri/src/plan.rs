@@ -984,10 +984,14 @@ pub fn cfs_actifs_du_run(plan: &[LignePlan], run_num: &str) -> Vec<String> {
 /// - **plancher 1 inversé** : jamais le dernier compte actif d'une plateforme —
 ///   pour tout retirer, c'est l'exclusion du run, pas le décimage ;
 /// - **protections** : `Couverture` et `Manuel` ne sortent qu'en dernier
-///   recours, quand les allouées de la plateforme ne suffisent pas ;
+///   recours, quand les allouées de la plateforme ne suffisent pas — et
+///   `Manuel` après `Couverture` : un geste humain prime une couverture
+///   calculée, que la régénération saurait de toute façon refaire ;
 /// - **ordre de sortie** : l'inverse de `trier_par_priorite` — hors annuaire
-///   d'abord, puis résolutions les plus anciennes, départage seedé (même seed
-///   que la génération : la proposition est reproductible d'un clic à l'autre).
+///   d'abord, puis résolutions les plus anciennes. Le départage seedé, lui,
+///   n'est PAS inversé : c'est exactement la clé de la génération. Un
+///   pseudo-aléatoire « à l'envers » ne voudrait rien dire ; ce qui compte est
+///   qu'un même clic répété propose les mêmes comptes.
 pub fn proposer_retrait_proportionnel(
     plan: &[LignePlan],
     run_num: &str,
@@ -2783,6 +2787,43 @@ mod tests {
             proposer_retrait_proportionnel(&plan, "RF01", 2, 42).unwrap(),
             vec!["HORS", "VIEUX"]
         );
+    }
+
+    #[test]
+    fn a_egalite_le_depart_se_fait_au_hash_seede_pas_a_l_ordre_du_plan() {
+        // Deux comptes que rien ne distingue (même origine, même annuaire, même
+        // date de résolution) : seul le hash seedé tranche — la clé même de la
+        // génération, d'où la reproductibilité d'un clic à l'autre. Le plan est
+        // construit dans l'ordre INVERSE du hash : sans cette clé, le tri stable
+        // rendrait le premier inséré, et l'assertion le verrait.
+        let (petit, grand) = if hash_seede(42, "CFA") < hash_seede(42, "CFB") {
+            ("CFA", "CFB")
+        } else {
+            ("CFB", "CFA")
+        };
+        let plan = vec![
+            l_run(grand, "RF01", "Esalink", Origine::Auto),
+            l_run(petit, "RF01", "Esalink", Origine::Auto),
+        ];
+        assert_eq!(proposer_retrait_proportionnel(&plan, "RF01", 1, 42).unwrap(), vec![petit]);
+    }
+
+    #[test]
+    fn le_reste_fractionnaire_va_a_la_plateforme_la_mieux_dotee() {
+        // 5 Esalink + 3 Serensia, retirer 3 : parts exactes 1,875 et 1,125 —
+        // un cas que la division n'épuise pas, contrairement au 12/6. Les
+        // planchers donnent 1 et 1, et le reste suit le plus fort reste :
+        // Esalink. Aucun plafond n'intervient (retirables 4 et 2).
+        let mut plan = Vec::new();
+        for i in 0..5 {
+            plan.push(l_run(&format!("E{i}"), "RF01", "Esalink", Origine::Auto));
+        }
+        for i in 0..3 {
+            plan.push(l_run(&format!("S{i}"), "RF01", "Serensia", Origine::Auto));
+        }
+        let cfs = proposer_retrait_proportionnel(&plan, "RF01", 3, 42).unwrap();
+        assert_eq!(cfs.iter().filter(|c| c.starts_with('E')).count(), 2);
+        assert_eq!(cfs.iter().filter(|c| c.starts_with('S')).count(), 1);
     }
 
     #[test]
