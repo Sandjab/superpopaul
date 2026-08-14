@@ -2648,14 +2648,24 @@ function rapproRecapTexte(rapprochement) {
  *  Le rapport, lui, se nomme : une fois la modale fermée, le bandeau est la
  *  seule trace qu'un document est parti avec les fichiers. Réduit à son nom —
  *  le chemin de la machine qui a produit le lot n'apprend rien. */
-function compteRenduRapprochement(rapprochement, obsoletes, rapport) {
+function compteRenduRapprochement(rapprochement, obsoletes, rapport, retraitsManuels = 0) {
   const g = grouperEcarts(rapprochement.ecarts);
   const parts = [];
   const retraits = g.eligibilite.length + g.disparus.length;
   if (retraits) parts.push(`${fmtN(retraits)} compte(s) retiré(s)`);
   if (g.deplaces.length) parts.push(`${fmtN(g.deplaces.length)} déplacé(s)`);
   if (g.plateforme.length) parts.push(`${fmtN(g.plateforme.length)} plateforme(s) corrigée(s)`);
-  let texte = parts.length ? `✓ Rapprochement appliqué : ${parts.join(", ")}.` : "✓ Rapprochement appliqué.";
+  // Sans aucun changement appliqué, ce clic n'a produit qu'un document : le
+  // dire ainsi, plutôt qu'annoncer un « rapprochement appliqué » qui n'a
+  // touché à rien.
+  let texte = parts.length
+    ? `✓ Rapprochement appliqué : ${parts.join(", ")}.`
+    : (retraitsManuels
+        ? `✓ Note de livraison produite : ${fmtN(retraitsManuels)} retrait(s) manuel(s) `
+          + `documenté(s), aucun compte modifié.`
+        : "✓ Rapprochement appliqué.");
+  if (parts.length && retraitsManuels)
+    texte += ` ${fmtN(retraitsManuels)} retrait(s) manuel(s) documenté(s).`;
   const noms = (obsoletes ?? []).map((c) => c.split(/[/\\]/).pop());
   if (noms.length) texte += ` ${noms.length} fichier(s) obsolète(s) supprimé(s) : ${noms.join(", ")}.`;
   if (rapport) texte += ` Rapport : ${rapport.split(/[/\\]/).pop()}.`;
@@ -2667,7 +2677,7 @@ function compteRenduRapprochement(rapprochement, obsoletes, rapport) {
  *  le DOM (dataset, attribut…), qui se reconstruit à chaque re-rendu du récap.
  *  `annuaireIncomplet` est séparé de `rapprochement.avertissements` (voir
  *  `blocAnnuaireIncomplet`) : rendu à part, en tête. */
-function renderRevueRapprochement(rapprochement, empreinte, annuaireIncomplet) {
+function renderRevueRapprochement(rapprochement, empreinte, annuaireIncomplet, retraitsManuels = 0) {
   const g = grouperEcarts(rapprochement.ecarts);
   // "Signaler" ne mute rien (`rapprochement::appliquer`) : ce n'est pas un
   // changement à appliquer, même si c'est un écart à lire.
@@ -2699,7 +2709,7 @@ function renderRevueRapprochement(rapprochement, empreinte, annuaireIncomplet) {
         closeModal();
         plan.rapportFichier = "identique"; // le backend vient d'aligner meta.hash dessus
         await rechargerRecap();
-        compteRenduRapprochement(rapprochement, obsoletes, rapport);
+        compteRenduRapprochement(rapprochement, obsoletes, rapport, retraitsManuels);
       } catch (e) {
         // Refus (empreinte périmée) ou autre échec : la revue affichée décrit
         // un calcul qui n'est plus valide, la fermer évite de laisser croire
@@ -2742,21 +2752,68 @@ async function ouvrirRapprocher(bouton) {
     catch (e) { planBanner("error", String(e)); }
   });
   if (!vue) return;
-  const { rapprochement, empreinte, annuaire_incomplet: annuaireIncomplet } = vue;
+  const { rapprochement, empreinte, annuaire_incomplet: annuaireIncomplet,
+          retraits_manuels: retraitsManuels = 0 } = vue;
   if (!rapprochement.ecarts.length) {
-    const appliquerVide = h("button", {}, "Appliquer");
-    appliquerVide.disabled = true;
-    modal(
-      h("h3", {}, "Rapprochement du plan"),
-      h("p", {}, `✓ Le plan est à jour avec le fichier ouvert. `
-        + `${fmtN(rapprochement.inchangees)} ligne(s) active(s), aucun écart.`),
-      h("div", { class: "add-foot" },
-        h("span", { class: "spacer" }),
-        appliquerVide,
-        h("button", { class: "btn-ghost", onclick: closeModal }, "Fermer")));
+    renderSansEcart(rapprochement, empreinte, retraitsManuels);
     return;
   }
-  renderRevueRapprochement(rapprochement, empreinte, annuaireIncomplet);
+  renderRevueRapprochement(rapprochement, empreinte, annuaireIncomplet, retraitsManuels);
+}
+
+/** Aucun écart. Deux situations, un seul écran : soit il n'y a rien à écrire —
+ *  déclencheur inerte, comme avant —, soit des retraits faits à la main
+ *  attendent d'être documentés, et l'application a un livrable à produire sans
+ *  toucher à un seul compte. Le libellé s'adapte à ce sur quoi il agit, comme
+ *  « Réactiver n retiré(s)… ».
+ *
+ *  Le DÉTAIL des retraits n'est pas listé : celui qui applique vient de les
+ *  faire, et la revue sert à valider ce qui va être décidé, pas à relire ce qui
+ *  l'a déjà été. Le récap et son filtre « retiré » répondent à « lesquels ». */
+function renderSansEcart(rapprochement, empreinte, retraitsManuels) {
+  const aEcrire = retraitsManuels > 0;
+  const bouton = aEcrire
+    ? h("button", { class: "btn-primary", onclick: (ev) =>
+        occupe(ev.currentTarget, "Production en cours…", async () => {
+          try {
+            const { obsoletes, rapport } = await invoke("plan_rapprocher_appliquer", { empreinte });
+            closeModal();
+            plan.rapportFichier = "identique"; // le backend vient d'aligner meta.hash dessus
+            await rechargerRecap();
+            compteRenduRapprochement(rapprochement, obsoletes, rapport, retraitsManuels);
+          } catch (e) {
+            // Même traitement que la revue : la modale décrit un calcul qui
+            // n'est plus valide, la fermer évite de laisser croire qu'il tient.
+            closeModal();
+            planBanner("error", String(e),
+              h("button", { class: "btn-primary",
+                onclick: (ev2) => ouvrirRapprocher(ev2.currentTarget) }, "Rapprocher…"));
+          }
+        }) }, "Produire la note de livraison")
+    : h("button", {}, "Appliquer");
+  if (!aEcrire) bouton.disabled = true;
+
+  const corps = [h("p", {}, aEcrire
+    ? `✓ Aucun écart avec le fichier ouvert. ${fmtN(rapprochement.inchangees)} ligne(s) active(s).`
+    : `✓ Le plan est à jour avec le fichier ouvert. `
+      + `${fmtN(rapprochement.inchangees)} ligne(s) active(s), aucun écart.`)];
+  if (aEcrire) {
+    corps.push(h("div", { class: "rappro-avert" },
+      h("b", {}, `${fmtN(retraitsManuels)} retrait(s) fait(s) à la main ne figurent dans aucune note transmise.`),
+      " Les comptes concernés ont déjà quitté les fichiers de MEP ; ce qui manque, "
+      + "c'est le document qui l'explique au destinataire."));
+    corps.push(h("p", { class: "rappro-recap" },
+      "Aucun compte ne bouge : la note est écrite, les fichiers de MEP sont réécrits "
+      + "à l'identique et le plan se réaligne sur le fichier ouvert."));
+  }
+
+  modal(
+    h("h3", {}, "Rapprochement du plan"),
+    ...corps,
+    h("div", { class: "add-foot" },
+      h("span", { class: "spacer" }),
+      bouton,
+      h("button", { class: "btn-ghost", onclick: closeModal }, "Fermer")));
 }
 
 /** Tri d'une liste de candidats sur une colonne. Ne mute pas l'entrée. */
