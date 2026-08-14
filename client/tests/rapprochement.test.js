@@ -81,6 +81,7 @@ test("sans écart, le déclencheur d'application reste inerte", async () => {
         rapprochement: { ecarts: [], inchangees: 2001, avertissements: [] },
         empreinte: "peu importe ici",
         annuaire_incomplet: null,
+        retraits_manuels: 0,
       })})`);
     return null;
   });
@@ -93,6 +94,41 @@ test("sans écart, le déclencheur d'application reste inerte", async () => {
   appliquer.click();
   assert.equal(ctx.invocations.find(([c]) => c === "plan_rapprocher_appliquer"), undefined,
     "sans écart, l'application ne doit jamais partir vers le backend");
+});
+
+test("sans écart mais avec des retraits manuels, l'application produit la note", async () => {
+  // Cas réel : on retire des comptes à la main, on relance une résolution qui
+  // ne fait basculer aucun verdict, on rapproche. Zéro écart — et pourtant le
+  // lot partirait sans note alors que trois comptes ont quitté les fichiers.
+  const ctx = ecran();
+  const CHEMIN = "/sortie/brm2608_rapprochement_2026-08-14_143207.html";
+  ctx.repondreAux((cmd) => {
+    if (cmd === "plan_rapprocher")
+      return ctx.evaluer(`(${JSON.stringify({
+        rapprochement: { ecarts: [], inchangees: 2001, avertissements: [] },
+        empreinte: "peu importe ici",
+        annuaire_incomplet: null,
+        retraits_manuels: 3,
+      })})`);
+    if (cmd === "plan_lignes") return ctx.evaluer(`(${JSON.stringify([ligne("CF1")])})`);
+    if (cmd === "plan_rapprocher_appliquer")
+      return ctx.evaluer(`(${JSON.stringify({ obsoletes: [], rapport: CHEMIN })})`);
+    return null;
+  });
+
+  await boutonRapprocher(ctx.$).click();
+
+  const produire = boutonModale(ctx.$, "Produire la note");
+  assert.ok(produire, "le déclencheur doit changer de libellé, pas rester « Appliquer »");
+  assert.equal(produire.disabled, false, "il y a quelque chose à écrire");
+  await produire.click();
+
+  assert.ok(ctx.invocations.find(([c]) => c === "plan_rapprocher_appliquer"),
+    "l'application doit partir vers le backend");
+  const texte = ctx.$("plan-banner").textContent;
+  assert.match(texte, /3 retrait/, "le compte rendu doit dire ce qui a été documenté");
+  assert.match(texte, /brm2608_rapprochement_2026-08-14_143207\.html/,
+    "le bandeau nomme le rapport : c'est la seule trace du livrable");
 });
 
 test("le compte rendu nomme le rapport écrit", async () => {
