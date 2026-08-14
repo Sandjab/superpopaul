@@ -2658,14 +2658,12 @@ function compteRenduRapprochement(rapprochement, obsoletes, rapport, retraitsMan
   // Sans aucun changement appliqué, ce clic n'a produit qu'un document : le
   // dire ainsi, plutôt qu'annoncer un « rapprochement appliqué » qui n'a
   // touché à rien.
+  const doc = `${fmtN(retraitsManuels)} retrait(s) manuel(s) documenté(s)`;
   let texte = parts.length
-    ? `✓ Rapprochement appliqué : ${parts.join(", ")}.`
-    : (retraitsManuels
-        ? `✓ Note de livraison produite : ${fmtN(retraitsManuels)} retrait(s) manuel(s) `
-          + `documenté(s), aucun compte modifié.`
-        : "✓ Rapprochement appliqué.");
-  if (parts.length && retraitsManuels)
-    texte += ` ${fmtN(retraitsManuels)} retrait(s) manuel(s) documenté(s).`;
+    ? `✓ Rapprochement appliqué : ${parts.join(", ")}.` + (retraitsManuels ? ` ${doc}.` : "")
+    : retraitsManuels
+      ? `✓ Note de livraison produite : ${doc}, aucun compte modifié.`
+      : "✓ Rapprochement appliqué.";
   const noms = (obsoletes ?? []).map((c) => c.split(/[/\\]/).pop());
   if (noms.length) texte += ` ${noms.length} fichier(s) obsolète(s) supprimé(s) : ${noms.join(", ")}.`;
   if (rapport) texte += ` Rapport : ${rapport.split(/[/\\]/).pop()}.`;
