@@ -339,14 +339,24 @@ incapable d'échouer.
 ## Maquettes
 
 Convention du projet : **go explicite avant tout code d'IHM, libellé compris**.
-Deux surfaces, deux validations :
+Deux surfaces, deux fichiers, produits le 14/08 :
 
-- `docs/superpowers/maquettes/2026-07-28-rapport-rapprochement.html` mise à jour
-  — cinquième tuile (la rangée passe de quatre à cinq, c'est la maquette qui
-  tranche le passage à la ligne), tableau ③, entrée manuelle dans la section
-  rouge ;
-- la modale « sans écart » du lot 2, avec son libellé de bouton et son texte
-  d'explication.
+- `docs/superpowers/maquettes/2026-08-14-rapport-retraits-manuels.html` — le
+  rapport avec la cinquième tuile, le tableau ③ et l'entrée manuelle dans la
+  section rouge ;
+- `docs/superpowers/maquettes/2026-08-14-note-de-livraison.html` — la modale
+  « sans écart » du lot 2, son libellé de bouton et son texte d'explication.
+
+### La maquette du 28/07 a divergé du code livré
+
+Elle n'a **pas** été reprise comme base, et ne doit pas servir de référence :
+ses tableaux de retrait portent des colonnes « Run quitté » et « MEP » que
+`rapprochement_report.rs` n'a jamais rendues — le code livré y écrit « Motif ».
+La maquette du 14/08 est construite sur le **rendu réel**, sans quoi la
+validation porterait sur un document qui n'existe pas.
+
+Constat noté, non traité : réaligner la maquette du 28/07 sur ce qui ship, ou
+ajouter les colonnes au code, est une question que ce lot ne pose pas.
 
 ## Hors périmètre
 

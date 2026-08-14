@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Maquette — Produire la note de livraison (lot 2)</title>
+<style>
+  :root{
+    --bg:#0e1524; --card:#172136; --border:#2b3752;
+    --fg:#eae9e2; --muted:#939cb4;
+    --green:#4cc268; --green-later:#2f8050; --gold:#d9a83f; --gold-hover:#e6bb5c; --on-gold:#241a02;
+    --amber:#e0873a; --red:#e5534b; --btn2:#1b2740; --track:#223050;
+    --pid:#e8e4d8; --ppf-l3:#a892ff; --pa-autres:#6b7794;
+    color-scheme: dark;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:24px 16px 72px;background:var(--bg);color:var(--fg);
+       font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  .wrap{max-width:1000px;margin:0 auto}
+  h1{font-size:22px;margin:0 0 4px;letter-spacing:-.01em}
+  .lede{color:var(--muted);margin:0 0 28px}
+  h2{font-size:13px;text-transform:uppercase;letter-spacing:.09em;color:var(--gold);
+     margin:34px 0 4px;padding-top:18px;border-top:1px solid var(--border)}
+  .note{color:var(--muted);font-size:13px;margin:0 0 14px}
+  .note b{color:var(--fg);font-weight:600}
+
+  .app{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px}
+  .banner{border-radius:8px;padding:11px 13px;margin-bottom:14px;display:flex;
+          gap:12px;align-items:center;flex-wrap:wrap}
+  .banner.warn{background:rgba(224,135,58,.12);border:1px solid rgba(224,135,58,.45)}
+  .banner.err {background:rgba(229,83,75,.12); border:1px solid rgba(229,83,75,.5)}
+  .banner.ok  {background:rgba(76,194,104,.10);border:1px solid rgba(76,194,104,.4)}
+  .banner .txt{flex:1;min-width:220px}
+  button{font:inherit;background:var(--btn2);color:var(--fg);border:1px solid var(--border);
+         border-radius:7px;padding:7px 13px;cursor:pointer}
+  button.primary{background:var(--gold);color:var(--on-gold);border-color:var(--gold);font-weight:600}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  .btn-ghost{background:transparent;border-color:transparent;color:var(--muted)}
+
+  .grp{border:1px solid var(--border);border-radius:8px;margin-bottom:10px;overflow:hidden}
+  .grp-h{padding:9px 12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+         background:rgba(255,255,255,.025);border-bottom:1px solid var(--border)}
+  .grp-h .n{font-weight:700;font-size:15px;min-width:34px}
+  .grp-h .t{flex:1;min-width:180px}
+  .grp.mute .grp-h{background:transparent}
+  .grp.mute .grp-h .n,.grp.mute .grp-h .t{color:var(--muted)}
+  .dot{width:8px;height:8px;border-radius:99px;flex:0 0 auto}
+  .actions{display:flex;gap:9px;align-items:center;flex-wrap:wrap;margin-top:14px;
+           padding-top:14px;border-top:1px solid var(--border)}
+  .actions .spacer{flex:1}
+  .recap{color:var(--muted);font-size:12.5px}
+  .recap b{color:var(--gold)}
+  .avert{background:rgba(224,135,58,.09);border:1px solid rgba(224,135,58,.35);
+         border-radius:8px;padding:10px 12px;margin-bottom:10px;font-size:13px}
+  .avert ul{margin:6px 0 0;padding-left:18px}
+  .avert li{margin-bottom:3px}
+  .why{color:var(--muted);font-size:12.5px;margin:8px 0 0;padding-left:12px;
+       border-left:2px solid var(--border)}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.92em;
+       background:rgba(255,255,255,.06);padding:1px 5px;border-radius:4px}
+  .cf{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  @media (max-width:620px){ body{padding:18px 12px 48px} }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Produire la note de livraison</h1>
+  <p class="lede">Maquette du 14/08/2026 — lot 2 du chantier « les retraits manuels au rapport ».
+     Une seule surface change : la modale affichée quand le rapprochement <b>ne trouve aucun
+     écart</b>. Tout le reste de l'écran de revue est inchangé.</p>
+
+  <!-- ===================================================== -->
+  <h2>1 · Aujourd'hui — et inchangé quand il n'y a rien à dire</h2>
+  <p class="note">Le calcul a tourné, il n'a rien trouvé, et aucun retrait manuel n'attend
+     d'être documenté. Ce n'est pas une erreur : on le dit, et l'application reste inerte.</p>
+
+  <div class="app">
+    <div class="banner ok">
+      <span class="txt">✓ Le plan est à jour avec le fichier ouvert.
+        <span class="recap">2 001 lignes actives, aucun écart.</span></span>
+    </div>
+    <div class="actions">
+      <span class="spacer"></span>
+      <button disabled>Appliquer</button>
+      <button class="btn-ghost">Fermer</button>
+    </div>
+  </div>
+
+  <!-- ===================================================== -->
+  <h2>2 · Aucun écart, mais des retraits à documenter</h2>
+  <p class="note">Cas nouveau, et cas réel du scénario visé : on retire des comptes à la main,
+     on relance une résolution qui ne fait basculer aucun verdict, on rapproche. Zéro écart —
+     et pourtant le lot part <b>sans note</b> alors que trois comptes ont quitté les fichiers.
+     Le bouton devient actif et <b>change de libellé</b>, comme « Réactiver <i>n</i> retiré(s)… »
+     le fait déjà.</p>
+
+  <div class="app">
+    <div class="banner ok">
+      <span class="txt">✓ Aucun écart avec le fichier ouvert.
+        <span class="recap">2 001 lignes actives.</span></span>
+    </div>
+
+    <div class="avert">
+      <b>3 retraits faits à la main ne figurent dans aucune note transmise.</b>
+      Ils datent du 31/07/2026 au 06/08/2026, soit depuis le dernier rapprochement
+      (28/07/2026). Les comptes concernés ont déjà quitté les fichiers de MEP ;
+      ce qui manque, c'est le document qui l'explique au destinataire.
+    </div>
+
+    <div class="grp mute">
+      <div class="grp-h"><span class="dot" style="background:var(--pa-autres)"></span>
+        <span class="n">3</span><span class="t">retirés à la main — à documenter</span></div>
+    </div>
+
+    <div class="actions">
+      <span class="recap">Aucun compte ne bouge : la note est écrite, les fichiers de MEP
+        sont réécrits à l'identique et le plan se réaligne sur le fichier ouvert.</span>
+      <span class="spacer"></span>
+      <button class="primary">Produire la note de livraison</button>
+      <button class="btn-ghost">Fermer</button>
+    </div>
+  </div>
+
+  <p class="why">Le <b>détail</b> des retraits n'est pas listé ici : celui qui applique vient de
+     les faire, et la revue sert à valider ce qui va être décidé, pas à relire ce qui l'a déjà
+     été. Seul le nombre apparaît, parce que c'est lui qui change ce que le bouton propose. Le
+     récap et son filtre « retiré » répondent déjà à « lesquels ».</p>
+
+  <!-- ===================================================== -->
+  <h2>3 · Après production</h2>
+  <p class="note">Même bandeau de compte rendu que pour un rapprochement appliqué, avec le nom
+     du rapport. C'est le chemin d'application existant : aucune commande nouvelle.</p>
+
+  <div class="app">
+    <div class="banner ok">
+      <span class="txt">✓ Note de livraison produite : <b>3 retraits manuels documentés</b>,
+        aucun compte modifié. Rapport :
+        <code>brm2608_rapprochement_2026-08-14_143207.html</code>.</span>
+    </div>
+  </div>
+
+  <!-- ===================================================== -->
+  <h2>4 · Ce qui ne change pas — la revue avec écarts</h2>
+  <p class="note">Dès qu'il y a un écart, l'écran et le libellé sont ceux d'aujourd'hui. Les
+     retraits manuels <b>ne sont pas comptés dans les changements à appliquer</b> : ils ont
+     déjà eu lieu. Ils sont documentés par le rapport, pas appliqués par le bouton.</p>
+
+  <div class="app">
+    <div class="grp">
+      <div class="grp-h"><span class="dot" style="background:var(--red)"></span>
+        <span class="n">47</span><span class="t">à retirer — éligibilité perdue</span></div>
+    </div>
+    <div class="grp">
+      <div class="grp-h"><span class="dot" style="background:var(--gold)"></span>
+        <span class="n">83</span><span class="t">à déplacer — jour de cycle changé</span></div>
+    </div>
+    <div class="grp mute">
+      <div class="grp-h"><span class="dot" style="background:var(--green-later)"></span>
+        <span class="n">1&nbsp;844</span><span class="t">inchangés — non touchés</span></div>
+    </div>
+
+    <div class="actions">
+      <span class="recap">Après application : <b>1 942</b> lignes actives,
+        <b>59</b> retirées.</span>
+      <span class="spacer"></span>
+      <button class="primary">Appliquer 130 changements</button>
+      <button class="btn-ghost">Annuler</button>
+    </div>
+  </div>
+
+  <p class="why">Le libellé compte <b>130</b> et non 133 : les trois retraits manuels ne sont pas
+     des changements à appliquer. Ils apparaîtront dans le rapport produit par ce clic, avec
+     leur date et leur motif.</p>
+
+</div>
+</body>
+</html>
