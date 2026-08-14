@@ -2028,7 +2028,16 @@ function ligneRun(j, r) {
       ? [h("button", { class: "tl-add-btn", onclick: (ev) =>
           // `plan_candidats_run` part AVANT que la fenêtre n'apparaisse : sans
           // cela, le clic reste sans effet visible le temps du scan.
-          occupe(ev.currentTarget, "…", () => ouvrirAjoutRun(r, j)) }, "+ Ajouter")]
+          occupe(ev.currentTarget, "…", () => ouvrirAjoutRun(r, j)) }, "+ Ajouter"),
+         // Alléger est la décision inverse, prise au même endroit et sous la
+         // même condition : elle porte sur CE run, pas sur une sélection du
+         // récap. Sa modale lit `plan.lignes`, déjà en mémoire — rien ne part
+         // au backend avant que l'utilisateur n'ait choisi son geste.
+         // Même habillage (`tl-add-btn`), classe propre en plus : les deux
+         // gestes se ressemblent à l'œil mais ne se confondent pas pour qui
+         // les cherche dans le DOM.
+         h("button", { class: "tl-add-btn tl-alleger-btn", onclick: (ev) =>
+           occupe(ev.currentTarget, "…", () => ouvrirAllegerRun(r, j)) }, "Alléger…")]
       : []));
   return h("tr", { class: "tl-run" },
     celluleJour(j),

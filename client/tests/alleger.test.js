@@ -75,6 +75,65 @@ const JOUR_PASSE = { date: "2026-01-05" };
 const JOUR_FUTUR = { date: "2099-01-05" };
 const RUN = { num: "RF01", jjs: [5] };
 
+/** Un run de la timeline, tel que `PlanApercu` le rend. */
+const runTimeline = (extra = {}) => ({
+  num: "RF01", jjs: [5], exclu: false, ecart: null,
+  detail: { vise: 40, report_entrant: 0, stock: 999, place: 40, reliquat: 0 },
+  ...extra,
+});
+
+/** Les libellés des boutons d'action de la cellule `tl-add` d'une ligne de run. */
+function actionsDuRun(ctx, run, jour = JOUR_FUTUR) {
+  const tr = ctx.app.ligneRun(ctx.evaluer(`(${JSON.stringify(jour)})`),
+    ctx.evaluer(`(${JSON.stringify(run)})`));
+  const cellule = trouver(tr, (n) => n.className === "tl-add");
+  const libelles = [];
+  (function marcher(n) {
+    if (typeof n !== "object" || n === null) return;
+    if (n.tagName === "button") libelles.push(n.textContent);
+    for (const c of n.children ?? []) marcher(c);
+  })(cellule);
+  return libelles;
+}
+
+test("l'action d'allégement vit sur la ligne du run, à côté de l'ajout", () => {
+  // « Alléger » est une décision sur UN run — elle se prend là où le run se
+  // lit, pas sur une sélection du récap. Les deux gestes exigent un plan
+  // ENREGISTRÉ : `plan_retirer` retouche le plan persisté.
+  const ctx = ecran([ligne("CF1")]);
+  assert.deepEqual(actionsDuRun(ctx, runTimeline()), ["+ Ajouter", "Alléger…"]);
+
+  ctx.evaluer("plan").genere = false;
+  assert.deepEqual(actionsDuRun(ctx, runTimeline()), [],
+    "sans plan enregistré, les deux gestes n'ont rien à retoucher");
+});
+
+test("un run écarté ne porte aucune action, allégement compris", () => {
+  // On ne peut rien placer sur un run écarté, ni rien lui retirer : il n'a
+  // jamais reçu de compte.
+  const ctx = ecran([ligne("CF1")]);
+  assert.deepEqual(actionsDuRun(ctx, runTimeline({ ecart: "exclu", detail: null })), []);
+});
+
+test("le déclencheur ouvre la modale sur SON run et SON jour porteur", async () => {
+  // `RunJour` ne porte pas de date : elle vient du jour civil qui l'héberge.
+  // Passer le run sans son jour donnerait un motif pré-rempli sans date, et
+  // surtout un run à venir traité comme passé.
+  const ctx = ecran([ligne("CF1"), ligne("CF2", { run_num: "RF09" })]);
+  const tr = ctx.app.ligneRun(ctx.evaluer('({ date: "2026-01-05" })'),
+    ctx.evaluer(`(${JSON.stringify(runTimeline())})`));
+  const declencheur = trouver(tr, (n) => n.tagName === "button" && n.textContent === "Alléger…");
+
+  await declencheur.click();
+
+  const texte = ctx.$("modal").textContent;
+  assert.match(texte, /Alléger le run RF01/, "la modale doit porter le run cliqué");
+  assert.match(champMotif(ctx.$).value, /du 05\/01\/2026 exclu a posteriori/,
+    "la date du jour porteur voyage avec le run, et le passé impose l'exclusion");
+  assert.equal(bouton(ctx.$, "Retirer 1 compte(s)").disabled, true,
+    "un seul compte actif sur RF01 : CF2 est sur un autre run");
+});
+
 test("run passé : seul l'exclusion est offerte, et le motif reste à compléter", async () => {
   // Le run a déjà été joué : le rééquilibrer n'a pas de sens, il s'exclut en
   // entier — épinglées comprises. Et le motif pré-rempli dit QUEL run est
