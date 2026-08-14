@@ -1797,6 +1797,62 @@ fn avertissement_ppf_cumulatif(fichiers: usize) -> Option<String> {
     })
 }
 
+/// Un horodatage stocké rendu en date ISO du **fuseau local**.
+///
+/// Les horodatages de retrait sont posés en UTC (`Utc::now().timestamp()`),
+/// mais le document est lu par celui qui a fait le geste, à son heure. Passer
+/// par `Utc` avant de convertir évite l'ambiguïté d'un `Local.timestamp_opt`
+/// sur un changement d'heure — un instant UTC n'est jamais ambigu.
+fn jour_local_iso(ts: i64) -> String {
+    use chrono::TimeZone;
+    chrono::Utc
+        .timestamp_opt(ts, 0)
+        .single()
+        .map(|d| d.with_timezone(&chrono::Local).date_naive().to_string())
+        .unwrap_or_default()
+}
+
+/// Les retraits faits **à la main** que la dernière note n'a pas documentés.
+///
+/// Rien ne marque l'origine d'un retrait — `Retrait` porte une date et un
+/// motif, pas sa provenance. Elle se DÉDUIT de deux horodatages :
+/// `plan_rapprocher_appliquer` calcule `maintenant` une seule fois et s'en sert
+/// pour les retraits qu'il pose ET pour `meta.rapproche_le`. Les retraits d'un
+/// rapprochement portent donc exactement la date de rapprochement enregistrée,
+/// et la comparaison **stricte** les exclut à la seconde près.
+///
+/// `rapproche_le` à `None` : le plan n'a jamais été rapproché, donc tous les
+/// retraits présents sont manuels — seul `plan::retirer` a pu les poser.
+///
+/// Collision acceptée : un retrait manuel posé dans la même seconde qu'une
+/// application de rapprochement est classé avec ceux du rapprochement, donc
+/// jamais listé. Fenêtre d'une seconde sur une application de bureau
+/// mono-utilisateur ; la fermer demanderait une colonne d'origine en base,
+/// écartée à la conception.
+fn retraits_manuels_depuis(
+    lignes: &[crate::plan::LignePlan],
+    rapproche_le: Option<i64>,
+    aujourdhui: chrono::NaiveDate,
+) -> Vec<crate::rapprochement_report::RetraitManuel> {
+    let seuil = rapproche_le.unwrap_or(i64::MIN);
+    let mut out: Vec<crate::rapprochement_report::RetraitManuel> = lignes
+        .iter()
+        .filter_map(|l| {
+            let r = l.retire.as_ref()?;
+            (r.le > seuil).then(|| crate::rapprochement_report::RetraitManuel {
+                cf: l.cf.clone(),
+                le: jour_local_iso(r.le),
+                motif: r.motif.clone(),
+                gelee: l.gelee(aujourdhui),
+            })
+        })
+        .collect();
+    // Date puis compte : les dates ISO se comparent lexicographiquement, et un
+    // retrait en lot pose la même seconde sur toutes ses lignes.
+    out.sort_by(|a, b| a.le.cmp(&b.le).then_with(|| a.cf.cmp(&b.cf)));
+    out
+}
+
 /// Enveloppe de commande : le rapprochement lui-même est pur, l'empreinte du
 /// fichier vient du disque.
 #[derive(Serialize)]
@@ -2382,6 +2438,104 @@ mod tests {
             planned_at: 0,
             retire: None,
         }
+    }
+
+    fn ligne_retiree(cf: &str, mep_date: &str, le: i64, motif: &str) -> crate::plan::LignePlan {
+        let mut l = ligne_mep(cf, 1, mep_date);
+        l.retire = Some(crate::plan::Retrait { le, motif: motif.into() });
+        l
+    }
+
+    fn jour_de(iso: &str) -> chrono::NaiveDate {
+        chrono::NaiveDate::parse_from_str(iso, "%Y-%m-%d").unwrap()
+    }
+
+    /// Midi UTC, pour que la date locale soit la même de UTC-12 à UTC+11 :
+    /// l'assertion ne dépend alors pas du fuseau de la machine de test.
+    const LE_6_AOUT: i64 = 1_786_017_600;
+    const LE_31_JUILLET: i64 = 1_785_499_200;
+    const LE_28_JUILLET: i64 = 1_785_240_000;
+
+    #[test]
+    fn un_retrait_pose_apres_le_dernier_rapprochement_est_liste() {
+        let lignes =
+            vec![ligne_retiree("4100238091", "2026-12-01", LE_31_JUILLET, "périmètre 2027")];
+        let out = retraits_manuels_depuis(&lignes, Some(LE_28_JUILLET), jour_de("2026-08-14"));
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].cf, "4100238091");
+        assert_eq!(out[0].le, "2026-07-31", "la date doit être rendue en ISO");
+        assert_eq!(out[0].motif, "périmètre 2027");
+        assert!(!out[0].gelee, "la MEP du 01/12 n'est pas passée le 14/08");
+    }
+
+    #[test]
+    fn un_retrait_pose_par_le_rapprochement_lui_meme_n_est_pas_liste() {
+        // VERROU DU FILIGRANE. `plan_rapprocher_appliquer` calcule `maintenant`
+        // UNE SEULE FOIS et le pose sur les retraits qu'il crée COMME sur
+        // `meta.rapproche_le` : les deux valeurs sont donc égales, et la
+        // comparaison stricte les exclut. Si l'horloge venait à être lue deux
+        // fois, avec `rapproche_le` calculé AVANT `appliquer`, les retraits du
+        // rapprochement n resurgiraient dans le rapport n+1 sous l'étiquette
+        // « manuel ». Ce test fige la borne ; le commentaire de la commande
+        // fige la cause.
+        let lignes = vec![ligne_retiree(
+            "4100241902",
+            "2026-12-01",
+            LE_28_JUILLET,
+            "Rapprochement du 28/07/2026 — CTC prêt plus tard",
+        )];
+        let out = retraits_manuels_depuis(&lignes, Some(LE_28_JUILLET), jour_de("2026-08-14"));
+        assert!(out.is_empty(), "un retrait du rapprochement n'est pas un retrait manuel");
+    }
+
+    #[test]
+    fn un_retrait_anterieur_au_dernier_rapprochement_n_est_pas_liste() {
+        // Il a déjà été documenté par la note précédente : le lister à nouveau
+        // le ferait apparaître dans deux rapports.
+        let lignes =
+            vec![ligne_retiree("4100238091", "2026-12-01", LE_28_JUILLET - 3600, "vieux")];
+        let out = retraits_manuels_depuis(&lignes, Some(LE_28_JUILLET), jour_de("2026-08-14"));
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn sans_rapprochement_anterieur_tous_les_retraits_sont_manuels() {
+        // `rapproche_le` à None : seul `plan::retirer` a pu poser ces retraits.
+        let lignes =
+            vec![ligne_retiree("4100238091", "2026-12-01", LE_31_JUILLET, "périmètre 2027")];
+        let out = retraits_manuels_depuis(&lignes, None, jour_de("2026-08-14"));
+        assert_eq!(out.len(), 1);
+    }
+
+    #[test]
+    fn une_ligne_active_ne_produit_aucun_retrait() {
+        let lignes = vec![ligne_mep("4100240115", 1, "2026-12-01")];
+        let out = retraits_manuels_depuis(&lignes, None, jour_de("2026-08-14"));
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn la_liste_est_ordonnee_par_date_puis_par_compte() {
+        // Une liste de décisions se lit comme un journal ; un retrait en lot
+        // pose la MÊME seconde sur toutes ses lignes, que le n° de CF départage.
+        // Les deux clés sont exercées : sans la seconde, l'ordre des deux
+        // lignes du 31/07 dépendrait de celui du plan.
+        let lignes = vec![
+            ligne_retiree("4100247788", "2026-12-01", LE_6_AOUT, "litige"),
+            ligne_retiree("4100243662", "2026-12-01", LE_31_JUILLET, "comité"),
+            ligne_retiree("4100238091", "2026-12-01", LE_31_JUILLET, "comité"),
+        ];
+        let out = retraits_manuels_depuis(&lignes, None, jour_de("2026-08-14"));
+        let cfs: Vec<&str> = out.iter().map(|m| m.cf.as_str()).collect();
+        assert_eq!(cfs, vec!["4100238091", "4100243662", "4100247788"]);
+    }
+
+    #[test]
+    fn un_retrait_sur_une_mep_passee_est_marque_gele() {
+        // C'est ce drapeau qui envoie la ligne dans l'alerte rouge du rapport.
+        let lignes = vec![ligne_retiree("4100247788", "2026-06-12", LE_6_AOUT, "litige")];
+        let out = retraits_manuels_depuis(&lignes, None, jour_de("2026-08-14"));
+        assert!(out[0].gelee, "la MEP du 12/06 est passée le 14/08");
     }
 
     #[test]
