@@ -2423,6 +2423,22 @@ async function ouvrirDeplacer() {
       }, "Déplacer")));
 }
 
+/** L'avertissement des MEP gelées, partagé par les gestes qui touchent un
+ *  fichier DÉJÀ TRANSMIS. Ce qui change d'un geste à l'autre est le moment où
+ *  le fichier bougera : un retrait en sort au prochain tirage, une
+ *  réactivation y rentre au prochain enregistrement — d'où `quand`, plutôt
+ *  qu'une phrase unique qui serait fausse pour l'un des deux.
+ *
+ *  `null` quand rien n'est gelé : un avertissement qui paraît toujours
+ *  n'avertit plus de rien. */
+function noteMepGelee(geles, quand) {
+  if (!geles.length) return null;
+  const dates = [...new Set(geles.map((l) => fmtDateFr(l.mep_date)))].join(", ");
+  return h("div", { class: "danger-note" },
+    `⚠ ${fmtN(geles.length)} compte(s) appartiennent à une MEP gelée (${dates}). `
+    + `Son fichier a déjà été transmis : il changera au prochain ${quand}.`);
+}
+
 function ouvrirRetrait() {
   const cfs = [...plan.sel];
   const geles = plan.lignes.filter((l) => cfs.includes(l.cf) && l.gelee);
@@ -2445,13 +2461,10 @@ function ouvrirRetrait() {
     h("p", { class: "field-hint" },
       "Les lignes restent consultables via le filtre « retiré » et ne seront pas replacées par une régénération. Le retrait est annulable."),
   ];
-  if (geles.length) {
-    // Les fichiers sont cumulatifs : retirer d'une MEP livrée change un
-    // fichier déjà transmis. C'est assumé, mais ça se dit au moment de l'acte.
-    noeuds.push(h("div", { class: "danger-note" },
-      `⚠ ${geles.length} compte(s) appartiennent à une MEP gelée (${[...new Set(geles.map((l) => fmtDateFr(l.mep_date)))].join(", ")}). `
-      + "Son fichier a déjà été transmis : il changera au prochain tirage."));
-  }
+  // Les fichiers sont cumulatifs : retirer d'une MEP livrée change un fichier
+  // déjà transmis. C'est assumé, mais ça se dit au moment de l'acte.
+  const note = noteMepGelee(geles, "tirage");
+  if (note) noeuds.push(note);
   noeuds.push(h("label", { class: "field-hint" }, "Motif du retrait (obligatoire)"), zone,
     h("div", { class: "actions" }, h("button", { class: "btn-ghost", onclick: closeModal }, "Annuler"), btn));
   modal(...noeuds);
@@ -2480,6 +2493,11 @@ function ouvrirReactivation() {
       "Ils redeviennent livrables et repartiront dans les fichiers de leur MEP. "
       + "Une régénération pourra les replacer sur un autre run."),
   ];
+  // TROISIÈME copie de la même phrase, restée en date ISO là où les deux
+  // autres disent JJ/MM/AAAA. `noteMepGelee(geles, "enregistrement")` la
+  // remplace telle quelle — mais `tests/plan_reactivation.test.js` fige le
+  // format ISO, et ce fichier était hors du périmètre de la revue. À basculer
+  // en même temps que lui.
   if (geles.length) {
     noeuds.push(h("div", { class: "danger-note" },
       `⚠ ${geles.length} compte(s) appartiennent à une MEP gelée (${[...new Set(geles.map((l) => l.mep_date))].join(", ")}). `
@@ -3038,7 +3056,15 @@ function justificationRetrait(l) {
  *  (répartition des plateformes conservée) ou se réduit à une sélection.
  *  Aucune répartition n'est calculée ici : elle vient de
  *  `plan_proposer_retrait`, l'IHM ne fait qu'afficher et amender. */
-function ouvrirAllegerRun(run, jour) {
+async function ouvrirAllegerRun(run, jour) {
+  // `plan.lignes` peut décrire le plan D'AVANT : la timeline se redessine
+  // pendant une génération, bien avant que le récap ne soit rechargé (cf. le
+  // commentaire de `ligneRun`). On relit donc l'état avant de compter, comme
+  // `ouvrirAjoutRun` interroge le backend avant d'afficher. L'exclusion, elle,
+  // ne s'en contente pas : sa liste de comptes est établie côté moteur.
+  try { plan.lignes = await invoke("plan_lignes"); }
+  catch (e) { return planBanner("error", String(e)); }
+
   const actifs = plan.lignes.filter((l) => l.run_num === run.num && l.retire_motif == null);
   if (!actifs.length)
     return planBanner("info", `Aucun compte actif sur le run ${run.num} : rien à alléger.`);
@@ -3059,7 +3085,11 @@ function ouvrirAllegerRun(run, jour) {
   // `value`, son contenu est son enfant texte.
   const zone = h("textarea", { rows: "3", style: "width:100%;margin:8px 0" });
   zone.value = passe ? PREREMPLI : "";
-  const champN = h("input", { type: "number", min: "1", max: String(actifs.length - 1) });
+  // Pas de `max` : le vrai maximum est la somme par plateforme des (effectif
+  // − 1), que seul le moteur connaît. En annoncer un plus grand ferait mentir
+  // le champ, et sur un run d'un seul compte `max` valait 0 pour un `min` de
+  // 1. Le backend rend l'erreur en français, dans la modale.
+  const champN = h("input", { type: "number", min: "1" });
   const corps = h("div", { class: "alleger-corps" });
   const avert = h("div", {});
   const compte = h("span", { class: "add-count" });
@@ -3082,7 +3112,12 @@ function ouvrirAllegerRun(run, jour) {
   const btn = h("button", { class: "btn-danger", onclick: (ev) =>
     occupe(ev.currentTarget, "Retrait en cours…", async () => {
       try {
-        const obsoletes = await invoke("plan_retirer", { cfs: cfsARetirer(), motif: zone.value });
+        // Exclure un run, c'est TOUT le run : le moteur établit lui-même la
+        // liste au moment du clic, sur le plan enregistré. Envoyer les comptes
+        // affichés ferait porter le geste par un instantané de l'IHM.
+        const obsoletes = mode === "exclure"
+          ? await invoke("plan_exclure_run", { runNum: run.num, motif: zone.value })
+          : await invoke("plan_retirer", { cfs: cfsARetirer(), motif: zone.value });
         plan.sel.clear(); signalerObsoletes(obsoletes); await rechargerRecap();
       } catch (e) { planBanner("error", String(e)); }
       closeModal();
@@ -3093,13 +3128,10 @@ function ouvrirAllegerRun(run, jour) {
    *  reconstruit perdrait l'écouteur qui vient de le rouvrir. */
   function rafraichir() {
     const cfs = cfsARetirer();
-    const geles = actifs.filter((l) => cfs.includes(l.cf) && l.gelee);
     // Les fichiers sont cumulatifs : retirer d'une MEP livrée change un fichier
     // déjà transmis. C'est assumé, mais ça se dit au moment de l'acte.
-    avert.replaceChildren(...(geles.length ? [h("div", { class: "danger-note" },
-      `⚠ ${fmtN(geles.length)} compte(s) appartiennent à une MEP gelée `
-      + `(${[...new Set(geles.map((l) => fmtDateFr(l.mep_date)))].join(", ")}). `
-      + "Son fichier a déjà été transmis : il changera au prochain tirage.")] : []));
+    const note = noteMepGelee(actifs.filter((l) => cfs.includes(l.cf) && l.gelee), "tirage");
+    avert.replaceChildren(...(note ? [note] : []));
     compte.replaceChildren(...(mode === "selection"
       ? [h("b", {}, fmtN(gardes.size)), " gardé(s) — ", h("b", {}, fmtN(cfs.length)), " seront retiré(s)"]
       : mode === "prorata" && cfs.length
@@ -3107,7 +3139,11 @@ function ouvrirAllegerRun(run, jour) {
            h("b", {}, fmtN(actifs.length - cfs.length)), " resteront actifs sur ce run"]
         : []));
     btn.textContent = `Retirer ${fmtN(cfs.length)} compte(s)`;
-    btn.disabled = !cfs.length || !motifSuffisant();
+    // Vider un run à venir n'est pas un geste de cet écran : ne rien garder
+    // reviendrait à l'exclure, ce qui ne s'offre que pour un run déjà joué —
+    // et laisserait le plan sans run pour ces comptes sans le dire.
+    const videraitLeRun = mode === "selection" && gardes.size === 0;
+    btn.disabled = !cfs.length || videraitLeRun || !motifSuffisant();
   }
 
   const corpsExclure = () => [
@@ -3156,7 +3192,10 @@ function ouvrirAllegerRun(run, jour) {
         h("span", { class: "cf" }, cf),
         h("span", { class: "rs" }, l?.raison_sociale ?? ""),
         justificationRetrait(l),
-        badgeOrigineAlleger(l),
+        // Une ligne simplement allouée n'a pas de badge, et `append(null)`
+        // écrirait « null » dans un vrai DOM. Le faux DOM avale les `null`
+        // (dom_shim.js) : ce cas ne peut se voir qu'à l'écran.
+        badgeOrigineAlleger(l) ?? "",
         h("button", { class: "lien", onclick: () => {
           echangeOuvert = ouvert ? null : cf;
           dessinerCorps();

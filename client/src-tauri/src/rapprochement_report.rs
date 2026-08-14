@@ -432,9 +432,14 @@ pub fn render(d: &RapprochementReportData) -> String {
                 esc(&g.motif),
             ));
             for c in &g.comptes {
+                // L'alerte des gelés renvoie ici pour « la liste exacte » :
+                // sans marqueur, le lecteur ne saurait pas lesquels de ces
+                // comptes ont déjà quitté ses fichiers. Texte fixe, rien à
+                // échapper.
                 html.push_str(&format!(
-                    "<tr class=\"geste-l\"><td>{}</td><td class=\"date\"></td><td></td></tr>\n",
+                    "<tr class=\"geste-l\"><td>{}</td><td class=\"date\">{}</td><td></td></tr>\n",
                     esc(&c.cf),
+                    if c.gelee { "❄ déjà transmis" } else { "" },
                 ));
             }
         }
@@ -1186,6 +1191,42 @@ mod tests {
         assert!(
             alerte.contains("4100250000"),
             "un geste d'un seul gelé garde la phrase unitaire"
+        );
+    }
+
+    #[test]
+    fn le_tableau_des_gestes_designe_les_comptes_deja_transmis() {
+        // L'alerte renvoie au tableau (« la liste exacte reste au tableau »).
+        // Encore faut-il l'y trouver : sans marqueur, le lecteur voit 143
+        // comptes indifférenciés et ne sait pas lesquels ont déjà quitté ses
+        // fichiers — l'alerte promet une liste qui n'existe nulle part.
+        let r = vide();
+        let gestes = vec![geste(
+            "2026-08-14",
+            "Run RF02 exclu a posteriori — erreurs",
+            &[("4100238091", true), ("4100247788", false)],
+        )];
+        let mut d = donnees(&r);
+        d.gestes_manuels = &gestes;
+        let html = render(&d);
+
+        let lignes: Vec<&str> = corps(&html).split("<tr class=\"geste-l\">").skip(1).collect();
+        assert_eq!(lignes.len(), 2, "une ligne par compte du geste");
+        let gelee = lignes
+            .iter()
+            .find(|l| l.contains("4100238091"))
+            .expect("le compte gelé doit avoir sa ligne");
+        let active = lignes
+            .iter()
+            .find(|l| l.contains("4100247788"))
+            .expect("le compte non gelé aussi");
+        assert!(
+            gelee.split("</tr>").next().unwrap_or("").contains("déjà transmis"),
+            "le compte gelé doit être marqué sur SA ligne : {gelee}"
+        );
+        assert!(
+            !active.split("</tr>").next().unwrap_or("").contains("déjà transmis"),
+            "et le non-gelé ne doit pas l'être, sinon le marqueur ne distingue rien : {active}"
         );
     }
 

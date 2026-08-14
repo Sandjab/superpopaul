@@ -1741,6 +1741,37 @@ pub async fn plan_retirer(
     .map_err(|e| e.to_string())?
 }
 
+/// Exclut un run entier, épinglées comprises — le geste d'un run déjà joué.
+///
+/// La liste des comptes est établie **ici**, au moment du clic, et non envoyée
+/// par l'IHM : celle-ci travaille sur `plan.lignes`, qui peut décrire le plan
+/// d'avant une régénération. Un instantané périmé retirerait des comptes qui
+/// ne sont plus sur ce run, et en laisserait d'autres.
+///
+/// Aucune garde de date : exclure a posteriori un run joué est exactement ce
+/// que ce geste sert à faire.
+#[tauri::command]
+pub async fn plan_exclure_run(
+    state: State<'_, AppState>,
+    run_num: String,
+    motif: String,
+) -> Result<Vec<String>, String> {
+    let cfg = state.current_config()?;
+    let input = state.input_path()?;
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || {
+        let (mut lignes, meta) = charger_pour_retouche(&store)?;
+        let cfs = crate::plan::cfs_actifs_du_run(&lignes, &run_num);
+        if cfs.is_empty() {
+            return Err(format!("aucun compte actif sur le run « {run_num} »"));
+        }
+        crate::plan::retirer(&mut lignes, &cfs, &motif, chrono::Utc::now().timestamp())?;
+        sauver_apres_retouche(&store, &input, &cfg, &lignes, &meta).map(|(_, obs)| obs)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 pub async fn plan_annuler_retrait(
     state: State<'_, AppState>,
@@ -1802,6 +1833,7 @@ pub async fn plan_proposer_retrait(
     let store = state.store.clone();
     tokio::task::spawn_blocking(move || {
         let (lignes, meta) = charger_pour_retouche(&store)?;
+        crate::plan::verifier_run_a_venir(&lignes, &run_num, chrono::Local::now().date_naive())?;
         // Même seed que la génération : proposition reproductible.
         let seed = crate::plan::PlanParams::depuis_yaml(&meta.params_yaml)?.seed;
         let cfs = crate::plan::proposer_retrait_proportionnel(&lignes, &run_num, n, seed)?;

@@ -938,14 +938,53 @@ pub fn retirer(
     }
     let mut cibles = Vec::new();
     for cf in cfs {
-        cibles.push(
-            plan.iter()
-                .position(|l| l.cf == *cf)
-                .ok_or_else(|| format!("le compte « {cf} » n'est pas au plan"))?,
-        );
+        let i = plan
+            .iter()
+            .position(|l| l.cf == *cf)
+            .ok_or_else(|| format!("le compte « {cf} » n'est pas au plan"))?;
+        // La trace d'un retrait est la piste d'audit que le rapport transmet,
+        // et elle est datée : la réécrire ferait basculer un ancien geste sous
+        // le motif d'un nouveau, en silence. Rien n'est écrit tant que TOUTES
+        // les cibles ne sont pas résolues — un lot passe en entier ou pas du
+        // tout.
+        if plan[i].retiree() {
+            return Err(format!(
+                "le compte « {cf} » est déjà retiré du plan : son motif et sa date \
+                 d'origine seraient perdus. Réactive-le d'abord si tu veux le retirer \
+                 sous un autre motif."
+            ));
+        }
+        cibles.push(i);
     }
     for i in cibles {
         plan[i].retire = Some(Retrait { le: maintenant, motif: motif.to_string() });
+    }
+    Ok(())
+}
+
+/// Refuse le rééquilibrage d'un run déjà joué. La règle vivait dans l'IHM, sur
+/// l'horloge du poste : une commande reste appelable sans elle.
+///
+/// Borne **stricte**, alignée sur l'IHM : un run daté d'aujourd'hui se
+/// rééquilibre encore. Un run inconnu passe — le calcul qui suit rend déjà
+/// « aucun compte actif sur le run ».
+///
+/// Ne concerne QUE le décimage : l'exclusion a posteriori d'un run joué est
+/// précisément le geste qu'il faut laisser faire.
+pub fn verifier_run_a_venir(
+    plan: &[LignePlan],
+    run_num: &str,
+    aujourdhui: chrono::NaiveDate,
+) -> Result<(), String> {
+    let Some(l) = plan.iter().find(|l| l.run_num == run_num) else {
+        return Ok(());
+    };
+    if l.run_date < aujourdhui {
+        return Err(format!(
+            "le run « {run_num} » du {} a déjà été joué : il ne se rééquilibre pas. \
+             L'exclusion du run a posteriori, elle, reste possible.",
+            l.run_date.format("%d/%m/%Y")
+        ));
     }
     Ok(())
 }
@@ -1011,9 +1050,10 @@ pub fn proposer_retrait_proportionnel(
     let max: usize = par_pa.values().map(|v| v.len() - 1).sum();
     if n > max {
         return Err(format!(
+            // Pas de renvoi vers l'exclusion : elle n'est offerte que pour un
+            // run PASSÉ, et ce message-ci ne paraît que sur un run à venir.
             "impossible de retirer {n} compte(s) : le maximum est {max} — chaque \
-             plateforme du run garde au moins un compte. Pour tout retirer, \
-             c'est l'exclusion du run."
+             plateforme du run garde au moins un compte."
         ));
     }
     // Répartition aux plus forts restes, pondérée par les effectifs actifs :
@@ -2639,6 +2679,27 @@ mod tests {
     }
 
     #[test]
+    fn un_compte_deja_retire_ne_se_retire_pas_une_seconde_fois() {
+        // La trace du premier retrait est la PISTE D'AUDIT : c'est elle que le
+        // rapport de rapprochement transmet, et elle est datée. L'écraser
+        // réécrit l'histoire — un geste en lot qui ratisserait large ferait
+        // basculer d'anciens retraits sous son propre motif, sans que rien
+        // ne le signale.
+        let mut plan = vec![
+            lp("CF1", 5, "PA", "2026-12-01", Origine::Auto),
+            lp("CF2", 5, "PA", "2026-12-01", Origine::Auto),
+        ];
+        retirer(&mut plan, &["CF1".into()], "migration repoussée", 111).unwrap();
+
+        let err = retirer(&mut plan, &["CF1".into(), "CF2".into()], "run exclu", 222).unwrap_err();
+        assert!(err.contains("CF1"), "le message doit nommer le compte fautif : {err}");
+
+        let r = plan[0].retire.as_ref().expect("la trace d'origine doit survivre");
+        assert_eq!((r.le, r.motif.as_str()), (111, "migration repoussée"));
+        assert!(!plan[1].retiree(), "aucune ligne du lot ne doit avoir bougé");
+    }
+
+    #[test]
     fn annulation_de_retrait_reactive_la_ligne() {
         let mut plan = vec![lp("CF1", 5, "PA", "2026-12-01", Origine::Auto)];
         retirer(&mut plan, &["CF1".into()], "erreur de manip", 1).unwrap();
@@ -2737,6 +2798,37 @@ mod tests {
         // max = (2−1) + (1−1) = 1.
         let err = proposer_retrait_proportionnel(&plan, "RF01", 2, 42).unwrap_err();
         assert!(err.contains("maximum est 1"), "le message doit dire le maximum retirable : {err}");
+        // Le décimage n'est offert que pour un run À VENIR, où l'exclusion,
+        // elle, ne l'est pas : y renvoyer désigne une porte qui n'existe pas
+        // sur l'écran d'où vient le message.
+        assert!(
+            !err.contains("exclusion"),
+            "le message ne doit pas renvoyer vers un geste inatteignable : {err}"
+        );
+    }
+
+    #[test]
+    fn un_run_deja_joue_ne_se_decime_pas() {
+        // La règle vivait dans l'IHM, sur l'horloge du poste. Le moteur doit
+        // la tenir lui aussi : rééquilibrer un run joué changerait des
+        // fichiers déjà transmis sans qu'aucun motif ne l'explique.
+        let mut plan = vec![l_run("E1", "RF01", "Esalink", Origine::Auto)];
+        plan[0].run_date = d("2026-08-10");
+
+        // Borne STRICTE, alignée sur celle de l'IHM (`jour.date < aujourd'hui`) :
+        // le jour même, le run se rééquilibre encore.
+        assert!(verifier_run_a_venir(&plan, "RF01", d("2026-08-10")).is_ok());
+
+        let err = verifier_run_a_venir(&plan, "RF01", d("2026-08-11")).unwrap_err();
+        assert!(err.contains("RF01"), "le message doit nommer le run : {err}");
+        assert!(
+            err.contains("exclusion"),
+            "et rappeler le geste qui, lui, reste permis sur un run joué : {err}"
+        );
+
+        // Un run inconnu n'est pas l'affaire de cette garde : le calcul rend
+        // déjà « aucun compte actif sur le run ».
+        assert!(verifier_run_a_venir(&plan, "RF99", d("2026-08-11")).is_ok());
     }
 
     #[test]

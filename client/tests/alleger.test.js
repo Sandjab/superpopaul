@@ -35,7 +35,7 @@ function ecran(lignes, repondre = () => null) {
   p.lignes = ctx.evaluer(`(${JSON.stringify(lignes)})`);
   ctx.repondreAux((cmd, args) => {
     if (cmd === "plan_lignes") return ctx.evaluer(`(${JSON.stringify(lignes)})`);
-    if (cmd === "plan_retirer") return ctx.evaluer("([])");
+    if (cmd === "plan_retirer" || cmd === "plan_exclure_run") return ctx.evaluer("([])");
     return repondre(cmd, args);
   });
   return ctx;
@@ -73,6 +73,12 @@ function cocher(cb) {
 const retraits = (ctx) => ctx.invocations
   .filter(([c]) => c === "plan_retirer")
   .map(([, a]) => ({ cfs: [...a.cfs].sort(), motif: a.motif }));
+
+/** Les appels `plan_exclure_run` : le geste d'un run passé n'envoie AUCUNE
+ *  liste de comptes, c'est le moteur qui l'établit au moment du clic. */
+const exclusions = (ctx) => ctx.invocations
+  .filter(([c]) => c === "plan_exclure_run")
+  .map(([, a]) => a);
 
 // Un run passé l'est pour toujours ; un run « à venir » daté 2099 le reste
 // aussi longtemps que ces tests vivront. Les deux dates sont choisies pour que
@@ -151,7 +157,7 @@ test("run passé : seul l'exclusion est offerte, et le motif reste à compléter
     ligne("CF3", { origine: "manuel" }),
     ligne("CF4", { retire_motif: "retiré la semaine dernière" }),
   ]);
-  ctx.app.ouvrirAllegerRun(RUN, JOUR_PASSE);
+  await ctx.app.ouvrirAllegerRun(RUN, JOUR_PASSE);
 
   assert.equal(bouton(ctx.$, "Ne garder que"), null,
     "un run passé n'offre pas la sélection : il est déjà joué");
@@ -169,14 +175,33 @@ test("run passé : seul l'exclusion est offerte, et le motif reste à compléter
 
   await bouton(ctx.$, "Retirer 3 compte(s)").click();
 
-  const partis = retraits(ctx);
-  assert.equal(partis.length, 1, "un geste = un seul retrait, c'est ce que le rapport regroupe");
-  assert.deepEqual(partis[0].cfs, ["CF1", "CF2", "CF3"], "CF3 est épinglée et part quand même");
-  assert.match(partis[0].motif, /incident chez le prestataire$/);
+  const partis = exclusions(ctx);
+  assert.equal(partis.length, 1, "un geste = une seule écriture, c'est ce que le rapport regroupe");
+  assert.deepEqual({ ...partis[0] }, { runNum: "RF01", motif: zone.value });
+  // Le geste ne transporte AUCUNE liste de comptes : `plan.lignes` peut
+  // décrire le plan d'avant une régénération, et un instantané périmé
+  // retirerait des comptes qui ne sont plus sur ce run.
+  assert.deepEqual(retraits(ctx), [],
+    "l'exclusion ne passe pas par un retrait de comptes nommés");
   // Régression classique du projet : le geste passe, l'écran reste sur l'état
   // d'avant et l'utilisateur le refait.
+  assert.ok(ctx.invocations.filter(([c]) => c === "plan_lignes").length >= 2,
+    "le récap doit être rechargé APRÈS le geste, pas seulement lu à l'ouverture");
+});
+
+test("l'ouverture relit le plan avant de compter", async () => {
+  // La timeline se redessine pendant une génération, bien avant que le récap
+  // ne soit rechargé : `plan.lignes` peut alors décrire le plan D'AVANT. Ce
+  // que la modale annonce et ce sur quoi elle agit doivent venir du backend.
+  const ctx = ecran([ligne("CF1"), ligne("CF2")]);
+  ctx.evaluer("plan").lignes = ctx.evaluer("([])"); // état périmé : plus rien au plan
+
+  await ctx.app.ouvrirAllegerRun(RUN, JOUR_FUTUR);
+
   assert.ok(ctx.invocations.some(([c]) => c === "plan_lignes"),
-    "le récap doit être rechargé après le retrait");
+    "l'ouverture doit relire le plan enregistré");
+  assert.match(ctx.$("modal").textContent, /2 comptes actifs/,
+    "et compter sur ce qu'elle vient de lire, pas sur l'instantané périmé");
 });
 
 test("un motif plus court que le pré-remplissage reste un motif", async () => {
@@ -185,7 +210,7 @@ test("un motif plus court que le pré-remplissage reste un motif", async () => {
   // Ce qui se mesure est l'intention — avoir écrit autre chose que ce qui
   // était proposé —, pas le volume de texte.
   const ctx = ecran([ligne("CF1")]);
-  ctx.app.ouvrirAllegerRun(RUN, JOUR_PASSE);
+  await ctx.app.ouvrirAllegerRun(RUN, JOUR_PASSE);
   const COURT = "Run joué sans les comptes";
   assert.ok(COURT.length < champMotif(ctx.$).value.trim().length,
     "le motif de ce test doit bien être plus court que le pré-remplissage");
@@ -194,12 +219,12 @@ test("un motif plus court que le pré-remplissage reste un motif", async () => {
   assert.equal(bouton(ctx.$, "Retirer 1 compte(s)").disabled, false);
 
   await bouton(ctx.$, "Retirer 1 compte(s)").click();
-  assert.equal(retraits(ctx)[0].motif, COURT);
+  assert.equal(exclusions(ctx)[0].motif, COURT);
 });
 
 test("run à venir, mode sélection : ce qui n'est pas coché part au retrait", async () => {
   const ctx = ecran([ligne("CF1"), ligne("CF2"), ligne("CF3")]);
-  ctx.app.ouvrirAllegerRun(RUN, JOUR_FUTUR);
+  await ctx.app.ouvrirAllegerRun(RUN, JOUR_FUTUR);
 
   bouton(ctx.$, "Ne garder que ma sélection").click();
   const cases = casesACocher(ctx.$("modal"));
@@ -220,12 +245,12 @@ test("run à venir, mode sélection : ce qui n'est pas coché part au retrait", 
   assert.deepEqual(partis[0].cfs, ["CF2", "CF3"], "on coche ce qu'on GARDE, le reste part");
 });
 
-test("l'origine « tirage » est atténuée par la cellule, pas par un span", () => {
+test("l'origine « tirage » est atténuée par la cellule, pas par un span", async () => {
   // `table.plan-data td.pa` cible le TD : posée sur un span, la classe ne
   // rencontre jamais sa règle et « tirage » ressort autant qu'une épingle,
   // qui elle mérite le regard.
   const ctx = ecran([ligne("CF1")]);
-  ctx.app.ouvrirAllegerRun(RUN, JOUR_FUTUR);
+  await ctx.app.ouvrirAllegerRun(RUN, JOUR_FUTUR);
   bouton(ctx.$, "Ne garder que ma sélection").click();
 
   const cellule = trouver(ctx.$("modal"),
@@ -234,23 +259,23 @@ test("l'origine « tirage » est atténuée par la cellule, pas par un span", ()
   assert.equal(cellule.className, "pa");
 });
 
-test("un run passé n'annonce pas ses jours de cycle", () => {
+test("un run passé n'annonce pas ses jours de cycle", async () => {
   // Ils disent ce qu'on POURRAIT encore placer sur ce run : sans objet pour un
   // run déjà joué, qu'on ne fait que quitter.
   const ctx = ecran([ligne("CF1")]);
-  ctx.app.ouvrirAllegerRun(RUN, JOUR_PASSE);
+  await ctx.app.ouvrirAllegerRun(RUN, JOUR_PASSE);
   assert.ok(!ctx.$("modal").textContent.includes("jours de cycle"),
     "l'en-tête d'un run passé se limite au run, à sa date et à ses comptes actifs");
 
-  ctx.app.ouvrirAllegerRun(RUN, JOUR_FUTUR);
+  await ctx.app.ouvrirAllegerRun(RUN, JOUR_FUTUR);
   assert.ok(ctx.$("modal").textContent.includes("jours de cycle"),
     "un run à venir, lui, les annonce — sinon ce test ne prouverait rien");
 });
 
-test("tout garder n'est pas un geste : le bouton se referme", () => {
+test("tout garder n'est pas un geste : le bouton se referme", async () => {
   // « Retirer 0 compte(s) » partirait au backend écrire un motif pour rien.
   const ctx = ecran([ligne("CF1"), ligne("CF2")]);
-  ctx.app.ouvrirAllegerRun(RUN, JOUR_FUTUR);
+  await ctx.app.ouvrirAllegerRun(RUN, JOUR_FUTUR);
   bouton(ctx.$, "Ne garder que ma sélection").click();
   taperMotif(ctx.$, "un motif parfaitement valable");
 
@@ -262,6 +287,23 @@ test("tout garder n'est pas un geste : le bouton se referme", () => {
   cocher(casesACocher(ctx.$("modal"))[1]);
   assert.equal(bouton(ctx.$, "Retirer 0 compte(s)").disabled, true,
     "tout est gardé, il n'y a plus rien à retirer");
+});
+
+test("ne rien garder viderait le run : le geste est refusé aussi", async () => {
+  // L'autre bout du même arbitrage : vider un run est réservé à l'exclusion,
+  // qui ne s'offre que pour un run déjà joué. Sur un run à venir, tout
+  // décocher laisserait le plan sans run pour ces comptes sans le dire.
+  const ctx = ecran([ligne("CF1"), ligne("CF2")]);
+  await ctx.app.ouvrirAllegerRun(RUN, JOUR_FUTUR);
+  bouton(ctx.$, "Ne garder que ma sélection").click();
+  taperMotif(ctx.$, "un motif parfaitement valable");
+
+  assert.equal(bouton(ctx.$, "Retirer 2 compte(s)").disabled, true,
+    "aucun compte gardé : ce serait l'exclusion du run, pas un allégement");
+
+  cocher(casesACocher(ctx.$("modal"))[0]);
+  assert.equal(bouton(ctx.$, "Retirer 1 compte(s)").disabled, false,
+    "un compte gardé suffit à rendre le geste possible");
 });
 
 /** La ligne de la proposition qui porte ce compte. */
@@ -281,19 +323,33 @@ const PROPOSITION = [
 /** Run à venir de 3 comptes, deux plateformes, prêt pour le mode prorata.
  *  CF3 est hors annuaire : c'est le premier critère de sortie du décimage, et
  *  la modale doit le dire là où elle propose de le retirer. */
-function ecranProrata() {
+async function ecranProrata() {
   const ctx = ecran(
     [ligne("CF1"), ligne("CF2", { pa: "Esalink" }), ligne("CF3", { in_directory: false })],
     (cmd) => (cmd === "plan_proposer_retrait"
       ? ctx.evaluer(`(${JSON.stringify(PROPOSITION)})`) : null));
-  ctx.app.ouvrirAllegerRun(RUN, JOUR_FUTUR);
+  await ctx.app.ouvrirAllegerRun(RUN, JOUR_FUTUR);
   return ctx;
 }
+
+test("le champ N n'annonce pas une plage vide ni un maximum inventé", async () => {
+  // Le vrai maximum est la somme par plateforme des (effectif − 1), que seul
+  // le moteur connaît. Le champ déclarait `actifs.length - 1` : sur un run
+  // d'un seul compte, cela donnait min=1 et max=0 — une plage que rien ne
+  // peut satisfaire, offerte à la saisie.
+  const ctx = ecran([ligne("CF1")]);
+  await ctx.app.ouvrirAllegerRun(RUN, JOUR_FUTUR);
+  const champN = trouver(ctx.$("modal"), (n) => n.attrs?.type === "number");
+
+  assert.equal(champN.attrs.min, "1", "on ne retire jamais zéro compte");
+  assert.equal(champN.attrs.max, undefined,
+    "aucun maximum ne peut être annoncé sans connaître les effectifs par plateforme");
+});
 
 test("run à venir, mode prorata : la proposition part au retrait telle quelle", async () => {
   // Aucune répartition n'est calculée ici : l'IHM demande N, affiche ce que le
   // backend a choisi, et retire exactement cela.
-  const ctx = ecranProrata();
+  const ctx = await ecranProrata();
   const champN = trouver(ctx.$("modal"), (n) => n.attrs?.type === "number");
   assert.ok(champN, "le mode prorata s'ouvre par défaut sur un run à venir");
   champN.value = "2";
@@ -326,7 +382,7 @@ test("run à venir, mode prorata : la proposition part au retrait telle quelle",
 test("un compte proposé s'échange contre un actif de la MÊME plateforme", async () => {
   // L'échange est ce qui rend la proposition amendable sans casser ce qu'elle
   // garantit : le nombre de retirés par plateforme ne bouge pas.
-  const ctx = ecranProrata();
+  const ctx = await ecranProrata();
   trouver(ctx.$("modal"), (n) => n.attrs?.type === "number").value = "2";
   await bouton(ctx.$, "Proposer").click();
 
@@ -355,7 +411,7 @@ test("une erreur du backend s'affiche dans la modale, qui reste ouverte", async 
     if (cmd === "plan_proposer_retrait") throw MESSAGE;
     return null;
   });
-  ctx.app.ouvrirAllegerRun(RUN, JOUR_FUTUR);
+  await ctx.app.ouvrirAllegerRun(RUN, JOUR_FUTUR);
   trouver(ctx.$("modal"), (n) => n.attrs?.type === "number").value = "9";
   await bouton(ctx.$, "Proposer").click();
 
@@ -374,7 +430,7 @@ test("l'avertissement de MEP gelée porte sur les comptes qui vont être retiré
     ligne("CF1", { gelee: true, mep_date: "2026-05-15" }),
     ligne("CF2"),
   ]);
-  ctx.app.ouvrirAllegerRun(RUN, JOUR_FUTUR);
+  await ctx.app.ouvrirAllegerRun(RUN, JOUR_FUTUR);
   bouton(ctx.$, "Ne garder que ma sélection").click();
 
   const alerte = () => trouver(ctx.$("modal"), (n) => n.className === "danger-note");
