@@ -98,7 +98,8 @@ test("une MEP gelée est signalée avant de réactiver", async () => {
   boutonSel(ctx.$, "Réactiver").listeners.click();
   const note = trouver(ctx.$("modal"), (n) => n.className === "danger-note");
   assert.notEqual(note, null, "l'avertissement doit être posé");
-  assert.match(String(note.children[0]), /2026-08-01/, "la MEP concernée doit être nommée");
+  assert.match(String(note.children[0]), /01\/08\/2026/,
+    "la MEP concernée doit être nommée, au même format JJ/MM/AAAA que les modales de retrait");
 });
 
 test("sans MEP gelée, pas d'avertissement", async () => {

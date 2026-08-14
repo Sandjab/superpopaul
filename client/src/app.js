@@ -2493,16 +2493,8 @@ function ouvrirReactivation() {
       "Ils redeviennent livrables et repartiront dans les fichiers de leur MEP. "
       + "Une régénération pourra les replacer sur un autre run."),
   ];
-  // TROISIÈME copie de la même phrase, restée en date ISO là où les deux
-  // autres disent JJ/MM/AAAA. `noteMepGelee(geles, "enregistrement")` la
-  // remplace telle quelle — mais `tests/plan_reactivation.test.js` fige le
-  // format ISO, et ce fichier était hors du périmètre de la revue. À basculer
-  // en même temps que lui.
-  if (geles.length) {
-    noeuds.push(h("div", { class: "danger-note" },
-      `⚠ ${geles.length} compte(s) appartiennent à une MEP gelée (${[...new Set(geles.map((l) => l.mep_date))].join(", ")}). `
-      + "Son fichier a déjà été transmis : il changera au prochain enregistrement."));
-  }
+  const note = noteMepGelee(geles, "enregistrement");
+  if (note) noeuds.push(note);
   noeuds.push(
     h("p", { class: "field-hint" }, "⚠ Le motif du retrait sera perdu."),
     h("div", { class: "actions" },
