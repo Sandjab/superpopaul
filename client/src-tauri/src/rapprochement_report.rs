@@ -33,6 +33,33 @@ pub struct PositionAvant {
     pub mep_id: usize,
 }
 
+/// Un compte retiré **à la main**, tel que le rapport en parle.
+///
+/// **Propriétaire de ses chaînes**, comme `PositionAvant` et contrairement à
+/// `FichierLivre` : la date est CALCULÉE par la commande (conversion d'un
+/// horodatage stocké), elle n'existe donc nulle part où l'emprunter.
+pub struct RetraitManuel {
+    pub cf: String,
+    /// Date du retrait, **en ISO** — comme `PositionAvant::run_date` et
+    /// `FichierLivre::mep_date`. Le rendu la met en forme via `date_fr`.
+    pub le: String,
+    /// Saisi par l'utilisateur. **Texte libre**, échappé au point d'insertion.
+    pub motif: String,
+    /// La MEP de la ligne est passée : le compte figure dans un fichier déjà
+    /// transmis. Même conséquence qu'un `Ecart.gelee`, même traitement.
+    pub gelee: bool,
+}
+
+/// Ce que la liste des retraits manuels prend pour origine. Le document écrit
+/// la date ET ce qu'elle désigne : « depuis le 28/07 » ne dit pas au lecteur
+/// pourquoi la liste commence là.
+pub enum Depuis {
+    /// ISO. Le plan a déjà été rapproché : la liste part de cette date-là.
+    DernierRapprochement(String),
+    /// ISO. Le plan n'a jamais été rapproché : elle part de sa génération.
+    GenerationDuPlan(String),
+}
+
 pub struct RapprochementReportData<'a> {
     /// Nom du fichier qui a produit le plan, capturé AVANT réalignement.
     pub fichier_avant: &'a str,
@@ -48,6 +75,11 @@ pub struct RapprochementReportData<'a> {
     pub obsoletes: &'a [String],
     /// Position d'origine des lignes, capturée AVANT `appliquer`. Clé : n° de CF.
     pub origines: &'a std::collections::BTreeMap<String, PositionAvant>,
+    /// Retraits faits à la main depuis `depuis`, **triés par la commande**
+    /// (date puis n° de CF) : le rendu ne réordonne pas. Le tri appartient au
+    /// producteur, qui seul connaît les horodatages bruts.
+    pub retraits_manuels: &'a [RetraitManuel],
+    pub depuis: &'a Depuis,
     /// Avertissement d'annuaire PPF incomplet, s'il y a lieu.
     pub annuaire_incomplet: Option<&'a str>,
 }
@@ -200,6 +232,19 @@ pub fn render(d: &RapprochementReportData) -> String {
         fmt_int(r.inchangees as u64),
         fmt_int(actives as u64),
     ));
+    // Cinquième tuile, rendue seulement si elle est non nulle — les quatre
+    // autres décrivent ce que le rapprochement a EXAMINÉ, et « 0 déplacé » est
+    // un constat ; celle-ci parlerait d'un geste qui n'a pas eu lieu. NEUTRE :
+    // elle est hors de l'arithmétique des autres, lui donner du rouge en
+    // ferait un second total de retraits calculés.
+    if !d.retraits_manuels.is_empty() {
+        html.push_str(&format!(
+            "<div class=\"kpi hors\"><div class=\"v\">{}</div>\
+             <div class=\"l\">retirés à la main</div>\
+             <div class=\"abs\">hors du calcul</div></div>\n",
+            fmt_int(d.retraits_manuels.len() as u64),
+        ));
+    }
     html.push_str("</section>\n");
 
     // Avertissements DÉRIVÉS DU CALCUL : ils décrivent tous ce que le
@@ -450,6 +495,9 @@ const CSS_RAPPRO: &str = r#"
   .todo h2::after { display: none; }
   tbody tr.gone td { color: var(--muted); }
   tbody tr.gone .why { font-size: 12px; }
+  .kpi.hors { border-left: 3px solid var(--pa-autres); }
+  .kpi.hors .v { color: var(--fg); }
+  td.date { white-space: nowrap; color: var(--muted); }
 "#;
 
 #[cfg(test)]
@@ -480,6 +528,16 @@ mod tests {
         VIDE.get_or_init(Default::default)
     }
 
+    /// `Depuis` par défaut, partagé — même motif que `origines_vides()`.
+    fn depuis_defaut() -> &'static Depuis {
+        static D: std::sync::OnceLock<Depuis> = std::sync::OnceLock::new();
+        D.get_or_init(|| Depuis::DernierRapprochement("2026-07-28".into()))
+    }
+
+    fn retrait_manuel(cf: &str, le: &str, motif: &str, gelee: bool) -> RetraitManuel {
+        RetraitManuel { cf: cf.into(), le: le.into(), motif: motif.into(), gelee }
+    }
+
     fn donnees(r: &Rapprochement) -> RapprochementReportData<'_> {
         RapprochementReportData {
             fichier_avant: "brm2606.csv",
@@ -491,8 +549,63 @@ mod tests {
             fichiers: &[],
             obsoletes: &[],
             origines: origines_vides(),
+            retraits_manuels: &[],
+            depuis: depuis_defaut(),
             annuaire_incomplet: None,
         }
+    }
+
+    #[test]
+    fn une_cinquieme_tuile_compte_les_retraits_manuels() {
+        let r = vide();
+        let manuels = vec![
+            retrait_manuel("4100238091", "2026-07-31", "Périmètre repoussé à 2027", false),
+            retrait_manuel("4100243662", "2026-07-31", "Périmètre repoussé à 2027", false),
+        ];
+        let mut d = donnees(&r);
+        d.retraits_manuels = &manuels;
+        let html = render(&d);
+        let c = corps(&html);
+        assert!(c.contains("retirés à la main"), "libellé de la tuile absent");
+        assert!(c.contains("hors du calcul"), "la tuile doit dire qu'elle est hors du compte");
+        assert!(c.contains("<div class=\"v\">2</div>"), "compte des retraits manuels absent");
+    }
+
+    #[test]
+    fn sans_retrait_manuel_la_cinquieme_tuile_n_existe_pas() {
+        // Les quatre autres tuiles décrivent ce que le rapprochement a
+        // EXAMINÉ : « 0 déplacé » est un constat. Une tuile à zéro sur des
+        // retraits manuels parlerait d'un geste qui n'a pas eu lieu.
+        let r = vide();
+        let html = render(&donnees(&r));
+        assert!(!corps(&html).contains("retirés à la main"));
+    }
+
+    #[test]
+    fn les_retraits_manuels_ne_faussent_pas_l_arithmetique_du_resume() {
+        // `inchangées + retirés + déplacés + rafraîchis + signalés = actives`.
+        // Les retraits manuels sont HORS de cette somme — `calculer` les a
+        // sautés, ils ne sont ni dans `ecarts` ni dans `inchangees`. Les
+        // compter dans « comptes retirés » ferait dépasser le total dans un
+        // document transmis.
+        let mut r = vide();
+        r.inchangees = 143;
+        r.ecarts = vec![ecart_eligibilite("4100000001")];
+        let manuels = vec![
+            retrait_manuel("4100238091", "2026-07-31", "décision métier", false),
+            retrait_manuel("4100243662", "2026-07-31", "décision métier", false),
+            retrait_manuel("4100247788", "2026-08-06", "litige", false),
+        ];
+        let mut d = donnees(&r);
+        d.retraits_manuels = &manuels;
+        let html = render(&d);
+        let c = corps(&html);
+        assert!(c.contains("<div class=\"v\">1</div>"), "un seul retrait CALCULÉ");
+        assert!(
+            c.contains("sur <b>144</b> actives"),
+            "les actives restent 143 inchangées + 1 écart : les manuels n'y entrent pas"
+        );
+        assert!(c.contains("<div class=\"v\">3</div>"), "les 3 manuels ont leur propre tuile");
     }
 
     fn ecart_eligibilite(cf: &str) -> Ecart {

@@ -1955,6 +1955,9 @@ pub async fn plan_rapprocher_appliquer(
                 fichiers: &fichiers,
                 obsoletes: &noms_obsoletes,
                 origines: &origines,
+                // Provisoire : la tâche 5 du plan branche la vraie capture.
+                retraits_manuels: &[],
+                depuis: &crate::rapprochement_report::Depuis::GenerationDuPlan(String::new()),
                 annuaire_incomplet: annuaire_incomplet.as_deref(),
             },
         );
