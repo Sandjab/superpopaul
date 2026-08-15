@@ -20,7 +20,10 @@ git tag "$TAG"
 git push origin main "$TAG"
 
 # Le workflow windows.yml se déclenche sur le tag ; on cherche son run.
-echo "Recherche du run CI du tag $TAG…"
+# ${TAG} avec accolades : sous le bash 3.2 de macOS, « $TAG… » (points de
+# suspension collés) est lu comme un nom de variable et tue le script via
+# set -u. Constaté à la release v1.9.0.
+echo "Recherche du run CI du tag ${TAG}…"
 RUN_ID=""
 for _ in 1 2 3 4 5 6; do
   sleep 10
