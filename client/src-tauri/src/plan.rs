@@ -938,14 +938,53 @@ pub fn retirer(
     }
     let mut cibles = Vec::new();
     for cf in cfs {
-        cibles.push(
-            plan.iter()
-                .position(|l| l.cf == *cf)
-                .ok_or_else(|| format!("le compte « {cf} » n'est pas au plan"))?,
-        );
+        let i = plan
+            .iter()
+            .position(|l| l.cf == *cf)
+            .ok_or_else(|| format!("le compte « {cf} » n'est pas au plan"))?;
+        // La trace d'un retrait est la piste d'audit que le rapport transmet,
+        // et elle est datée : la réécrire ferait basculer un ancien geste sous
+        // le motif d'un nouveau, en silence. Rien n'est écrit tant que TOUTES
+        // les cibles ne sont pas résolues — un lot passe en entier ou pas du
+        // tout.
+        if plan[i].retiree() {
+            return Err(format!(
+                "le compte « {cf} » est déjà retiré du plan : son motif et sa date \
+                 d'origine seraient perdus. Réactive-le d'abord si tu veux le retirer \
+                 sous un autre motif."
+            ));
+        }
+        cibles.push(i);
     }
     for i in cibles {
         plan[i].retire = Some(Retrait { le: maintenant, motif: motif.to_string() });
+    }
+    Ok(())
+}
+
+/// Refuse le rééquilibrage d'un run déjà joué. La règle vivait dans l'IHM, sur
+/// l'horloge du poste : une commande reste appelable sans elle.
+///
+/// Borne **stricte**, alignée sur l'IHM : un run daté d'aujourd'hui se
+/// rééquilibre encore. Un run inconnu passe — le calcul qui suit rend déjà
+/// « aucun compte actif sur le run ».
+///
+/// Ne concerne QUE le décimage : l'exclusion a posteriori d'un run joué est
+/// précisément le geste qu'il faut laisser faire.
+pub fn verifier_run_a_venir(
+    plan: &[LignePlan],
+    run_num: &str,
+    aujourdhui: chrono::NaiveDate,
+) -> Result<(), String> {
+    let Some(l) = plan.iter().find(|l| l.run_num == run_num) else {
+        return Ok(());
+    };
+    if l.run_date < aujourdhui {
+        return Err(format!(
+            "le run « {run_num} » du {} a déjà été joué : il ne se rééquilibre pas. \
+             L'exclusion du run a posteriori, elle, reste possible.",
+            l.run_date.format("%d/%m/%Y")
+        ));
     }
     Ok(())
 }
@@ -964,6 +1003,104 @@ pub fn annuler_retrait(plan: &mut [LignePlan], cfs: &[String]) -> Result<(), Str
         plan[i].retire = None;
     }
     Ok(())
+}
+
+/// Les comptes actifs d'un run, toutes origines confondues — la matière des
+/// gestes en lot (« exclure le run », « ne garder que… »). Les retirées sont
+/// exclues : on ne retire pas deux fois.
+pub fn cfs_actifs_du_run(plan: &[LignePlan], run_num: &str) -> Vec<String> {
+    plan.iter()
+        .filter(|l| l.run_num == run_num && !l.retiree())
+        .map(|l| l.cf.clone())
+        .collect()
+}
+
+/// Propose N comptes à retirer d'un run en conservant la distribution des
+/// plateformes — le miroir de `quotas_par_pa` : mêmes plus forts restes, même
+/// boucle de plafond, mais à l'envers (on décime au lieu de doter).
+///
+/// Règles :
+/// - **plancher 1 inversé** : jamais le dernier compte actif d'une plateforme —
+///   pour tout retirer, c'est l'exclusion du run, pas le décimage ;
+/// - **protections** : `Couverture` et `Manuel` ne sortent qu'en dernier
+///   recours, quand les allouées de la plateforme ne suffisent pas — et
+///   `Manuel` après `Couverture` : un geste humain prime une couverture
+///   calculée, que la régénération saurait de toute façon refaire ;
+/// - **ordre de sortie** : l'inverse de `trier_par_priorite` — hors annuaire
+///   d'abord, puis résolutions les plus anciennes. Le départage seedé, lui,
+///   n'est PAS inversé : c'est exactement la clé de la génération. Un
+///   pseudo-aléatoire « à l'envers » ne voudrait rien dire ; ce qui compte est
+///   qu'un même clic répété propose les mêmes comptes.
+pub fn proposer_retrait_proportionnel(
+    plan: &[LignePlan],
+    run_num: &str,
+    n: usize,
+    seed: u64,
+) -> Result<Vec<String>, String> {
+    let mut par_pa: BTreeMap<&str, Vec<&LignePlan>> = BTreeMap::new();
+    for l in plan.iter().filter(|l| l.run_num == run_num && !l.retiree()) {
+        par_pa.entry(l.pa.as_str()).or_default().push(l);
+    }
+    if par_pa.is_empty() {
+        return Err(format!("aucun compte actif sur le run « {run_num} »"));
+    }
+    if n == 0 {
+        return Err("rien à retirer : N doit être au moins 1".into());
+    }
+    let max: usize = par_pa.values().map(|v| v.len() - 1).sum();
+    if n > max {
+        return Err(format!(
+            // Pas de renvoi vers l'exclusion : elle n'est offerte que pour un
+            // run PASSÉ, et ce message-ci ne paraît que sur un run à venir.
+            "impossible de retirer {n} compte(s) : le maximum est {max} — chaque \
+             plateforme du run garde au moins un compte."
+        ));
+    }
+    // Répartition aux plus forts restes, pondérée par les effectifs actifs :
+    // des poids finis et strictement positifs, la précondition de
+    // `plus_forts_restes`.
+    let poids: BTreeMap<String, f64> =
+        par_pa.iter().map(|(pa, v)| ((*pa).to_string(), v.len() as f64)).collect();
+    let mut quotas = plus_forts_restes(n, &poids);
+    // Plafond au retirable (effectif − 1), l'excédent repart vers les
+    // plateformes qui ont de la marge — la boucle de `quotas_par_pa`, inversée.
+    loop {
+        let mut excedent = 0usize;
+        let mut place: BTreeMap<String, f64> = BTreeMap::new();
+        for (pa, v) in &par_pa {
+            let plafond = v.len() - 1;
+            let q = quotas.entry((*pa).to_string()).or_insert(0);
+            if *q > plafond {
+                excedent += *q - plafond;
+                *q = plafond;
+            } else if *q < plafond {
+                place.insert((*pa).to_string(), (plafond - *q) as f64);
+            }
+        }
+        if excedent == 0 {
+            break;
+        }
+        for (pa, x) in plus_forts_restes(excedent, &place) {
+            *quotas.get_mut(&pa).expect("clé issue de place") += x;
+        }
+    }
+    let rang = |l: &LignePlan| match l.origine {
+        Origine::Auto => 0u8,
+        Origine::Couverture => 1,
+        Origine::Manuel => 2,
+    };
+    let mut out = Vec::new();
+    for (pa, mut v) in par_pa {
+        v.sort_by(|a, b| {
+            rang(a)
+                .cmp(&rang(b))
+                .then_with(|| a.in_directory.cmp(&b.in_directory))
+                .then_with(|| a.resolved_at.cmp(&b.resolved_at))
+                .then_with(|| hash_seede(seed, &a.cf).cmp(&hash_seede(seed, &b.cf)))
+        });
+        out.extend(v.into_iter().take(quotas.get(pa).copied().unwrap_or(0)).map(|l| l.cf.clone()));
+    }
+    Ok(out)
 }
 
 fn ligne_de(
@@ -2542,6 +2679,27 @@ mod tests {
     }
 
     #[test]
+    fn un_compte_deja_retire_ne_se_retire_pas_une_seconde_fois() {
+        // La trace du premier retrait est la PISTE D'AUDIT : c'est elle que le
+        // rapport de rapprochement transmet, et elle est datée. L'écraser
+        // réécrit l'histoire — un geste en lot qui ratisserait large ferait
+        // basculer d'anciens retraits sous son propre motif, sans que rien
+        // ne le signale.
+        let mut plan = vec![
+            lp("CF1", 5, "PA", "2026-12-01", Origine::Auto),
+            lp("CF2", 5, "PA", "2026-12-01", Origine::Auto),
+        ];
+        retirer(&mut plan, &["CF1".into()], "migration repoussée", 111).unwrap();
+
+        let err = retirer(&mut plan, &["CF1".into(), "CF2".into()], "run exclu", 222).unwrap_err();
+        assert!(err.contains("CF1"), "le message doit nommer le compte fautif : {err}");
+
+        let r = plan[0].retire.as_ref().expect("la trace d'origine doit survivre");
+        assert_eq!((r.le, r.motif.as_str()), (111, "migration repoussée"));
+        assert!(!plan[1].retiree(), "aucune ligne du lot ne doit avoir bougé");
+    }
+
+    #[test]
     fn annulation_de_retrait_reactive_la_ligne() {
         let mut plan = vec![lp("CF1", 5, "PA", "2026-12-01", Origine::Auto)];
         retirer(&mut plan, &["CF1".into()], "erreur de manip", 1).unwrap();
@@ -2559,6 +2717,205 @@ mod tests {
         retirer(&mut plan, &["CF1".into(), "CF3".into()], "lot", 1).unwrap();
         assert!(plan[0].retiree() && plan[2].retiree());
         assert!(!plan[1].retiree());
+    }
+
+    /// `lp` fige le run à « R1 » : ce qui suit trie précisément par run.
+    fn l_run(cf: &str, run: &str, pa: &str, origine: Origine) -> LignePlan {
+        let mut l = lp(cf, 5, pa, "2026-09-01", origine);
+        l.run_num = run.into();
+        l
+    }
+
+    #[test]
+    fn cfs_actifs_du_run_exclut_les_retirees_et_les_autres_runs() {
+        let mut retiree = l_run("CF2", "RF01", "Esalink", Origine::Auto);
+        retiree.retire = Some(Retrait { le: 1, motif: "déjà sorti".into() });
+        let plan = vec![
+            l_run("CF1", "RF01", "Esalink", Origine::Auto),
+            retiree,
+            l_run("CF3", "RF02", "Esalink", Origine::Auto),
+            // Origines confondues : exclure un run, c'est TOUT le run,
+            // épinglées comprises.
+            l_run("CF4", "RF01", "Serensia", Origine::Manuel),
+        ];
+        assert_eq!(cfs_actifs_du_run(&plan, "RF01"), vec!["CF1", "CF4"]);
+    }
+
+    #[test]
+    fn un_retrait_en_lot_pose_le_meme_horodatage_sur_toutes_ses_lignes() {
+        // VERROU DU REGROUPEMENT. Le rapport regroupe les retraits manuels par
+        // (le, motif) : un geste n'existe comme geste QUE parce que `retirer`
+        // reçoit un seul `maintenant` pour tout le lot. Si l'horloge se mettait
+        // à être lue par ligne, un run exclu deviendrait 143 gestes d'un compte.
+        let mut plan = vec![
+            l_run("CF1", "RF01", "Esalink", Origine::Auto),
+            l_run("CF2", "RF01", "Esalink", Origine::Auto),
+            l_run("CF3", "RF01", "Serensia", Origine::Auto),
+        ];
+        retirer(&mut plan, &["CF1".into(), "CF2".into(), "CF3".into()], "run exclu", 1_786_017_600)
+            .unwrap();
+        assert!(plan.iter().all(|l| l.retire.as_ref().unwrap().le == 1_786_017_600));
+    }
+
+    #[test]
+    fn la_repartition_du_retrait_suit_les_effectifs_du_run() {
+        // 12 Esalink + 6 Serensia, retirer 6 → 4 + 2 : la distribution RESTANTE
+        // garde les proportions du run. Miroir de `quotas_par_pa`.
+        let mut plan = Vec::new();
+        for i in 0..12 {
+            plan.push(l_run(&format!("E{i:02}"), "RF01", "Esalink", Origine::Auto));
+        }
+        for i in 0..6 {
+            plan.push(l_run(&format!("S{i:02}"), "RF01", "Serensia", Origine::Auto));
+        }
+        let cfs = proposer_retrait_proportionnel(&plan, "RF01", 6, 42).unwrap();
+        assert_eq!(cfs.len(), 6);
+        assert_eq!(cfs.iter().filter(|c| c.starts_with('E')).count(), 4);
+        assert_eq!(cfs.iter().filter(|c| c.starts_with('S')).count(), 2);
+    }
+
+    #[test]
+    fn jamais_le_dernier_compte_d_une_plateforme() {
+        // Plancher 1 inversé : la couverture gagnée à la génération ne se perd
+        // pas par décimage. Effectifs choisis pour que la proportionnelle
+        // RÉCLAME le dernier Esalink (1 sur 6, plus fort reste sur 4 à retirer)
+        // et que seul le plafond l'en empêche : tout doit sortir de Serensia.
+        let mut plan = vec![l_run("E1", "RF01", "Esalink", Origine::Auto)];
+        for i in 0..5 {
+            plan.push(l_run(&format!("S{i}"), "RF01", "Serensia", Origine::Auto));
+        }
+        let cfs = proposer_retrait_proportionnel(&plan, "RF01", 4, 42).unwrap();
+        assert!(cfs.iter().all(|c| c.starts_with('S')), "E1 est le dernier Esalink : intouchable");
+    }
+
+    #[test]
+    fn n_au_dela_du_maximum_dit_le_maximum() {
+        let plan = vec![
+            l_run("E1", "RF01", "Esalink", Origine::Auto),
+            l_run("E2", "RF01", "Esalink", Origine::Auto),
+            l_run("S1", "RF01", "Serensia", Origine::Auto),
+        ];
+        // max = (2−1) + (1−1) = 1.
+        let err = proposer_retrait_proportionnel(&plan, "RF01", 2, 42).unwrap_err();
+        assert!(err.contains("maximum est 1"), "le message doit dire le maximum retirable : {err}");
+        // Le décimage n'est offert que pour un run À VENIR, où l'exclusion,
+        // elle, ne l'est pas : y renvoyer désigne une porte qui n'existe pas
+        // sur l'écran d'où vient le message.
+        assert!(
+            !err.contains("exclusion"),
+            "le message ne doit pas renvoyer vers un geste inatteignable : {err}"
+        );
+    }
+
+    #[test]
+    fn un_run_deja_joue_ne_se_decime_pas() {
+        // La règle vivait dans l'IHM, sur l'horloge du poste. Le moteur doit
+        // la tenir lui aussi : rééquilibrer un run joué changerait des
+        // fichiers déjà transmis sans qu'aucun motif ne l'explique.
+        let mut plan = vec![l_run("E1", "RF01", "Esalink", Origine::Auto)];
+        plan[0].run_date = d("2026-08-10");
+
+        // Borne STRICTE, alignée sur celle de l'IHM (`jour.date < aujourd'hui`) :
+        // le jour même, le run se rééquilibre encore.
+        assert!(verifier_run_a_venir(&plan, "RF01", d("2026-08-10")).is_ok());
+
+        let err = verifier_run_a_venir(&plan, "RF01", d("2026-08-11")).unwrap_err();
+        assert!(err.contains("RF01"), "le message doit nommer le run : {err}");
+        assert!(
+            err.contains("exclusion"),
+            "et rappeler le geste qui, lui, reste permis sur un run joué : {err}"
+        );
+
+        // Un run inconnu n'est pas l'affaire de cette garde : le calcul rend
+        // déjà « aucun compte actif sur le run ».
+        assert!(verifier_run_a_venir(&plan, "RF99", d("2026-08-11")).is_ok());
+    }
+
+    #[test]
+    fn zero_et_run_vide_sont_refuses() {
+        let plan = vec![l_run("E1", "RF01", "Esalink", Origine::Auto)];
+        assert!(proposer_retrait_proportionnel(&plan, "RF01", 0, 42).is_err());
+        assert!(proposer_retrait_proportionnel(&plan, "RF99", 1, 42).is_err());
+    }
+
+    #[test]
+    fn les_protegees_sortent_en_dernier() {
+        // Couverture et épinglées ne partent qu'en dernier recours : elles portent
+        // une décision (représentation d'une PA, geste humain) que le décimage
+        // automatique n'a pas à défaire tant que des allouées suffisent.
+        let plan = vec![
+            l_run("A1", "RF01", "Esalink", Origine::Auto),
+            l_run("C1", "RF01", "Esalink", Origine::Couverture),
+            l_run("M1", "RF01", "Esalink", Origine::Manuel),
+            l_run("A2", "RF01", "Esalink", Origine::Auto),
+        ];
+        let cfs = proposer_retrait_proportionnel(&plan, "RF01", 2, 42).unwrap();
+        assert_eq!(
+            {
+                let mut v = cfs.clone();
+                v.sort();
+                v
+            },
+            vec!["A1", "A2"]
+        );
+    }
+
+    #[test]
+    fn l_ordre_de_sortie_est_l_inverse_de_la_priorite_d_allocation() {
+        // Sortent d'abord : hors annuaire, puis résolution la plus ancienne —
+        // exactement ce que `trier_par_priorite` place en queue à la génération.
+        let mut frais = l_run("FRAIS", "RF01", "Esalink", Origine::Auto);
+        frais.in_directory = true;
+        frais.resolved_at = 100;
+        let mut vieux = l_run("VIEUX", "RF01", "Esalink", Origine::Auto);
+        vieux.in_directory = true;
+        vieux.resolved_at = 1;
+        let mut hors = l_run("HORS", "RF01", "Esalink", Origine::Auto);
+        hors.in_directory = false;
+        hors.resolved_at = 100;
+        let plan = vec![frais, vieux, hors];
+        assert_eq!(proposer_retrait_proportionnel(&plan, "RF01", 1, 42).unwrap(), vec!["HORS"]);
+        assert_eq!(
+            proposer_retrait_proportionnel(&plan, "RF01", 2, 42).unwrap(),
+            vec!["HORS", "VIEUX"]
+        );
+    }
+
+    #[test]
+    fn a_egalite_le_depart_se_fait_au_hash_seede_pas_a_l_ordre_du_plan() {
+        // Deux comptes que rien ne distingue (même origine, même annuaire, même
+        // date de résolution) : seul le hash seedé tranche — la clé même de la
+        // génération, d'où la reproductibilité d'un clic à l'autre. Le plan est
+        // construit dans l'ordre INVERSE du hash : sans cette clé, le tri stable
+        // rendrait le premier inséré, et l'assertion le verrait.
+        let (petit, grand) = if hash_seede(42, "CFA") < hash_seede(42, "CFB") {
+            ("CFA", "CFB")
+        } else {
+            ("CFB", "CFA")
+        };
+        let plan = vec![
+            l_run(grand, "RF01", "Esalink", Origine::Auto),
+            l_run(petit, "RF01", "Esalink", Origine::Auto),
+        ];
+        assert_eq!(proposer_retrait_proportionnel(&plan, "RF01", 1, 42).unwrap(), vec![petit]);
+    }
+
+    #[test]
+    fn le_reste_fractionnaire_va_a_la_plateforme_la_mieux_dotee() {
+        // 5 Esalink + 3 Serensia, retirer 3 : parts exactes 1,875 et 1,125 —
+        // un cas que la division n'épuise pas, contrairement au 12/6. Les
+        // planchers donnent 1 et 1, et le reste suit le plus fort reste :
+        // Esalink. Aucun plafond n'intervient (retirables 4 et 2).
+        let mut plan = Vec::new();
+        for i in 0..5 {
+            plan.push(l_run(&format!("E{i}"), "RF01", "Esalink", Origine::Auto));
+        }
+        for i in 0..3 {
+            plan.push(l_run(&format!("S{i}"), "RF01", "Serensia", Origine::Auto));
+        }
+        let cfs = proposer_retrait_proportionnel(&plan, "RF01", 3, 42).unwrap();
+        assert_eq!(cfs.iter().filter(|c| c.starts_with('E')).count(), 2);
+        assert_eq!(cfs.iter().filter(|c| c.starts_with('S')).count(), 1);
     }
 
     #[test]

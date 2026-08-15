@@ -33,21 +33,32 @@ pub struct PositionAvant {
     pub mep_id: usize,
 }
 
-/// Un compte retiré **à la main**, tel que le rapport en parle.
+/// Un compte au sein d'un geste. `gelee` est évalué **au moment du geste**
+/// (la MEP était-elle passée quand le retrait a été décidé ?) — aligné sur les
+/// écarts calculés, qui jugent au moment de la décision. Retouche issue de la
+/// revue du PR v1.8.0 : évaluer au moment du rapport faisait basculer en
+/// alerte rouge des comptes retirés d'une MEP alors future.
+pub struct CompteRetire {
+    pub cf: String,
+    /// La MEP de la ligne était passée : le compte figure dans un fichier déjà
+    /// transmis. Même conséquence qu'un `Ecart.gelee`, même traitement.
+    pub gelee: bool,
+}
+
+/// Un geste de retrait manuel : ce que l'utilisateur a fait en un clic.
+/// La clé (date, motif) vient du producteur — un lot passé par `plan::retirer`
+/// partage son horodatage (verrou dans `plan::tests`) et son motif.
 ///
 /// **Propriétaire de ses chaînes**, comme `PositionAvant` et contrairement à
 /// `FichierLivre` : la date est CALCULÉE par la commande (conversion d'un
 /// horodatage stocké), elle n'existe donc nulle part où l'emprunter.
-pub struct RetraitManuel {
-    pub cf: String,
-    /// Date du retrait, **en ISO** — comme `PositionAvant::run_date` et
-    /// `FichierLivre::mep_date`. Le rendu la met en forme via `date_fr`.
+pub struct GesteManuel {
+    /// Date ISO du geste (jour local du retrait). Rendue via `date_fr`.
     pub le: String,
     /// Saisi par l'utilisateur. **Texte libre**, échappé au point d'insertion.
     pub motif: String,
-    /// La MEP de la ligne est passée : le compte figure dans un fichier déjà
-    /// transmis. Même conséquence qu'un `Ecart.gelee`, même traitement.
-    pub gelee: bool,
+    /// Triés par n° de CF par le producteur.
+    pub comptes: Vec<CompteRetire>,
 }
 
 /// Ce que la liste des retraits manuels prend pour origine. Le document écrit
@@ -75,10 +86,11 @@ pub struct RapprochementReportData<'a> {
     pub obsoletes: &'a [String],
     /// Position d'origine des lignes, capturée AVANT `appliquer`. Clé : n° de CF.
     pub origines: &'a std::collections::BTreeMap<String, PositionAvant>,
-    /// Retraits faits à la main depuis `depuis`, **triés par la commande**
-    /// (date puis n° de CF) : le rendu ne réordonne pas. Le tri appartient au
-    /// producteur, qui seul connaît les horodatages bruts.
-    pub retraits_manuels: &'a [RetraitManuel],
+    /// Gestes de retrait faits à la main depuis `depuis`, **triés par la
+    /// commande** (date de geste puis motif ; par n° de CF dans un geste) : le
+    /// rendu ne réordonne pas. Le tri appartient au producteur, qui seul
+    /// connaît les horodatages bruts.
+    pub gestes_manuels: &'a [GesteManuel],
     pub depuis: &'a Depuis,
     /// Avertissement d'annuaire PPF incomplet, s'il y a lieu.
     pub annuaire_incomplet: Option<&'a str>,
@@ -237,12 +249,15 @@ pub fn render(d: &RapprochementReportData) -> String {
     // un constat ; celle-ci parlerait d'un geste qui n'a pas eu lieu. NEUTRE :
     // elle est hors de l'arithmétique des autres, lui donner du rouge en
     // ferait un second total de retraits calculés.
-    if !d.retraits_manuels.is_empty() {
+    // Elle compte des COMPTES, pas des gestes : regrouper l'affichage plus bas
+    // ne change pas ce qui a été retiré.
+    let total_manuels: usize = d.gestes_manuels.iter().map(|g| g.comptes.len()).sum();
+    if total_manuels > 0 {
         html.push_str(&format!(
             "<div class=\"kpi hors\"><div class=\"v\">{}</div>\
              <div class=\"l\">retirés à la main</div>\
              <div class=\"abs\">hors du calcul</div></div>\n",
-            fmt_int(d.retraits_manuels.len() as u64),
+            fmt_int(total_manuels as u64),
         ));
     }
     html.push_str("</section>\n");
@@ -278,9 +293,18 @@ pub fn render(d: &RapprochementReportData) -> String {
     // Même conséquence, même section : le destinataire tient une version
     // antérieure du fichier, que le retrait vienne du calcul ou d'une décision.
     // La section dit ce qui arrive au lecteur, pas d'où vient la cause.
-    let geles_manuels: Vec<&RetraitManuel> =
-        d.retraits_manuels.iter().filter(|m| m.gelee).collect();
-    if !geles.is_empty() || !geles_manuels.is_empty() {
+    //
+    // Une entrée par GESTE contenant des gelés : la mise en évidence doit
+    // rester lisible quand un run entier sort — la liste exacte est au tableau.
+    let gestes_geles: Vec<(&GesteManuel, usize)> = d
+        .gestes_manuels
+        .iter()
+        .filter_map(|g| {
+            let n = g.comptes.iter().filter(|c| c.gelee).count();
+            (n > 0).then_some((g, n))
+        })
+        .collect();
+    if !geles.is_empty() || !gestes_geles.is_empty() {
         html.push_str(
             "<section class=\"warn danger\">\n\
              <h2>Retrait portant sur une mise en production déjà transmise</h2>\n<ul>\n",
@@ -297,14 +321,27 @@ pub fn render(d: &RapprochementReportData) -> String {
         // Les manuels à la suite des calculés — ordre déterministe. Le motif
         // est ici la phrase de l'utilisateur, qui dit la décision mieux qu'un
         // libellé généré.
-        for m in &geles_manuels {
-            html.push_str(&format!(
-                "<li>Le compte <b>{}</b> figurait dans un fichier qui vous a déjà été \
-                 transmis. Les fichiers étant cumulatifs, il ne figure plus dans aucun \
-                 fichier de ce lot. Motif : <b>{}</b>.</li>\n",
-                esc(&m.cf),
-                esc(&m.motif),
-            ));
+        for (g, n) in &gestes_geles {
+            if *n == 1 {
+                let cf = &g.comptes.iter().find(|c| c.gelee).expect("n == 1").cf;
+                html.push_str(&format!(
+                    "<li>Le compte <b>{}</b> figurait dans un fichier qui vous a déjà été \
+                     transmis. Les fichiers étant cumulatifs, il ne figure plus dans aucun \
+                     fichier de ce lot. Motif : <b>{}</b>.</li>\n",
+                    esc(cf),
+                    esc(&g.motif),
+                ));
+            } else {
+                html.push_str(&format!(
+                    "<li><b>{}</b> comptes retirés le {} figuraient dans des fichiers qui vous \
+                     ont déjà été transmis. Les fichiers étant cumulatifs, ils ne figurent plus \
+                     dans aucun fichier de ce lot — la liste est au tableau « Comptes retirés — \
+                     décision manuelle ». Motif : <b>{}</b>.</li>\n",
+                    fmt_int(*n as u64),
+                    esc(&date_fr(&g.le)),
+                    esc(&g.motif),
+                ));
+            }
         }
         html.push_str("</ul>\n</section>\n");
     }
@@ -373,17 +410,41 @@ pub fn render(d: &RapprochementReportData) -> String {
         "Comptes retirés — décision manuelle",
         &sous_titre_manuels,
         &["N° de CF", "Retiré le", "Motif"],
-        d.retraits_manuels.is_empty(),
+        d.gestes_manuels.is_empty(),
     );
-    for m in d.retraits_manuels {
-        html.push_str(&format!(
-            "<tr><td>{}</td><td class=\"date\">{}</td><td>{}</td></tr>\n",
-            esc(&m.cf),
-            esc(&date_fr(&m.le)),
-            esc(&m.motif),
-        ));
+    for g in d.gestes_manuels {
+        if g.comptes.len() == 1 {
+            html.push_str(&format!(
+                "<tr><td>{}</td><td class=\"date\">{}</td><td>{}</td></tr>\n",
+                esc(&g.comptes[0].cf),
+                esc(&date_fr(&g.le)),
+                esc(&g.motif),
+            ));
+        } else {
+            // Le chapeau porte la date et le motif UNE fois ; les lignes du
+            // geste ne portent que le compte — c'est la décision qui se lit,
+            // pas 150 répétitions.
+            html.push_str(&format!(
+                "<tr class=\"geste-h\"><td colspan=\"3\"><b>{}</b> comptes retirés le \
+                 <b>{}</b> — Motif : <b>{}</b></td></tr>\n",
+                fmt_int(g.comptes.len() as u64),
+                esc(&date_fr(&g.le)),
+                esc(&g.motif),
+            ));
+            for c in &g.comptes {
+                // L'alerte des gelés renvoie ici pour « la liste exacte » :
+                // sans marqueur, le lecteur ne saurait pas lesquels de ces
+                // comptes ont déjà quitté ses fichiers. Texte fixe, rien à
+                // échapper.
+                html.push_str(&format!(
+                    "<tr class=\"geste-l\"><td>{}</td><td class=\"date\">{}</td><td></td></tr>\n",
+                    esc(&c.cf),
+                    if c.gelee { "❄ déjà transmis" } else { "" },
+                ));
+            }
+        }
     }
-    fin_section(&mut html, d.retraits_manuels.is_empty());
+    fin_section(&mut html, d.gestes_manuels.is_empty());
 
     // ④ Déplacés.
     let deplaces_l = par_action(r, |a| matches!(a, Action::Deplacer { .. }));
@@ -550,6 +611,11 @@ const CSS_RAPPRO: &str = r#"
   .kpi.hors { border-left: 3px solid var(--pa-autres); }
   .kpi.hors .v { color: var(--fg); }
   td.date { white-space: nowrap; color: var(--muted); }
+  tbody tr.geste-h td { background: var(--track); font-size: 13px;
+    border-left: 3px solid var(--pa-autres); }
+  tbody tr.geste-h b { color: var(--fg); font-weight: 700; }
+  tbody tr.geste-l td:first-child { border-left: 3px solid var(--pa-autres);
+    padding-left: 24px; }
 "#;
 
 #[cfg(test)]
@@ -586,8 +652,16 @@ mod tests {
         D.get_or_init(|| Depuis::DernierRapprochement("2026-07-28".into()))
     }
 
-    fn retrait_manuel(cf: &str, le: &str, motif: &str, gelee: bool) -> RetraitManuel {
-        RetraitManuel { cf: cf.into(), le: le.into(), motif: motif.into(), gelee }
+    /// Un geste et ses comptes, chacun donné par `(n° de CF, gelé)`.
+    fn geste(le: &str, motif: &str, comptes: &[(&str, bool)]) -> GesteManuel {
+        GesteManuel {
+            le: le.into(),
+            motif: motif.into(),
+            comptes: comptes
+                .iter()
+                .map(|(cf, g)| CompteRetire { cf: (*cf).into(), gelee: *g })
+                .collect(),
+        }
     }
 
     fn donnees(r: &Rapprochement) -> RapprochementReportData<'_> {
@@ -601,7 +675,7 @@ mod tests {
             fichiers: &[],
             obsoletes: &[],
             origines: origines_vides(),
-            retraits_manuels: &[],
+            gestes_manuels: &[],
             depuis: depuis_defaut(),
             annuaire_incomplet: None,
         }
@@ -609,13 +683,16 @@ mod tests {
 
     #[test]
     fn une_cinquieme_tuile_compte_les_retraits_manuels() {
+        // La tuile compte des COMPTES, pas des gestes : les deux ci-dessous
+        // sont sortis d'un même clic, elle doit lire 2.
         let r = vide();
-        let manuels = vec![
-            retrait_manuel("4100238091", "2026-07-31", "Périmètre repoussé à 2027", false),
-            retrait_manuel("4100243662", "2026-07-31", "Périmètre repoussé à 2027", false),
-        ];
+        let gestes = vec![geste(
+            "2026-07-31",
+            "Périmètre repoussé à 2027",
+            &[("4100238091", false), ("4100243662", false)],
+        )];
         let mut d = donnees(&r);
-        d.retraits_manuels = &manuels;
+        d.gestes_manuels = &gestes;
         let html = render(&d);
         let c = corps(&html);
         assert!(c.contains("retirés à la main"), "libellé de la tuile absent");
@@ -643,13 +720,16 @@ mod tests {
         let mut r = vide();
         r.inchangees = 143;
         r.ecarts = vec![ecart_eligibilite("4100000001")];
-        let manuels = vec![
-            retrait_manuel("4100238091", "2026-07-31", "décision métier", false),
-            retrait_manuel("4100243662", "2026-07-31", "décision métier", false),
-            retrait_manuel("4100247788", "2026-08-06", "litige", false),
+        let gestes = vec![
+            geste(
+                "2026-07-31",
+                "décision métier",
+                &[("4100238091", false), ("4100243662", false)],
+            ),
+            geste("2026-08-06", "litige", &[("4100247788", false)]),
         ];
         let mut d = donnees(&r);
-        d.retraits_manuels = &manuels;
+        d.gestes_manuels = &gestes;
         let html = render(&d);
         let c = corps(&html);
         assert!(c.contains("<div class=\"v\">1</div>"), "un seul retrait CALCULÉ");
@@ -745,17 +825,16 @@ mod tests {
     #[test]
     fn le_tableau_des_retraits_manuels_donne_date_et_motif() {
         let r = vide();
-        let manuels = vec![
-            retrait_manuel(
-                "4100238091",
+        let gestes = vec![
+            geste(
                 "2026-07-31",
                 "Exclusion décidée en comité — périmètre repoussé à 2027",
-                false,
+                &[("4100238091", false)],
             ),
-            retrait_manuel("4100247788", "2026-08-06", "Litige commercial en cours", true),
+            geste("2026-08-06", "Litige commercial en cours", &[("4100247788", true)]),
         ];
         let mut d = donnees(&r);
-        d.retraits_manuels = &manuels;
+        d.gestes_manuels = &gestes;
         let html = render(&d);
         let c = corps(&html);
         assert!(c.contains(T_MANUELS), "section des retraits manuels absente");
@@ -772,9 +851,9 @@ mod tests {
         // La date de référence n'est pas décorative : sans elle, le lecteur ne
         // sait pas si la liste couvre une semaine ou six mois.
         let r = vide();
-        let manuels = vec![retrait_manuel("4100238091", "2026-07-31", "décision métier", false)];
+        let gestes = vec![geste("2026-07-31", "décision métier", &[("4100238091", false)])];
         let mut d = donnees(&r);
-        d.retraits_manuels = &manuels;
+        d.gestes_manuels = &gestes;
 
         let apres_rappro = Depuis::DernierRapprochement("2026-07-28".into());
         d.depuis = &apres_rappro;
@@ -814,15 +893,27 @@ mod tests {
         // autres tableaux sont générés par le code (`format!`), celui-ci est
         // tapé dans une boîte de dialogue. Un `esc` oublié ici injecte du
         // balisage dans une pièce transmise.
+        // QUATRE points d'insertion, tous exercés ici : le chapeau du geste
+        // multiple et la cellule du geste isolé, dans le tableau ; les deux
+        // branches de l'alerte rouge, agrégée et unitaire. Les comptes sont
+        // donc GELÉS — un fixture entièrement non gelé ne rend pas la section
+        // d'alerte du tout, et ses deux `esc` peuvent alors disparaître sans
+        // qu'un test rougisse.
         let r = vide();
-        let manuels = vec![retrait_manuel(
-            "<script>alert(1)</script>",
-            "2026-07-31",
-            "A&B <script>alert(2)</script>",
-            false,
-        )];
+        let gestes = vec![
+            geste(
+                "2026-07-31",
+                "A&B <script>alert(2)</script>",
+                &[("<script>alert(1)</script>", true), ("4100243662", true)],
+            ),
+            geste(
+                "2026-08-06",
+                "A&B <script>alert(3)</script>",
+                &[("<script>alert(4)</script>", true)],
+            ),
+        ];
         let mut d = donnees(&r);
-        d.retraits_manuels = &manuels;
+        d.gestes_manuels = &gestes;
         let html = render(&d);
         let c = corps(&html);
         assert!(!c.contains("<script>"), "motif ou n° de CF non échappé");
@@ -981,17 +1072,16 @@ mod tests {
         // antérieure où le compte figurait. Un retrait manuel sur une MEP
         // passée produit exactement cette situation.
         let r = vide();
-        let manuels = vec![
-            retrait_manuel(
-                "4100247788",
+        let gestes = vec![
+            geste(
                 "2026-08-06",
                 "Litige commercial en cours — ne pas facturer",
-                true,
+                &[("4100247788", true)],
             ),
-            retrait_manuel("4100238091", "2026-07-31", "périmètre 2027", false),
+            geste("2026-07-31", "périmètre 2027", &[("4100238091", false)]),
         ];
         let mut d = donnees(&r);
-        d.retraits_manuels = &manuels;
+        d.gestes_manuels = &gestes;
         let html = render(&d);
         let c = corps(&html);
         assert!(c.contains(T_ALERTE), "section d'alerte absente");
@@ -1019,11 +1109,125 @@ mod tests {
     #[test]
     fn sans_retrait_gele_ni_calcule_ni_manuel_l_alerte_n_existe_pas() {
         let r = vide();
-        let manuels = vec![retrait_manuel("4100238091", "2026-07-31", "périmètre 2027", false)];
+        let gestes = vec![geste("2026-07-31", "périmètre 2027", &[("4100238091", false)])];
         let mut d = donnees(&r);
-        d.retraits_manuels = &manuels;
+        d.gestes_manuels = &gestes;
         let html = render(&d);
         assert!(!corps(&html).contains(T_ALERTE));
+    }
+
+    #[test]
+    fn un_geste_de_plusieurs_comptes_est_rendu_sous_chapeau() {
+        let r = vide();
+        let gestes = vec![geste(
+            "2026-07-31",
+            "Run RF02 du 28/07/2026 exclu a posteriori — erreurs",
+            &[("4100238091", false), ("4100243662", false), ("4100247788", false)],
+        )];
+        let mut d = donnees(&r);
+        d.gestes_manuels = &gestes;
+        let html = render(&d);
+        let c = corps(&html);
+        assert!(c.contains("<b>3</b> comptes retirés le"), "chapeau absent");
+        assert!(c.contains("31/07/2026"), "date du chapeau absente ou non mise en forme");
+        // Le motif se lit UNE fois (au chapeau), pas trois.
+        assert_eq!(
+            c.matches("exclu a posteriori").count(),
+            1,
+            "le motif ne doit pas se répéter"
+        );
+        for cf in ["4100238091", "4100243662", "4100247788"] {
+            assert!(c.contains(cf), "chaque compte du geste doit rester pointable : {cf}");
+        }
+    }
+
+    #[test]
+    fn un_geste_d_un_seul_compte_garde_le_rendu_isole() {
+        // Un groupe de 1 n'est pas un lot : le rendu du PR v1.8.0 (une ligne
+        // CF / date / motif) reste le bon, il n'y a rien à factoriser.
+        let r = vide();
+        let gestes = vec![geste("2026-07-31", "litige", &[("4100238091", false)])];
+        let mut d = donnees(&r);
+        d.gestes_manuels = &gestes;
+        let html = render(&d);
+        let c = corps(&html);
+        assert!(c.contains("31/07/2026"));
+        assert!(!c.contains("comptes retirés le"), "pas de chapeau pour un geste d'un compte");
+    }
+
+    #[test]
+    fn l_alerte_agrege_les_geles_d_un_meme_geste() {
+        // 150 lignes d'alerte pour un seul clic noieraient la seule information
+        // qui oblige le destinataire à agir. Une entrée par geste ; la liste
+        // exacte reste au tableau.
+        let r = vide();
+        let gestes = vec![
+            geste(
+                "2026-08-14",
+                "Run RF02 exclu a posteriori — erreurs",
+                &[("4100238091", true), ("4100243662", true), ("4100247788", false)],
+            ),
+            geste("2026-08-06", "litige", &[("4100250000", true)]),
+        ];
+        let mut d = donnees(&r);
+        d.gestes_manuels = &gestes;
+        let html = render(&d);
+        let c = corps(&html);
+        let alerte = c
+            .split(T_ALERTE)
+            .nth(1)
+            .expect("alerte absente")
+            .split("</section>")
+            .next()
+            .unwrap_or("");
+        assert!(
+            alerte.contains("<b>2</b> comptes retirés le 14/08/2026"),
+            "les gelés du geste s'agrègent (2 sur 3 : le non-gelé n'y entre pas)"
+        );
+        assert!(
+            !alerte.contains("4100238091"),
+            "pas d'énumération par compte pour un geste multiple"
+        );
+        assert!(
+            alerte.contains("4100250000"),
+            "un geste d'un seul gelé garde la phrase unitaire"
+        );
+    }
+
+    #[test]
+    fn le_tableau_des_gestes_designe_les_comptes_deja_transmis() {
+        // L'alerte renvoie au tableau (« la liste exacte reste au tableau »).
+        // Encore faut-il l'y trouver : sans marqueur, le lecteur voit 143
+        // comptes indifférenciés et ne sait pas lesquels ont déjà quitté ses
+        // fichiers — l'alerte promet une liste qui n'existe nulle part.
+        let r = vide();
+        let gestes = vec![geste(
+            "2026-08-14",
+            "Run RF02 exclu a posteriori — erreurs",
+            &[("4100238091", true), ("4100247788", false)],
+        )];
+        let mut d = donnees(&r);
+        d.gestes_manuels = &gestes;
+        let html = render(&d);
+
+        let lignes: Vec<&str> = corps(&html).split("<tr class=\"geste-l\">").skip(1).collect();
+        assert_eq!(lignes.len(), 2, "une ligne par compte du geste");
+        let gelee = lignes
+            .iter()
+            .find(|l| l.contains("4100238091"))
+            .expect("le compte gelé doit avoir sa ligne");
+        let active = lignes
+            .iter()
+            .find(|l| l.contains("4100247788"))
+            .expect("le compte non gelé aussi");
+        assert!(
+            gelee.split("</tr>").next().unwrap_or("").contains("déjà transmis"),
+            "le compte gelé doit être marqué sur SA ligne : {gelee}"
+        );
+        assert!(
+            !active.split("</tr>").next().unwrap_or("").contains("déjà transmis"),
+            "et le non-gelé ne doit pas l'être, sinon le marqueur ne distingue rien : {active}"
+        );
     }
 
     #[test]
