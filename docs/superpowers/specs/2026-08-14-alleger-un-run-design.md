@@ -131,6 +131,8 @@ Dans `retraits_manuels_depuis` (commands.rs) ou en aval dans le rendu :
   la rampe. Une régénération replacera d'autres comptes pour tenir le volume
   des runs — les retirés, eux, ne reviennent jamais (exclus du re-tirage,
   comportement existant).
+  **Levée le 16/08/2026** : un retrait n'est plus compensé — voir
+  `2026-08-16-retrait-jamais-compense-design.md`.
 - Réactivations et déplacements restent non tracés au rapport (périmètre du
   PR #2 inchangé).
 - Le regroupement par `(le, motif)` classe ensemble deux gestes distincts qui
