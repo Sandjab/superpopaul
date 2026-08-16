@@ -1202,6 +1202,9 @@ pub async fn plan_generate(
             &chemin_classeur(&input, &cfg.output.dir),
             &crate::plan_xlsx::lignes(&entrees, &lignes),
         )?;
+        // Le rapport HTML du plan part avec les autres livrables (décision
+        // du 16/08/2026) : voir `ecrire_rapport_plan`.
+        ecrire_rapport_plan(&input, &cfg.output.dir, &lignes, &meta, &entrees)?;
         Ok(PlanGeneration { apercu, fichiers, obsoletes })
     })
     .await
@@ -1603,7 +1606,7 @@ fn charger_pour_retouche(
         .ok_or_else(|| "aucun plan enregistré à retoucher".to_string())
 }
 
-/// Réécrit plan ET fichiers. Les trois vont ensemble : laisser un livrable en
+/// Réécrit plan ET fichiers. Les QUATRE vont ensemble : laisser un livrable en
 /// arrière le ferait diverger de la base en silence.
 ///
 /// Le classeur du périmètre en fait partie, au même titre que les fichiers par
@@ -1614,6 +1617,9 @@ fn charger_pour_retouche(
 /// Rend les fichiers d'une génération précédente supprimés au passage : un
 /// retrait ou un déplacement peut vider une MEP, et son fichier n'a alors plus
 /// lieu d'être.
+///
+/// Le rapport HTML du plan en fait partie aussi (décision du 16/08/2026) : un
+/// rapport qui décrit le plan d'avant la retouche est pire que pas de rapport.
 ///
 /// Rend aussi **les fichiers de MEP écrits** : `plan_rapprocher_appliquer` en a
 /// besoin pour son rapport, et eux seuls disent combien de comptes chaque
@@ -1636,7 +1642,50 @@ fn sauver_apres_retouche(
         &chemin_classeur(input, &cfg.output.dir),
         &crate::plan_xlsx::lignes(&entrees, lignes),
     )?;
+    ecrire_rapport_plan(input, &cfg.output.dir, lignes, meta, &entrees)?;
     Ok((ecrits, obsoletes))
+}
+
+/// Écrit le rapport HTML du plan. Livrable au même titre que les fichiers de
+/// MEP et le classeur (décision du 16/08/2026) : chaque écriture du plan le
+/// régénère — un rapport qui décrit le plan d'avant est pire que pas de
+/// rapport. `entrees` vient de l'appelant : le scan est déjà fait pour le
+/// classeur, le refaire ici doublerait la lecture du fichier.
+fn ecrire_rapport_plan(
+    input: &Path,
+    dir: &str,
+    lignes: &[crate::plan::LignePlan],
+    meta: &crate::store::PlanMeta,
+    entrees: &[crate::plan::LigneEntree],
+) -> Result<PathBuf, String> {
+    let params = crate::plan::PlanParams::depuis_yaml(&meta.params_yaml)?;
+    let (pool, _) = crate::plan::construire_pool(entrees, &params.pa_exclues())?;
+    let mut pool_par_pa: std::collections::BTreeMap<String, usize> = Default::default();
+    for c in &pool {
+        *pool_par_pa.entry(c.pa.clone()).or_insert(0) += 1;
+    }
+    let mut pool_par_jj: std::collections::BTreeMap<u8, usize> = Default::default();
+    for c in &pool {
+        *pool_par_jj.entry(c.jj).or_insert(0) += 1;
+    }
+    let (runs, _meps) = calendrier_du_plan(meta)?;
+    let maintenant = chrono::Local::now();
+    let html = crate::plan_report::render(&crate::plan_report::PlanReportData {
+        fichier: &meta.fichier,
+        date_longue: &report::date_fr_longue(&maintenant),
+        version: env!("CARGO_PKG_VERSION"),
+        lignes,
+        aujourdhui: maintenant.date_naive(),
+        pool_par_pa: &pool_par_pa,
+        pool_par_jj: &pool_par_jj,
+        runs: &runs,
+    });
+    let out = resolved_out_dir(input, dir).join(format!(
+        "{}_plan.html",
+        input.file_stem().unwrap_or_default().to_string_lossy()
+    ));
+    std::fs::write(&out, html).map_err(|e| format!("écriture du rapport de plan : {e}"))?;
+    Ok(out)
 }
 
 /// Runs et MEP du plan enregistré, tels que la retouche doit les voir.
@@ -2194,39 +2243,11 @@ pub async fn plan_rapport(state: State<'_, AppState>) -> Result<String, String> 
         let (lignes, meta) = charger_pour_retouche(&store)?;
         // Pool recalculé au moment du rapport : la comparaison plan vs pool
         // n'a de sens que sur des données fraîches.
-        let params = crate::plan::PlanParams::depuis_yaml(&meta.params_yaml)?;
         let entrees = {
             let s = store.lock().unwrap();
             plan_entrees_from_scan(&s, &input, &cfg, chrono::Utc::now())?
         };
-        let (pool, _) = crate::plan::construire_pool(&entrees, &params.pa_exclues())?;
-        let mut pool_par_pa: std::collections::BTreeMap<String, usize> = Default::default();
-        for c in &pool {
-            *pool_par_pa.entry(c.pa.clone()).or_insert(0) += 1;
-        }
-        let mut pool_par_jj: std::collections::BTreeMap<u8, usize> = Default::default();
-        for c in &pool {
-            *pool_par_jj.entry(c.jj).or_insert(0) += 1;
-        }
-        // Runs RETENUS : `calendrier_du_plan` applique déjà les trois filtres
-        // (exclusion, fenêtre, MEP passée), comme pour `plan_ajouter`.
-        let (runs, _meps) = calendrier_du_plan(&meta)?;
-        let maintenant = chrono::Local::now();
-        let html = crate::plan_report::render(&crate::plan_report::PlanReportData {
-            fichier: &meta.fichier,
-            date_longue: &report::date_fr_longue(&maintenant),
-            version: env!("CARGO_PKG_VERSION"),
-            lignes: &lignes,
-            aujourdhui: maintenant.date_naive(),
-            pool_par_pa: &pool_par_pa,
-            pool_par_jj: &pool_par_jj,
-            runs: &runs,
-        });
-        let out = resolved_out_dir(&input, &cfg.output.dir).join(format!(
-            "{}_plan.html",
-            input.file_stem().unwrap_or_default().to_string_lossy()
-        ));
-        std::fs::write(&out, html).map_err(|e| format!("écriture du rapport de plan : {e}"))?;
+        let out = ecrire_rapport_plan(&input, &cfg.output.dir, &lignes, &meta, &entrees)?;
         Ok(out.display().to_string())
     })
     .await
@@ -3349,6 +3370,70 @@ mod tests_rapprochement {
             "l'avertissement d'annuaire ne doit plus se mêler à ceux du calcul : {:?}",
             r.avertissements
         );
+    }
+
+    #[test]
+    fn une_retouche_reecrit_le_rapport_html_du_plan() {
+        // Le vécu du 16/08 : après une exclusion, `<souche>_plan.html`
+        // décrivait encore le plan d'avant. Le rapport est un livrable : il
+        // part avec les fichiers de MEP et le classeur, à chaque écriture.
+        let store = Arc::new(Mutex::new(Store::open_in_memory().expect("store en mémoire")));
+        let params = params_avec_run_exclu();
+        let meta = meta_pour(&params);
+        let lignes = vec![crate::plan::LignePlan {
+            cf: "CF1".into(),
+            participant: "0225:CF1".into(),
+            jj: 5,
+            raison_sociale: "ACME".into(),
+            pa: "Cegedim".into(),
+            mep_id: 1,
+            mep_date: chrono::NaiveDate::parse_from_str("2026-09-01", "%Y-%m-%d").unwrap(),
+            run_num: "RF01".into(),
+            run_date: chrono::NaiveDate::parse_from_str("2026-09-10", "%Y-%m-%d").unwrap(),
+            origine: crate::plan::Origine::Auto,
+            in_directory: true,
+            resolved_at: 0,
+            planned_at: 0,
+            retire: None,
+        }];
+
+        let dir = tempfile::tempdir().unwrap();
+        let csv = dir.path().join("brm.csv");
+        std::fs::write(&csv, "cf;pid;jj\nCF1;;5\n").expect("écriture du CSV de test");
+        let cfg = Config {
+            version: 1,
+            api: crate::config::ApiConfig {
+                url: String::new(), key: String::new(), mode: ApiMode::Api,
+                resolver: None, resolver_fallback: String::new(), dns_concurrency: 1,
+                batch_size: 1, concurrency: 1, proxy: None, refresh_days: 30,
+            },
+            input: crate::config::InputConfig {
+                path: csv.to_string_lossy().into_owned(),
+                delimiter: ";".into(), encoding: "utf-8".into(),
+                pid_column: "pid".into(), record_label: crate::config::RecordLabel::Record,
+                cf_column: "cf".into(), jj_column: "jj".into(), raison_sociale_column: String::new(),
+            },
+            output: crate::config::OutputConfig {
+                dir: dir.path().to_string_lossy().into_owned(),
+                suffix: String::new(), path: String::new(),
+                timestamp_suffix: true, encoding: crate::config::OutputEncoding::Utf8Bom,
+                separator: crate::config::OutputSeparator::Auto, columns: vec![],
+            },
+            ppf: crate::config::PpfConfig::default(),
+        };
+
+        sauver_apres_retouche(&store, &csv, &cfg, &lignes, &meta).expect("retouche sauvée");
+
+        let rapport = dir.path().join("brm_plan.html");
+        assert!(rapport.exists(), "le rapport se réécrit avec les autres livrables");
+        let html = std::fs::read_to_string(&rapport).unwrap();
+        // Le rapport de plan n'affiche jamais le CF littéralement : c'est un
+        // agrégat (KPI, courbes, tables par MEP/run/plateforme), pas une
+        // liste de comptes. La plateforme du compte, elle, n'a qu'un seul
+        // producteur dans le rendu (la section « Répartition par
+        // plateforme ») : marqueur stable pour dire que le plan courant, pas
+        // un plan d'avant, a été rendu.
+        assert!(html.contains("Cegedim"), "le rapport décrit le plan courant");
     }
 }
 
