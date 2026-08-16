@@ -2581,6 +2581,36 @@ mod tests {
     }
 
     #[test]
+    fn le_retrait_ne_tire_pas_de_remplacant_sur_sa_propre_plateforme() {
+        // Cas minimal qui isole le compteur de places déjà prises par
+        // plateforme : sans lui, le quota d'Esker retrouve un plein
+        // « déjà » nul et retire un second compte Esker pour compenser —
+        // exactement le remplacement que le retrait interdit, même quand
+        // aucune autre plateforme n'est en jeu pour le masquer.
+        let mut pool: Vec<CfCandidat> = (0..2).map(|i| cand(&format!("A{i}"), 5, "Esker")).collect();
+        pool.extend((0..2).map(|i| cand(&format!("B{i}"), 5, "Cegedim")));
+        let rs = runs_jj(1, &[5]);
+        let avant = regenerer(&pool, &rs, &meps1(), 42, 2, &rampe(Forme::Plate), &Preserves::default())
+            .unwrap();
+        let retiree0 = avant.lignes.iter().find(|l| l.pa == "Esker").expect("Esker est servie");
+        let mut retiree = retiree0.clone();
+        retiree.retire = Some(Retrait { le: 1, motif: "allégé".into() });
+        let p = Preserves { retirees: vec![retiree.clone()], ..Preserves::default() };
+
+        let apres = regenerer(&pool, &rs, &meps1(), 42, 2, &rampe(Forme::Plate), &p).unwrap();
+        assert!(apres.avertissements.is_empty(), "{:?}", apres.avertissements);
+        let actifs: HashSet<&str> =
+            apres.lignes.iter().filter(|l| !l.retiree()).map(|l| l.cf.as_str()).collect();
+        let attendus: HashSet<&str> = avant
+            .lignes
+            .iter()
+            .map(|l| l.cf.as_str())
+            .filter(|c| *c != retiree.cf.as_str())
+            .collect();
+        assert_eq!(actifs, attendus, "aucun second compte Esker ne doit remplacer le retiré");
+    }
+
+    #[test]
     fn le_retrait_d_une_auto_ne_deplace_pas_les_quotas_de_plateforme() {
         // Deux plateformes, cible partielle : si la place retirée était rendue
         // au tirage, sa plateforme recevrait un REMPLAÇANT — c'est exactement
