@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Maquette — Exclure un run à venir d'une MEP gelée</title>
+<!--
+  Maquette du 16/08/2026 — dérivée de 2026-08-14-alleger-un-run.html.
+  Décision du 16/08/2026 : un run À VENIR dont la MEP est déjà gelée ❄ gagne
+  un TROISIÈME segment « Exclure le run » dans la bascule existante. Son corps
+  reprend celui du mode unique d'un run passé, à un mot près (voir intro).
+
+  Reprend tel quel le CSS de 2026-08-14-alleger-un-run.html (palette, modale,
+  .modes, .mode-uniq, .danger-note, .add-foot) — aucune règle nouvelle.
+-->
+<style>
+  /* ---- Repris tel quel de client/src/styles.css --------------------------- */
+  :root{
+    color-scheme: dark;
+    --bg:#0e1524; --card:#172136; --border:#2b3752;
+    --fg:#eae9e2; --muted:#939cb4;
+    --green:#4cc268; --gold:#d9a83f; --gold-hover:#e6bb5c; --on-gold:#241a02;
+    --amber:#e0873a; --red:#e5534b;
+    --btn2:#1b2740; --track:#223050;
+    --pid:#e8e4d8; --ppf-l3:#a892ff; --green-later:#2f8050;
+    --pa-autres:#6b7794;
+  }
+  *{box-sizing:border-box}
+  button{background:var(--btn2);color:var(--fg);border:1px solid var(--border);
+         border-radius:6px;padding:5px 14px;cursor:pointer;font:inherit}
+  button:hover:not(:disabled){border-color:var(--gold)}
+  button:disabled{opacity:.45;cursor:default}
+  .btn-primary{background:var(--gold);border-color:var(--gold-hover);color:var(--on-gold);font-weight:600}
+  .btn-primary:disabled{background:var(--btn2);color:var(--muted);border-color:var(--border)}
+  .btn-danger{border-color:var(--red);color:var(--red)}
+  .btn-danger:hover:not(:disabled){background:rgba(229,83,75,.12);border-color:var(--red)}
+  .btn-danger:disabled{background:var(--btn2);color:var(--muted);border-color:var(--border)}
+  .btn-ghost{background:transparent;border-color:transparent;color:var(--muted)}
+  input,select,textarea{background:var(--bg);color:var(--fg);border:1px solid var(--border);
+         border-radius:6px;padding:5px 8px;font:inherit}
+  .field-hint{font-size:12.5px;color:var(--muted);margin:4px 0 8px}
+  .danger-note{background:#331518;color:var(--red);border-radius:8px;padding:9px 12px;
+               font-size:12.5px;margin:10px 0}
+  .add-run{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;background:var(--btn2);
+           border:1px solid var(--border);border-radius:8px;padding:9px 14px;margin:4px 0 12px}
+  .add-run b{color:var(--gold)}
+  .add-run .jjs{color:var(--muted);font-size:12.5px}
+  .add-run .jjs code{color:var(--fg);background:var(--track);border-radius:4px;padding:1px 6px;font-size:12px}
+  .add-foot{display:flex;align-items:center;gap:12px;margin-top:12px;padding-top:12px;
+            border-top:1px solid var(--border)}
+  .add-foot .spacer{flex:1}
+  .add-count{color:var(--muted);font-size:13px}
+  .add-count b{color:var(--fg)}
+
+  /* Bascule entre les modes d'un run à venir — reprise de la maquette 14/08,
+     inchangée : elle admet ici un TROISIÈME bouton sans aucune règle nouvelle. */
+  .modes{display:flex;gap:0;margin:2px 0 10px;border:1px solid var(--border);
+         border-radius:7px;overflow:hidden;width:fit-content;max-width:100%}
+  .modes button{border:0;border-radius:0;background:transparent;color:var(--muted);
+                padding:7px 14px;font-size:13px}
+  .modes button + button{border-left:1px solid var(--border)}
+  .modes button.on{background:var(--btn2);color:var(--gold);font-weight:600}
+  .modes button:hover:not(.on){color:var(--fg)}
+
+  /* Corps du mode « Exclure le run » — repris de .mode-uniq (run passé),
+     réutilisé tel quel comme corps du 3e segment. */
+  .mode-uniq{background:var(--btn2);border:1px solid var(--border);border-left:3px solid var(--red);
+             border-radius:7px;padding:9px 13px;font-size:13px;margin:2px 0 8px}
+  .mode-uniq b{color:var(--fg)}
+
+  .prop-saisie{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin:2px 0 4px}
+  .prop-saisie input[type="number"]{width:82px;text-align:right}
+
+  /* ---- Décor de la maquette (n'existe pas dans l'application) ------------- */
+  body{margin:0;padding:24px 16px 72px;background:var(--bg);color:var(--fg);
+       font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  .wrap{max-width:1080px;margin:0 auto}
+  h1{font-size:22px;margin:0 0 4px;letter-spacing:-.01em}
+  .lede{color:var(--muted);margin:0 0 28px}
+  h2{font-size:13px;text-transform:uppercase;letter-spacing:.09em;color:var(--gold);
+     margin:34px 0 4px;padding-top:18px;border-top:1px solid var(--border)}
+  .note{color:var(--muted);font-size:13px;margin:0 0 14px}
+  .note b{color:var(--fg);font-weight:600}
+  .why-box{color:var(--muted);font-size:12.5px;margin:10px 0 0;padding-left:12px;
+           border-left:2px solid var(--border)}
+  .why-box b{color:var(--fg)}
+  .why-box ul{margin:6px 0 0;padding-left:18px}
+  .why-box li{margin-bottom:3px}
+  .modal{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:22px;
+         max-width:460px}
+  .modal h3{margin:0 0 4px;font-size:16px}
+  .modal textarea{display:block;width:100%;margin:8px 0}
+  .cols{display:flex;gap:28px;flex-wrap:wrap;align-items:flex-start}
+  .cols>div{flex:1;min-width:400px}
+  mark{background:rgba(217,168,63,.22);color:var(--fg);border-radius:3px;padding:0 3px}
+  @media (max-width:620px){ body{padding:18px 12px 48px} }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Exclure un run à venir d'une MEP gelée</h1>
+  <p class="lede">Maquette du 16/08/2026 — ce qui change dans la modale « Alléger le run », pour
+     validation avant code UI. Un run <b>à venir</b> dont la MEP est déjà <b>gelée ❄</b> (fichier
+     déjà transmis) peut désormais être exclu en bloc, comme un run déjà joué. La bascule à deux
+     segments gagne un <mark>troisième segment « Exclure le run »</mark>, dont le corps reprend
+     mot pour mot celui du run passé — à une différence près : le motif pré-rempli dit
+     <b>« exclu »</b> et non <b>« exclu a posteriori »</b>, puisque le run n'a pas encore été
+     joué. Rien d'autre ne change : le run passé garde son mode unique, et le run à venir d'une
+     MEP <i>future</i> garde ses deux segments actuels (état B, en regard).</p>
+
+  <div class="cols">
+
+  <!-- ===================================================================== -->
+  <div>
+  <h2>État A (nouveau) — run à venir, MEP gelée</h2>
+  <p class="note">RF03 est programmé au 20/09/2026, mais sa MEP du 01/08/2026 est déjà gelée : le
+     fichier destiné à la plateforme est déjà parti. La bascule affiche donc trois segments ;
+     l'utilisateur a choisi le troisième.</p>
+
+  <div class="modal">
+    <h3>Alléger le run RF03</h3>
+    <div class="add-run">
+      <b>RF03</b>
+      <span>Run du 20/09/2026</span>
+      <span class="jjs">MEP gelée ❄ 01/08/2026</span>
+      <span class="jjs">14 comptes actifs</span>
+    </div>
+
+    <div class="modes">
+      <button>Retirer N — répartition conservée</button>
+      <button>Ne garder que ma sélection</button>
+      <button class="on">Exclure le run</button>
+    </div>
+
+    <div class="mode-uniq"><b>Exclure le run</b> — les 14 lignes actives du run sont retirées
+      du plan, épinglées comprises.</div>
+    <p class="field-hint">Les lignes restent consultables via le filtre « retiré » et ne seront
+      pas replacées par une régénération. Le retrait est annulable.</p>
+
+    <div class="danger-note">⚠ 14 compte(s) appartiennent à une MEP gelée (01/08/2026). Son
+      fichier a déjà été transmis : il changera au prochain tirage.</div>
+
+    <label class="field-hint" for="ma">Motif du retrait (obligatoire)</label>
+    <textarea id="ma" rows="3">Run RF03 du 20/09/2026 exclu — </textarea>
+
+    <div class="add-foot">
+      <span class="spacer"></span>
+      <button class="btn-danger" disabled>Retirer 14 compte(s)</button>
+      <button class="btn-ghost">Annuler</button>
+    </div>
+  </div>
+
+  <p class="why-box">Même règle qu'un run passé : le bouton reste <b>inerte</b> tant que rien
+     n'est écrit après le tiret — le motif pré-rempli dit <i>quel</i> run est exclu, jamais
+     <i>pourquoi</i>. Seul change le verbe : <b>« exclu »</b>, sans « a posteriori », parce que
+     le run n'a pas encore été joué — la MEP gelée le rend seulement <b>impossible à alléger
+     autrement</b> sans casser un fichier déjà transmis.</p>
+  </div>
+
+  <!-- ===================================================================== -->
+  <div>
+  <h2>État B (inchangé) — run à venir, MEP future</h2>
+  <p class="note">Pour contraste : même écran, mais la MEP de ce run n'est pas encore gelée. La
+     bascule garde ses deux segments actuels ; version compacte du mode proportionnel.</p>
+
+  <div class="modal">
+    <h3>Alléger le run RF14</h3>
+    <div class="add-run">
+      <b>RF14</b>
+      <span>Run du 29/09/2026</span>
+      <span class="jjs">28 comptes actifs</span>
+    </div>
+
+    <div class="modes">
+      <button class="on">Retirer N — répartition conservée</button>
+      <button>Ne garder que ma sélection</button>
+    </div>
+
+    <div class="prop-saisie">
+      <label for="nb">Retirer</label>
+      <input id="nb" type="number" value="6" min="1" max="27">
+      <span class="field-hint" style="margin:0">compte(s) sur 28 actifs</span>
+      <button>Proposer</button>
+    </div>
+    <p class="field-hint">La part de chaque plateforme dans le run est conservée. Une plateforme
+      n'est jamais vidée : son dernier compte actif reste.</p>
+
+    <label class="field-hint" for="mb" style="margin-top:6px">Motif du retrait (obligatoire)</label>
+    <textarea id="mb" rows="2">Volume du run revu à la baisse — arbitrage du comité du 14/08/2026</textarea>
+
+    <div class="add-foot">
+      <span class="add-count"><b>6</b> seront retiré(s) — <b>22</b> resteront actifs sur ce run</span>
+      <span class="spacer"></span>
+      <button class="btn-danger">Retirer 6 compte(s)</button>
+      <button class="btn-ghost">Annuler</button>
+    </div>
+  </div>
+
+  <p class="why-box">Ce run n'a pas de MEP gelée : rien ne l'empêche d'être allégé finement,
+     donc le troisième segment n'est <b>pas offert</b>. C'est la MEP, jamais la date du run
+     seule, qui décide de l'apparition du segment « Exclure le run » sur un run à venir.</p>
+  </div>
+
+  </div>
+
+  <!-- ===================================================================== -->
+  <h2>Ce qui décide de l'offre des trois segments</h2>
+  <p class="note">Résumé des trois états possibles de la modale :</p>
+  <p class="why-box">
+    <ul>
+      <li>run <b>passé</b> → mode unique « Exclure le run » (inchangé, pas de bascule) ;</li>
+      <li>run <b>à venir</b>, MEP <b>future</b> → bascule à deux segments (inchangé, état B) ;</li>
+      <li>run <b>à venir</b>, MEP déjà <b>gelée ❄</b> → bascule à <b>trois</b> segments, le
+        troisième reprenant le corps du run passé avec un motif pré-rempli « exclu » — sans
+        « a posteriori » (état A, nouveau).</li>
+    </ul>
+    L'avertissement ⚠ MEP gelée existant est repris sans changement de forme : il apparaît déjà
+    aujourd'hui sous les deux autres modes lorsque des comptes concernés sont sélectionnés.</p>
+
+</div>
+</body>
+</html>
