@@ -2414,7 +2414,7 @@ async function ouvrirDeplacer() {
         occupe(ev.currentTarget, "Déplacement en cours…", async () => {
           try {
             const obsoletes = await invoke("plan_deplacer", { cfs, runNum: sel.value });
-            plan.sel.clear(); signalerObsoletes(obsoletes); await rechargerRecap();
+            plan.sel.clear(); signalerObsoletes(obsoletes); await rechargerApresRetouche();
           } catch (e) { planBanner("error", String(e)); }
           // Après le rechargement, pas avant : fermer d'abord laisserait
           // l'écran figé sans rien pour l'expliquer.
@@ -2448,7 +2448,7 @@ function ouvrirRetrait() {
     occupe(ev.currentTarget, "Retrait en cours…", async () => {
       try {
         const obsoletes = await invoke("plan_retirer", { cfs, motif: zone.value });
-        plan.sel.clear(); signalerObsoletes(obsoletes); await rechargerRecap();
+        plan.sel.clear(); signalerObsoletes(obsoletes); await rechargerApresRetouche();
       } catch (e) { planBanner("error", String(e)); }
       closeModal();
     }),
@@ -2503,7 +2503,7 @@ function ouvrirReactivation() {
         occupe(ev.currentTarget, "Réactivation en cours…", async () => {
           try {
             const obsoletes = await invoke("plan_annuler_retrait", { cfs });
-            plan.sel.clear(); signalerObsoletes(obsoletes); await rechargerRecap();
+            plan.sel.clear(); signalerObsoletes(obsoletes); await rechargerApresRetouche();
           } catch (e) { planBanner("error", String(e)); }
           closeModal();
         }),
@@ -2725,7 +2725,7 @@ function renderRevueRapprochement(rapprochement, empreinte, annuaireIncomplet, r
         const { obsoletes, rapport } = await invoke("plan_rapprocher_appliquer", { empreinte });
         closeModal();
         plan.rapportFichier = "identique"; // le backend vient d'aligner meta.hash dessus
-        await rechargerRecap();
+        await rechargerApresRetouche();
         compteRenduRapprochement(rapprochement, obsoletes, rapport, retraitsManuels);
       } catch (e) {
         // Refus (empreinte périmée) ou autre échec : la revue affichée décrit
@@ -2796,7 +2796,7 @@ function renderSansEcart(rapprochement, empreinte, retraitsManuels) {
             const { obsoletes, rapport } = await invoke("plan_rapprocher_appliquer", { empreinte });
             closeModal();
             plan.rapportFichier = "identique"; // le backend vient d'aligner meta.hash dessus
-            await rechargerRecap();
+            await rechargerApresRetouche();
             compteRenduRapprochement(rapprochement, obsoletes, rapport, retraitsManuels);
           } catch (e) {
             // Même traitement que la revue : la modale décrit un calcul qui
@@ -2988,7 +2988,7 @@ async function ouvrirAjoutRun(run, jour) {
         return occupe(ev.currentTarget, "Ajout en cours…", async () => {
           try {
             const obsoletes = await invoke("plan_ajouter", { cfs: [...choisis], runNum: run.num });
-            signalerObsoletes(obsoletes); await rechargerRecap();
+            signalerObsoletes(obsoletes); await rechargerApresRetouche();
           } catch (e) { planBanner("error", String(e)); }
           closeModal();
         });
@@ -3115,7 +3115,7 @@ async function ouvrirAllegerRun(run, jour) {
         const obsoletes = mode === "exclure"
           ? await invoke("plan_exclure_run", { runNum: run.num, motif: zone.value })
           : await invoke("plan_retirer", { cfs: cfsARetirer(), motif: zone.value });
-        plan.sel.clear(); signalerObsoletes(obsoletes); await rechargerRecap();
+        plan.sel.clear(); signalerObsoletes(obsoletes); await rechargerApresRetouche();
       } catch (e) { planBanner("error", String(e)); }
       closeModal();
     }) }, "");
@@ -3392,6 +3392,15 @@ async function rechargerRecap() {
     $("plan-tab-count").textContent = plan.lignes.length ? fmtN(plan.lignes.length) : "";
     renderPlanRecap();
   } catch (e) { planBanner("error", String(e)); }
+}
+
+/** Épilogue d'une retouche réussie du plan : le récap relit les lignes, et
+ *  l'aperçu — qui simule la prochaine régénération — se recalcule. Sans lui,
+ *  Visé/Stock/Placé décrivent le plan d'avant le geste jusqu'à la prochaine
+ *  frappe (vécu du 16/08). */
+async function rechargerApresRetouche() {
+  await rechargerRecap();
+  planRecalc();
 }
 
 function planShowTab(t) {
