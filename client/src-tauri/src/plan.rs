@@ -631,17 +631,17 @@ pub fn allouer(
     for c in &classes {
         par_pa.entry(c.pa.clone()).or_default().push(c);
     }
-    // Quotas sur le plan COMPLET (préservées incluses), pas seulement sur ce
-    // qu'il reste à placer : sinon une plateforme déjà largement servie par le
-    // gel recevrait encore une part pleine.
+    // Quotas sur le plan COMPLET (préservées incluses, retirées comprises) :
+    // sinon une plateforme déjà servie par le gel — ou délestée par un
+    // retrait — recevrait encore une part pleine.
     let mut stock_par_pa: BTreeMap<String, usize> =
         par_pa.iter().map(|(h, v)| (h.clone(), v.len())).collect();
     let mut places_par_pa: HashMap<&str, usize> = HashMap::new();
-    for l in preserves.gelees.iter().chain(&preserves.epinglees) {
+    for l in preserves.gelees.iter().chain(&preserves.epinglees).chain(&preserves.retirees) {
         *stock_par_pa.entry(l.pa.clone()).or_insert(0) += 1;
     }
     let quotas = quotas_par_pa(cible + preserves.consomme(), &stock_par_pa);
-    for l in preserves.gelees.iter().chain(&preserves.epinglees) {
+    for l in preserves.gelees.iter().chain(&preserves.epinglees).chain(&preserves.retirees) {
         *places_par_pa.entry(l.pa.as_str()).or_insert(0) += 1;
     }
 
@@ -1287,11 +1287,12 @@ impl Preserves {
             .collect()
     }
 
-    /// Part de cible déjà consommée : gelées et épinglées **actives**. Les
-    /// retirées ne comptent pas — c'est justement ce qu'on a décidé de ne pas
-    /// livrer.
+    /// Part de cible déjà consommée : gelées, épinglées ET retirées. Un
+    /// retrait n'est jamais compensé (décision du 16/08/2026, qui inverse
+    /// celle du 28/07) : la place d'un compte retiré reste la sienne, la
+    /// rampe ne tire pas de remplaçant.
     pub fn consomme(&self) -> usize {
-        self.gelees.len() + self.epinglees.len()
+        self.gelees.len() + self.epinglees.len() + self.retirees.len()
     }
 }
 
@@ -1302,14 +1303,15 @@ impl Preserves {
 /// le compte est encore au pool y occupe déjà une place, et l'additionner
 /// réclamerait des comptes qui n'existent pas — « cible non atteinte » sur un
 /// plan pourtant complet. Seules les préservées **absentes du pool** (forcées à
-/// la main, ou devenues inéligibles) ajoutent une place que le pool ne fournit
-/// pas.
+/// la main, devenues inéligibles, ou retirées) ajoutent une place que le pool
+/// ne fournit pas.
 pub fn cible_auto(pool: &[CfCandidat], preserves: &Preserves) -> usize {
     let au_pool: HashSet<&str> = pool.iter().map(|c| c.cf.as_str()).collect();
     let hors_pool = preserves
         .gelees
         .iter()
         .chain(&preserves.epinglees)
+        .chain(&preserves.retirees)
         .filter(|l| !au_pool.contains(l.cf.as_str()))
         .count();
     pool.len() + hors_pool
@@ -2421,7 +2423,7 @@ mod tests {
         let p = Preserves::depuis(&[gele_retire], d("2026-06-01"));
         assert!(p.gelees.is_empty(), "un compte retiré n'est pas à livrer");
         assert_eq!(p.retirees.len(), 1);
-        assert_eq!(p.consomme(), 0, "une ligne retirée ne consomme pas la cible");
+        assert_eq!(p.consomme(), 1, "un retrait n'est jamais compensé : la place reste occupée");
     }
 
     #[test]
@@ -2459,14 +2461,15 @@ mod tests {
     }
 
     #[test]
-    fn cible_auto_ignore_les_retirees() {
-        // Un retrait est une place qu'on a décidé de ne pas occuper : il ne
-        // gonfle pas la cible, exactement comme dans `consomme()`.
+    fn cible_auto_compte_une_retiree_hors_pool() {
+        // Décision du 16/08/2026 (inverse celle du 28/07) : un retrait est une
+        // place qu'on a décidé de ne pas livrer, mais qui reste OCCUPÉE — sans
+        // elle dans la cible, la régénération tirerait un remplaçant.
         let pool: Vec<CfCandidat> = (0..5).map(|i| cand(&format!("CF{i}"), 5, "PA")).collect();
         let mut retiree = lp("HORS", 5, "PA", "2026-12-01", Origine::Manuel);
         retiree.retire = Some(Retrait { le: 0, motif: "clôturé".into() });
         let p = Preserves { retirees: vec![retiree], ..Preserves::default() };
-        assert_eq!(cible_auto(&pool, &p), 5);
+        assert_eq!(cible_auto(&pool, &p), 6);
     }
 
     #[test]
@@ -2556,6 +2559,53 @@ mod tests {
         };
         let err = regenerer(&pool, &rs, &meps1(), 42, 5, &rampe(Forme::Plate), &p).unwrap_err();
         assert!(err.contains("2026-03-01"), "la MEP doit être nommée : {err}");
+    }
+
+    #[test]
+    fn le_retrait_d_une_gelee_n_est_pas_compense() {
+        // Le vécu du 16/08 : alléger une MEP gelée, recalculer l'aperçu — la
+        // rampe re-tirait des remplaçants pour tenir la cible. Un retrait
+        // réduit le volume livré, définitivement.
+        let pool: Vec<CfCandidat> = (0..6).map(|i| cand(&format!("CF{i}"), 5, "PA")).collect();
+        let rs = runs_jj(2, &[5]);
+        let gelee = lp("GEL", 5, "PA", "2026-01-01", Origine::Auto);
+        let mut retiree = lp("RET", 5, "PA", "2026-01-01", Origine::Auto);
+        retiree.retire = Some(Retrait { le: 1, motif: "allégé".into() });
+        let p = Preserves { gelees: vec![gelee], retirees: vec![retiree], ..Preserves::default() };
+
+        // Cible 8 = 6 du pool + la gelée + la retirée (toutes deux hors pool).
+        let a = regenerer(&pool, &rs, &meps1(), 42, 8, &rampe(Forme::Plate), &p).unwrap();
+        assert!(a.avertissements.is_empty(), "aucun compte ne manque : {:?}", a.avertissements);
+        let actives = a.lignes.iter().filter(|l| !l.retiree()).count();
+        assert_eq!(actives, 7, "la place de RET reste vide, personne ne la prend");
+    }
+
+    #[test]
+    fn le_retrait_d_une_auto_ne_deplace_pas_les_quotas_de_plateforme() {
+        // Deux plateformes, cible partielle : si la place retirée était rendue
+        // au tirage, sa plateforme recevrait un REMPLAÇANT — c'est exactement
+        // ce que le retrait interdit. Les actifs d'après doivent être ceux
+        // d'avant, moins la retirée, à l'identique.
+        let mut pool: Vec<CfCandidat> = (0..4).map(|i| cand(&format!("A{i}"), 5, "Esker")).collect();
+        pool.extend((0..4).map(|i| cand(&format!("B{i}"), 5, "Cegedim")));
+        let rs = runs_jj(2, &[5]);
+        let avant = regenerer(&pool, &rs, &meps1(), 42, 6, &rampe(Forme::Plate), &Preserves::default())
+            .unwrap()
+            .lignes;
+        let mut retiree = avant.iter().find(|l| l.pa == "Esker").expect("Esker est servie").clone();
+        retiree.retire = Some(Retrait { le: 1, motif: "allégé".into() });
+        let p = Preserves { retirees: vec![retiree.clone()], ..Preserves::default() };
+
+        let apres = regenerer(&pool, &rs, &meps1(), 42, 6, &rampe(Forme::Plate), &p).unwrap();
+        assert!(apres.avertissements.is_empty(), "{:?}", apres.avertissements);
+        let actifs: HashSet<&str> =
+            apres.lignes.iter().filter(|l| !l.retiree()).map(|l| l.cf.as_str()).collect();
+        let attendus: HashSet<&str> = avant
+            .iter()
+            .map(|l| l.cf.as_str())
+            .filter(|c| *c != retiree.cf.as_str())
+            .collect();
+        assert_eq!(actifs, attendus, "les actifs restants sont ceux d'avant, sans remplaçant");
     }
 
     // ------------------------------------------------------------ retouche
