@@ -25,6 +25,10 @@ en allège 2 autres.
 3. **L'aperçu du paramétrage reste périmé après un geste.** La modale recharge
    le récap mais ne relance jamais le recalcul de l'aperçu : Visé / Stock /
    Placé / Reliquat décrivent le plan d'avant, jusqu'à la prochaine frappe.
+4. **Le rapport HTML du plan reste périmé après un geste.** `<souche>_plan.html`
+   n'est écrit que par le bouton « Rapport du plan… » : ni « Générer » ni les
+   retouches ne le rafraîchissent — sitôt un geste fait, le document sur disque
+   décrit un plan qui n'existe plus.
 
 ## Décisions structurantes (arbitrées en brainstorming)
 
@@ -43,6 +47,11 @@ en allège 2 autres.
 - **Le rafraîchissement couvre toutes les retouches**, pas seulement la modale
   « Alléger… » : le même trou de fraîcheur existe pour l'ajout, le déplacement,
   le retrait depuis le récap et la réactivation.
+- **Le rapport HTML du plan devient un livrable systématique**, écrit à chaque
+  « Générer » et à chaque retouche, comme le classeur — retenu contre
+  « rafraîchi seulement s'il existe » (comportement dépendant d'un état
+  implicite) et contre « seulement après retrait/exclusion » (un « Générer »
+  laisserait un rapport périmé).
 
 ## 1. Moteur — les retirées consomment leur part (`plan.rs`, TDD)
 
@@ -93,7 +102,21 @@ en allège 2 autres.
   identique à une frappe, aucune sémantique nouvelle. Avec le moteur du § 1,
   l'aperçu recalculé montre le plan allégé sans retirage.
 
-## 4. Limites, dites comme telles
+## 4. Livrables — le rapport du plan part avec les fichiers (`commands.rs`)
+
+- Le rendu du rapport (`plan_report::render` + écriture de `<souche>_plan.html`)
+  est factorisé en helper et appelé par `plan_generate`, par
+  `sauver_apres_retouche` (donc par les six retouches) et par `plan_rapport`.
+  Le coût marginal est faible : le scan du fichier d'entrée qui alimente le
+  rapport est déjà fait pour le classeur.
+- Le bouton « Rapport du plan… » ne change pas : il régénère (données
+  fraîches si le fichier d'entrée a bougé) et révèle le document. Aucun
+  changement d'IHM, pas de maquette.
+- La doctrine de `sauver_apres_retouche` s'étend : plan, fichiers de MEP,
+  classeur **et rapport** vont ensemble — laisser un livrable en arrière le
+  ferait diverger de la base en silence.
+
+## 5. Limites, dites comme telles
 
 - **La case « exclure » de la timeline n'est pas touchée** : elle reste un
   paramètre de calcul qui n'écrit rien, sans signalement de son inefficacité
@@ -105,13 +128,15 @@ en allège 2 autres.
   redevient active mais n'est pas préservée à la régénération (comportement
   existant, hors périmètre).
 
-## 5. Tests
+## 6. Tests
 
 - **Rust (TDD)** : `consomme()` avec retirées (gelées retirées, épinglées
   retirées, auto retirées) ; `cible_auto` avec retirée encore au pool / hors
   pool ; `regenerer` — invariant « actifs restants inchangés, aucun
   remplaçant, mêmes avertissements » après retrait d'une gelée puis d'une
-  auto ; pas de « cible non atteinte » induit par un retrait.
+  auto ; pas de « cible non atteinte » induit par un retrait ; après une
+  retouche comme après une génération, `<souche>_plan.html` est réécrit et
+  décrit le plan courant (les retirées du geste y figurent comme telles).
 - **JS (câblage, faux DOM)** : le segment « Exclure le run » offert pour un
   run à venir gelé et refusé pour un run à venir non gelé ; pré-rempli du run
   à venir gelé (sans « a posteriori ») et bouton inerte tant que la cause
