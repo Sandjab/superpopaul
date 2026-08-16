@@ -47,6 +47,15 @@ const bouton = ($, debut) => trouver($("modal"),
 
 const champMotif = ($) => trouver($("modal"), (n) => n.tagName === "textarea");
 
+/** Les libellés des segments de la bascule de la modale ouverte. */
+function segments($) {
+  const barre = trouver($("modal"), (n) => n.className === "modes");
+  return (barre?.children ?? []).map((b) => b.textContent);
+}
+
+/** Clique un bouton comme l'utilisateur : par son écouteur `click`. */
+const cliquer = (b) => b.click();
+
 /** Saisit un motif comme l'utilisateur : la valeur ET la notification, sans
  *  laquelle le bouton de retrait ne rouvre jamais. */
 function taperMotif($, texte) {
@@ -440,4 +449,54 @@ test("l'avertissement de MEP gelée porte sur les comptes qui vont être retiré
   cocher(casesACocher(ctx.$("modal"))[0]); // on garde le gelé
   assert.equal(alerte(), null,
     "le gelé est gardé : l'avertissement doit tomber, sinon il crie sans raison");
+});
+
+test("un run à venir d'une MEP gelée offre aussi l'exclusion", async () => {
+  // Ses lignes étant préservées telles quelles, ni la case « exclure » du
+  // calcul ni une régénération ne les retireront : l'exclusion a posteriori
+  // est le SEUL levier pour vider un tel run (décision du 16/08).
+  const ctx = ecran([ligne("CF1", { gelee: true }), ligne("CF2", { gelee: true })]);
+  await ctx.app.ouvrirAllegerRun(RUN, JOUR_FUTUR);
+  assert.deepEqual(segments(ctx.$), [
+    "Retirer N — répartition conservée",
+    "Ne garder que ma sélection",
+    "Exclure le run",
+  ]);
+});
+
+test("un run à venir d'une MEP future n'offre pas l'exclusion", async () => {
+  const ctx = ecran([ligne("CF1")]); // gelee: false par défaut
+  await ctx.app.ouvrirAllegerRun(RUN, JOUR_FUTUR);
+  assert.deepEqual(segments(ctx.$), [
+    "Retirer N — répartition conservée",
+    "Ne garder que ma sélection",
+  ]);
+});
+
+test("l'exclusion d'un run à venir gelé pré-remplit sans « a posteriori » et exige la cause", async () => {
+  const ctx = ecran([ligne("CF1", { gelee: true }), ligne("CF2", { gelee: true })]);
+  await ctx.app.ouvrirAllegerRun(RUN, JOUR_FUTUR);
+  cliquer(bouton(ctx.$, "Exclure le run"));
+
+  const PREF = "Run RF01 du 05/01/2099 exclu — ";
+  assert.equal(champMotif(ctx.$).value, PREF, "pré-rempli, sans « a posteriori »");
+  // « Retirer 2 » et pas « Retirer » : le préfixe nu attraperait le SEGMENT
+  // « Retirer N — répartition conservée » avant le bouton de validation.
+  assert.equal(bouton(ctx.$, "Retirer 2").disabled, true,
+    "le pré-rempli ne suffit pas : il faut une cause");
+
+  taperMotif(ctx.$, `${PREF}comptes migrés chez le client`);
+  const retirer = bouton(ctx.$, "Retirer 2");
+  assert.notEqual(retirer.disabled, true);
+  await retirer.click();
+  assert.equal(exclusions(ctx).length, 1, "un run exclu = UN seul appel, liste établie côté moteur");
+});
+
+test("quitter le segment exclusion sans avoir écrit efface le pré-rempli", async () => {
+  const ctx = ecran([ligne("CF1", { gelee: true })]);
+  await ctx.app.ouvrirAllegerRun(RUN, JOUR_FUTUR);
+  cliquer(bouton(ctx.$, "Exclure le run"));
+  cliquer(bouton(ctx.$, "Retirer N"));
+  assert.equal(champMotif(ctx.$).value, "",
+    "le pré-rempli appartient au mode exclusion, pas aux autres motifs");
 });

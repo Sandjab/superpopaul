@@ -3062,10 +3062,15 @@ async function ouvrirAllegerRun(run, jour) {
     return planBanner("info", `Aucun compte actif sur le run ${run.num} : rien à alléger.`);
 
   const passe = jour.date < aujourdhuiIso();
+  // Toutes les lignes d'un run partagent sa MEP : « gelé » se lit sur
+  // n'importe laquelle — `every` par principe, un run mixte serait un bug.
+  const gele = actifs.every((l) => l.gelee);
   // Dit QUEL run est exclu, jamais POURQUOI : le bouton reste inerte tant que
   // rien n'est écrit après le tiret, car c'est la cause que le rapport
-  // transmettra au destinataire six mois plus tard.
-  const PREREMPLI = `Run ${run.num} du ${fmtDateFr(jour.date)} exclu a posteriori — `;
+  // transmettra au destinataire six mois plus tard. « a posteriori » n'a de
+  // sens que pour un run déjà joué ; un run à venir gelé s'exclut avant
+  // d'avoir joué, son motif le dit sans ce mot.
+  const PREREMPLI = `Run ${run.num} du ${fmtDateFr(jour.date)} exclu${passe ? " a posteriori" : ""} — `;
 
   let mode = passe ? "exclure" : "prorata";
   const gardes = new Set();   // mode « ne garder que » : les comptes cochés
@@ -3276,10 +3281,19 @@ async function ouvrirAllegerRun(run, jour) {
    *  lisibles sans être ouverts, plutôt qu'une liste déroulante. */
   function majBascule() {
     if (passe) return;
-    bascule.replaceChildren(...[["prorata", "Retirer N — répartition conservée"],
-                                ["selection", "Ne garder que ma sélection"]]
+    const segments = [["prorata", "Retirer N — répartition conservée"],
+                       ["selection", "Ne garder que ma sélection"]];
+    // Un run à venir d'une MEP gelée ne peut se vider QUE par l'exclusion :
+    // ses lignes préservées survivraient à la case « exclure » du calcul
+    // comme à une régénération (décision du 16/08).
+    if (gele) segments.push(["exclure", "Exclure le run"]);
+    bascule.replaceChildren(...segments
       .map(([cle, libelle]) => h("button", { class: mode === cle ? "on" : "", onclick: () => {
         if (mode === cle) return;
+        // Le pré-rempli appartient au mode exclusion : posé en y entrant si
+        // rien n'est écrit, repris en le quittant s'il est resté tel quel.
+        if (cle === "exclure" && zone.value.trim() === "") zone.value = PREREMPLI;
+        if (mode === "exclure" && zone.value === PREREMPLI) zone.value = "";
         mode = cle;
         majBascule();
         dessinerCorps();
