@@ -8,7 +8,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
-const { chargerApp } = require("./dom_shim");
+const { chargerApp, trouver } = require("./dom_shim");
 
 const CSS = fs.readFileSync(path.join(__dirname, "..", "src", "styles.css"), "utf8");
 
@@ -209,4 +209,54 @@ test("« + Ajouter » n'apparaît qu'avec un plan enregistré", () => {
     "aucun plan enregistré : la timeline ne doit offrir aucune action d'ajout");
   assert.equal(timeline(true).length, 2,
     "plan enregistré : une action par run retenu, aucune sur le run écarté");
+});
+
+/** Laisse passer l'anti-rebond de `planRecalc` (250 ms) et l'aperçu qui suit. */
+const attendreApercu = () => new Promise((r) => setTimeout(r, 320));
+
+/** Nombre d'aperçus demandés au backend depuis le début du test. */
+const apercus = (ctx) => ctx.invocations.filter(([c]) => c === "plan_preview").length;
+
+test("un ajout réussi recalcule l'aperçu, pas seulement le récap", async () => {
+  // Même décision du 16/08 que pour le retrait et la réactivation : sans
+  // elle, Visé/Stock/Placé décrivent le plan d'avant l'ajout jusqu'à la
+  // prochaine frappe.
+  const ctx = chargerApp();
+  const params = {
+    runs: [{ num: "R3", date: "2026-09-08", jjs: [1, 5], exclu: false }],
+    debut: "2026-08-01", fin: "2026-11-30", meps: ["2026-09-01"], mep_count: 0,
+    cible: null, seed: 7, pa_exclues: [],
+    rampe: { forme: "plate", pilote: null },
+  };
+  ctx.repondreAux((cmd) => {
+    if (cmd === "plan_load") return { params, fichier: "brm.csv", rapport: "identique" };
+    if (cmd === "plan_lignes") return ctx.evaluer("[]");
+    if (cmd === "plan_candidats_run") return CANDIDATS;
+    if (cmd === "plan_ajouter") return ctx.evaluer("([])");
+    // L'assertion porte sur l'APPEL `plan_preview`, pas sur le rendu qui en
+    // suit : `null` est un état déjà géré par `planRecalc`.
+    if (cmd === "plan_preview") return null;
+    return ctx.evaluer("[]");
+  });
+
+  await ctx.app.ouvrirPlan();
+  await attendreApercu();
+  const avant = apercus(ctx);
+
+  await ctx.app.ouvrirAjoutRun(
+    { num: "R3", jjs: [1, 5], exclu: false, ecart: null, detail: { mep_id: 2 } },
+    { date: "2026-09-08" });
+
+  // Première case après celle de « tout cocher » : un candidat, comme
+  // « les cases de la fenêtre s'ouvrent décochées » plus haut.
+  const cb = casesACocher(ctx.$("modal"))[1];
+  cb.checked = true; cb.listeners.change({ target: cb });
+
+  const btn = trouver(ctx.$("modal"),
+    (n) => n.tagName === "button" && n.textContent.startsWith("Ajouter au run"));
+  await btn.click();
+  await attendreApercu();
+
+  assert.equal(apercus(ctx), avant + 1,
+    "le geste doit redemander un aperçu — le récap seul laisse la timeline mentir");
 });

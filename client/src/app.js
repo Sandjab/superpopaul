@@ -2414,7 +2414,7 @@ async function ouvrirDeplacer() {
         occupe(ev.currentTarget, "Déplacement en cours…", async () => {
           try {
             const obsoletes = await invoke("plan_deplacer", { cfs, runNum: sel.value });
-            plan.sel.clear(); signalerObsoletes(obsoletes); await rechargerRecap();
+            plan.sel.clear(); signalerObsoletes(obsoletes); await rechargerApresRetouche();
           } catch (e) { planBanner("error", String(e)); }
           // Après le rechargement, pas avant : fermer d'abord laisserait
           // l'écran figé sans rien pour l'expliquer.
@@ -2448,7 +2448,7 @@ function ouvrirRetrait() {
     occupe(ev.currentTarget, "Retrait en cours…", async () => {
       try {
         const obsoletes = await invoke("plan_retirer", { cfs, motif: zone.value });
-        plan.sel.clear(); signalerObsoletes(obsoletes); await rechargerRecap();
+        plan.sel.clear(); signalerObsoletes(obsoletes); await rechargerApresRetouche();
       } catch (e) { planBanner("error", String(e)); }
       closeModal();
     }),
@@ -2503,7 +2503,7 @@ function ouvrirReactivation() {
         occupe(ev.currentTarget, "Réactivation en cours…", async () => {
           try {
             const obsoletes = await invoke("plan_annuler_retrait", { cfs });
-            plan.sel.clear(); signalerObsoletes(obsoletes); await rechargerRecap();
+            plan.sel.clear(); signalerObsoletes(obsoletes); await rechargerApresRetouche();
           } catch (e) { planBanner("error", String(e)); }
           closeModal();
         }),
@@ -2725,7 +2725,7 @@ function renderRevueRapprochement(rapprochement, empreinte, annuaireIncomplet, r
         const { obsoletes, rapport } = await invoke("plan_rapprocher_appliquer", { empreinte });
         closeModal();
         plan.rapportFichier = "identique"; // le backend vient d'aligner meta.hash dessus
-        await rechargerRecap();
+        await rechargerApresRetouche();
         compteRenduRapprochement(rapprochement, obsoletes, rapport, retraitsManuels);
       } catch (e) {
         // Refus (empreinte périmée) ou autre échec : la revue affichée décrit
@@ -2796,7 +2796,7 @@ function renderSansEcart(rapprochement, empreinte, retraitsManuels) {
             const { obsoletes, rapport } = await invoke("plan_rapprocher_appliquer", { empreinte });
             closeModal();
             plan.rapportFichier = "identique"; // le backend vient d'aligner meta.hash dessus
-            await rechargerRecap();
+            await rechargerApresRetouche();
             compteRenduRapprochement(rapprochement, obsoletes, rapport, retraitsManuels);
           } catch (e) {
             // Même traitement que la revue : la modale décrit un calcul qui
@@ -2988,7 +2988,7 @@ async function ouvrirAjoutRun(run, jour) {
         return occupe(ev.currentTarget, "Ajout en cours…", async () => {
           try {
             const obsoletes = await invoke("plan_ajouter", { cfs: [...choisis], runNum: run.num });
-            signalerObsoletes(obsoletes); await rechargerRecap();
+            signalerObsoletes(obsoletes); await rechargerApresRetouche();
           } catch (e) { planBanner("error", String(e)); }
           closeModal();
         });
@@ -3062,10 +3062,15 @@ async function ouvrirAllegerRun(run, jour) {
     return planBanner("info", `Aucun compte actif sur le run ${run.num} : rien à alléger.`);
 
   const passe = jour.date < aujourdhuiIso();
+  // Toutes les lignes d'un run partagent sa MEP : « gelé » se lit sur
+  // n'importe laquelle — `every` par principe, un run mixte serait un bug.
+  const gele = actifs.every((l) => l.gelee);
   // Dit QUEL run est exclu, jamais POURQUOI : le bouton reste inerte tant que
   // rien n'est écrit après le tiret, car c'est la cause que le rapport
-  // transmettra au destinataire six mois plus tard.
-  const PREREMPLI = `Run ${run.num} du ${fmtDateFr(jour.date)} exclu a posteriori — `;
+  // transmettra au destinataire six mois plus tard. « a posteriori » n'a de
+  // sens que pour un run déjà joué ; un run à venir gelé s'exclut avant
+  // d'avoir joué, son motif le dit sans ce mot.
+  const PREREMPLI = `Run ${run.num} du ${fmtDateFr(jour.date)} exclu${passe ? " a posteriori" : ""} — `;
 
   let mode = passe ? "exclure" : "prorata";
   const gardes = new Set();   // mode « ne garder que » : les comptes cochés
@@ -3110,7 +3115,7 @@ async function ouvrirAllegerRun(run, jour) {
         const obsoletes = mode === "exclure"
           ? await invoke("plan_exclure_run", { runNum: run.num, motif: zone.value })
           : await invoke("plan_retirer", { cfs: cfsARetirer(), motif: zone.value });
-        plan.sel.clear(); signalerObsoletes(obsoletes); await rechargerRecap();
+        plan.sel.clear(); signalerObsoletes(obsoletes); await rechargerApresRetouche();
       } catch (e) { planBanner("error", String(e)); }
       closeModal();
     }) }, "");
@@ -3276,10 +3281,19 @@ async function ouvrirAllegerRun(run, jour) {
    *  lisibles sans être ouverts, plutôt qu'une liste déroulante. */
   function majBascule() {
     if (passe) return;
-    bascule.replaceChildren(...[["prorata", "Retirer N — répartition conservée"],
-                                ["selection", "Ne garder que ma sélection"]]
+    const segments = [["prorata", "Retirer N — répartition conservée"],
+                       ["selection", "Ne garder que ma sélection"]];
+    // Un run à venir d'une MEP gelée ne peut se vider QUE par l'exclusion :
+    // ses lignes préservées survivraient à la case « exclure » du calcul
+    // comme à une régénération (décision du 16/08).
+    if (gele) segments.push(["exclure", "Exclure le run"]);
+    bascule.replaceChildren(...segments
       .map(([cle, libelle]) => h("button", { class: mode === cle ? "on" : "", onclick: () => {
         if (mode === cle) return;
+        // Le pré-rempli appartient au mode exclusion : posé en y entrant si
+        // rien n'est écrit, repris en le quittant s'il est resté tel quel.
+        if (cle === "exclure" && zone.value.trim() === "") zone.value = PREREMPLI;
+        if (mode === "exclure" && zone.value === PREREMPLI) zone.value = "";
         mode = cle;
         majBascule();
         dessinerCorps();
@@ -3378,6 +3392,15 @@ async function rechargerRecap() {
     $("plan-tab-count").textContent = plan.lignes.length ? fmtN(plan.lignes.length) : "";
     renderPlanRecap();
   } catch (e) { planBanner("error", String(e)); }
+}
+
+/** Épilogue d'une retouche réussie du plan : le récap relit les lignes, et
+ *  l'aperçu — qui simule la prochaine régénération — se recalcule. Sans lui,
+ *  Visé/Stock/Placé décrivent le plan d'avant le geste jusqu'à la prochaine
+ *  frappe (vécu du 16/08). */
+async function rechargerApresRetouche() {
+  await rechargerRecap();
+  planRecalc();
 }
 
 function planShowTab(t) {

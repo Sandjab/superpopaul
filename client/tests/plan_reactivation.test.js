@@ -121,3 +121,44 @@ test("la perte du motif est annoncée", async () => {
   })(ctx.$("modal"));
   assert.match(texte, /motif/i, `la fenêtre doit prévenir : ${texte}`);
 });
+
+/** Laisse passer l'anti-rebond de `planRecalc` (250 ms) et l'aperçu qui suit. */
+const attendreApercu = () => new Promise((r) => setTimeout(r, 320));
+
+/** Nombre d'aperçus demandés au backend depuis le début du test. */
+const apercus = (ctx) => ctx.invocations.filter(([c]) => c === "plan_preview").length;
+
+test("une réactivation réussie recalcule l'aperçu, pas seulement le récap", async () => {
+  // Même décision du 16/08 que pour le retrait : sans elle, Visé/Stock/Placé
+  // décrivent le plan d'avant la réactivation jusqu'à la prochaine frappe.
+  const ctx = chargerApp();
+  const params = {
+    runs: [{ num: "3320", date: "2026-09-10", jjs: [5], exclu: false }],
+    debut: "2026-08-01", fin: "2026-11-30", meps: ["2026-09-01"], mep_count: 0,
+    cible: null, seed: 7, pa_exclues: [],
+    rampe: { forme: "plate", pilote: null },
+  };
+  const lignes = [RETIREE("CF1"), ligne("CF2")];
+  ctx.repondreAux((cmd) => {
+    if (cmd === "plan_load") return { params, fichier: "brm.csv", rapport: "identique" };
+    if (cmd === "plan_lignes") return ctx.evaluer(`(${JSON.stringify(lignes)})`);
+    if (cmd === "plan_annuler_retrait") return ctx.evaluer("([])");
+    // L'assertion porte sur l'APPEL `plan_preview`, pas sur le rendu qui en
+    // suit : `null` est un état déjà géré par `planRecalc`.
+    if (cmd === "plan_preview") return null;
+    return ctx.evaluer("[]");
+  });
+
+  await ctx.app.ouvrirPlan();
+  await attendreApercu();
+  const avant = apercus(ctx);
+
+  ctx.evaluer("plan").sel = ctx.evaluer('(new Set(["CF1"]))');
+  ctx.app.renderPlanRecap();
+  boutonSel(ctx.$, "Réactiver").listeners.click();
+  await boutonModale(ctx.$, "Réactiver").click();
+  await attendreApercu();
+
+  assert.equal(apercus(ctx), avant + 1,
+    "le geste doit redemander un aperçu — le récap seul laisse la timeline mentir");
+});

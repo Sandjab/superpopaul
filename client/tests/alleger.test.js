@@ -47,6 +47,15 @@ const bouton = ($, debut) => trouver($("modal"),
 
 const champMotif = ($) => trouver($("modal"), (n) => n.tagName === "textarea");
 
+/** Les libellés des segments de la bascule de la modale ouverte. */
+function segments($) {
+  const barre = trouver($("modal"), (n) => n.className === "modes");
+  return (barre?.children ?? []).map((b) => b.textContent);
+}
+
+/** Clique un bouton comme l'utilisateur : par son écouteur `click`. */
+const cliquer = (b) => b.click();
+
 /** Saisit un motif comme l'utilisateur : la valeur ET la notification, sans
  *  laquelle le bouton de retrait ne rouvre jamais. */
 function taperMotif($, texte) {
@@ -440,4 +449,100 @@ test("l'avertissement de MEP gelée porte sur les comptes qui vont être retiré
   cocher(casesACocher(ctx.$("modal"))[0]); // on garde le gelé
   assert.equal(alerte(), null,
     "le gelé est gardé : l'avertissement doit tomber, sinon il crie sans raison");
+});
+
+test("un run à venir d'une MEP gelée offre aussi l'exclusion", async () => {
+  // Ses lignes étant préservées telles quelles, ni la case « exclure » du
+  // calcul ni une régénération ne les retireront : l'exclusion a posteriori
+  // est le SEUL levier pour vider un tel run (décision du 16/08).
+  const ctx = ecran([ligne("CF1", { gelee: true }), ligne("CF2", { gelee: true })]);
+  await ctx.app.ouvrirAllegerRun(RUN, JOUR_FUTUR);
+  assert.deepEqual(segments(ctx.$), [
+    "Retirer N — répartition conservée",
+    "Ne garder que ma sélection",
+    "Exclure le run",
+  ]);
+});
+
+test("un run à venir d'une MEP future n'offre pas l'exclusion", async () => {
+  const ctx = ecran([ligne("CF1")]); // gelee: false par défaut
+  await ctx.app.ouvrirAllegerRun(RUN, JOUR_FUTUR);
+  assert.deepEqual(segments(ctx.$), [
+    "Retirer N — répartition conservée",
+    "Ne garder que ma sélection",
+  ]);
+});
+
+test("l'exclusion d'un run à venir gelé pré-remplit sans « a posteriori » et exige la cause", async () => {
+  const ctx = ecran([ligne("CF1", { gelee: true }), ligne("CF2", { gelee: true })]);
+  await ctx.app.ouvrirAllegerRun(RUN, JOUR_FUTUR);
+  cliquer(bouton(ctx.$, "Exclure le run"));
+
+  const PREF = "Run RF01 du 05/01/2099 exclu — ";
+  assert.equal(champMotif(ctx.$).value, PREF, "pré-rempli, sans « a posteriori »");
+  // « Retirer 2 » et pas « Retirer » : le préfixe nu attraperait le SEGMENT
+  // « Retirer N — répartition conservée » avant le bouton de validation.
+  assert.equal(bouton(ctx.$, "Retirer 2").disabled, true,
+    "le pré-rempli ne suffit pas : il faut une cause");
+
+  taperMotif(ctx.$, `${PREF}comptes migrés chez le client`);
+  const retirer = bouton(ctx.$, "Retirer 2");
+  assert.notEqual(retirer.disabled, true);
+  await retirer.click();
+  assert.equal(exclusions(ctx).length, 1, "un run exclu = UN seul appel, liste établie côté moteur");
+});
+
+test("quitter le segment exclusion sans avoir écrit efface le pré-rempli", async () => {
+  const ctx = ecran([ligne("CF1", { gelee: true })]);
+  await ctx.app.ouvrirAllegerRun(RUN, JOUR_FUTUR);
+  cliquer(bouton(ctx.$, "Exclure le run"));
+  cliquer(bouton(ctx.$, "Retirer N"));
+  assert.equal(champMotif(ctx.$).value, "",
+    "le pré-rempli appartient au mode exclusion, pas aux autres motifs");
+});
+
+// ---------------------------------------------------- épilogue de retouche
+
+/** Laisse passer l'anti-rebond de `planRecalc` (250 ms) et l'aperçu qui suit. */
+const attendreApercu = () => new Promise((r) => setTimeout(r, 320));
+
+/** Nombre d'aperçus demandés au backend depuis le début du test. */
+const apercus = (ctx) => ctx.invocations.filter(([c]) => c === "plan_preview").length;
+
+test("un retrait réussi recalcule l'aperçu, pas seulement le récap", async () => {
+  // Le vécu du 16/08 : après un allègement, Visé/Stock/Placé décrivaient le
+  // plan d'avant jusqu'à la prochaine frappe. L'aperçu se périme au moment
+  // même où le plan s'écrit : c'est là qu'il se recalcule.
+  const ctx = chargerApp();
+  const params = {
+    runs: [{ num: "RF01", date: "2099-01-05", jjs: [5], exclu: false }],
+    debut: "2098-12-01", fin: "2099-03-31", meps: ["2099-01-01"], mep_count: 0,
+    cible: null, seed: 7, pa_exclues: [],
+    rampe: { forme: "plate", pilote: null },
+  };
+  const lignes = [ligne("CF1"), ligne("CF2")];
+  ctx.repondreAux((cmd) => {
+    if (cmd === "plan_load") return { params, fichier: "brm.csv", rapport: "identique" };
+    if (cmd === "plan_lignes") return ctx.evaluer(`(${JSON.stringify(lignes)})`);
+    if (cmd === "plan_retirer") return ctx.evaluer("([])");
+    // L'assertion porte sur l'APPEL `plan_preview`, pas sur le rendu qui en
+    // suit : `null` est un état déjà géré par `planRecalc` (échec ou saisie
+    // vide), comme le prouve le test « une saisie en cours… » plus haut.
+    if (cmd === "plan_preview") return null;
+    return ctx.evaluer("[]");
+  });
+
+  await ctx.app.ouvrirPlan();
+  await attendreApercu();
+  const avant = apercus(ctx);
+
+  await ctx.app.ouvrirAllegerRun(RUN, JOUR_FUTUR);
+  bouton(ctx.$, "Ne garder que ma sélection").click();
+  cocher(casesACocher(ctx.$("modal"))[0]); // on garde CF1, CF2 part au retrait
+  taperMotif(ctx.$, "allègement du run avant tirage");
+  await bouton(ctx.$, "Retirer 1 compte(s)").click();
+  await attendreApercu();
+
+  assert.equal(apercus(ctx), avant + 1,
+    "le geste doit redemander un aperçu — le récap seul laisse la timeline mentir");
 });
